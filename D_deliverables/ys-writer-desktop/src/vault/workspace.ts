@@ -1,7 +1,7 @@
-import { defaultVaultWorkspaceState } from "../app/defaults";
+import { defaultVaultWorkspaceState } from "../app/defaults.js";
 import type { MarkdownFileResponse, SaveFileExt, VaultWorkspaceState } from "../app/types";
 import type { Note } from "../domain/model";
-import { ensureVaultFileName, extractFirstLineTitle, stripExtension } from "../shared/markdown";
+import { ensureVaultFileName, extractFirstLineTitle, stripExtension } from "../shared/markdown.js";
 
 export function createEmptyNote(): Note {
   const now = new Date().toISOString();
@@ -76,9 +76,10 @@ export function mergeWorkspaceState(
   workspace: VaultWorkspaceState | null | undefined,
   fallbackLayout = defaultVaultWorkspaceState().layout,
 ): VaultWorkspaceState {
+  const defaults = defaultVaultWorkspaceState();
   if (!workspace || workspace.version !== 1) {
     return {
-      ...defaultVaultWorkspaceState(),
+      ...defaults,
       layout: fallbackLayout,
     };
   }
@@ -96,6 +97,12 @@ export function mergeWorkspaceState(
       ...workspace.layout,
       rightPanelWidth: workspace.layout.rightPanelWidth ?? fallbackLayout.rightPanelWidth,
     },
+    centerGraph: {
+      ...defaults.centerGraph,
+      ...workspace.centerGraph,
+      activeView: workspace.centerGraph?.activeView === "graph" ? "graph" : "markdown",
+      selectedTag: typeof workspace.centerGraph?.selectedTag === "string" ? workspace.centerGraph.selectedTag : "",
+    },
   };
 }
 
@@ -110,6 +117,10 @@ export function nextWorkspaceState(
     layout: {
       ...current.layout,
       ...(patch.layout ?? {}),
+    },
+    centerGraph: {
+      ...current.centerGraph,
+      ...(patch.centerGraph ?? {}),
     },
   };
 }

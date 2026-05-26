@@ -40,6 +40,9 @@ export const defaultShortcutRegistry: ShortcutEntry[] = [
   { id: "file.openVault", label: "Open vault", category: "File", defaultKeys: ["Ctrl+Shift+O"], currentKeys: ["Ctrl+Shift+O"], commandId: "file.openVault", editable: true, enabled: true },
   { id: "file.save", label: "Save file", category: "File", defaultKeys: ["Ctrl+S"], currentKeys: ["Ctrl+S"], commandId: "file.save", editable: true, enabled: true },
   { id: "file.saveAs", label: "Save as", category: "File", defaultKeys: ["Ctrl+Shift+S"], currentKeys: ["Ctrl+Shift+S"], commandId: "file.saveAs", editable: true, enabled: true },
+  { id: "file.export", label: "Export", category: "File", defaultKeys: ["Ctrl+Shift+E"], currentKeys: ["Ctrl+Shift+E"], commandId: "file.export", editable: true, enabled: true },
+  { id: "app.openQuickOpen", label: "Quick open", category: "App", defaultKeys: ["Ctrl+P"], currentKeys: ["Ctrl+P"], commandId: "app.openQuickOpen", editable: true, enabled: true },
+  { id: "app.openCommandPalette", label: "Command palette", category: "App", defaultKeys: ["Ctrl+Shift+P"], currentKeys: ["Ctrl+Shift+P"], commandId: "app.openCommandPalette", editable: true, enabled: true },
   { id: "app.openSettings", label: "Open settings", category: "App", defaultKeys: ["Ctrl+,"], currentKeys: ["Ctrl+,"], commandId: "app.openSettings", editable: true, enabled: true },
   { id: "edit.cut", label: "Cut", category: "Edit", defaultKeys: ["Ctrl+X"], currentKeys: ["Ctrl+X"], commandId: "edit.cut", editable: true, enabled: true },
   { id: "edit.copy", label: "Copy", category: "Edit", defaultKeys: ["Ctrl+C"], currentKeys: ["Ctrl+C"], commandId: "edit.copy", editable: true, enabled: true },
@@ -60,6 +63,7 @@ export const menuGroups: MenuGroup[] = [
       { label: "新建文件夹", commandId: "file.newFolder" },
       { label: "打开文件", commandId: "file.open" },
       { label: "打开 Vault", commandId: "file.openVault" },
+      { label: "快速打开", commandId: "app.openQuickOpen" },
       { label: "保存", commandId: "file.save" },
       { label: "另存为", commandId: "file.saveAs" },
       { label: "导出", commandId: "file.export" },
@@ -91,6 +95,7 @@ export const menuGroups: MenuGroup[] = [
       { label: "无序列表", commandId: "paragraph.bulletList" },
       { label: "有序列表", commandId: "paragraph.orderedList" },
       { label: "代码块", commandId: "paragraph.codeBlock" },
+      { label: "表格", commandId: "paragraph.table" },
     ],
   },
   {
@@ -102,6 +107,7 @@ export const menuGroups: MenuGroup[] = [
       { label: "行内代码", commandId: "format.inlineCode" },
       { label: "删除线", commandId: "format.strike" },
       { label: "链接", commandId: "format.link" },
+      { label: "图片", commandId: "format.image" },
     ],
   },
   {
@@ -112,6 +118,7 @@ export const menuGroups: MenuGroup[] = [
       { label: "Rich Edit", commandId: "view.setRichEdit" },
       { label: "显示/隐藏左栏", commandId: "view.toggleSidebar" },
       { label: "知识面板", commandId: "view.toggleRightPanel" },
+      { label: "命令面板", commandId: "app.openCommandPalette" },
     ],
   },
   {

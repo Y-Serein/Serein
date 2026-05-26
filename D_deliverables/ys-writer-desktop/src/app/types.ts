@@ -49,6 +49,17 @@ export type MarkdownFileResponse = {
   size: number;
 };
 
+export type ImportedAssetResponse = {
+  path: string;
+  relativeMarkdownPath: string;
+  fileName: string;
+};
+
+export type LocalAssetDataResponse = {
+  dataUrl: string;
+  mime: string;
+};
+
 export type VaultTreeEntry = {
   name: string;
   path: string;
@@ -85,6 +96,7 @@ export type VaultIndexResponse = {
   files: VaultIndexFileResponse[];
   truncated: boolean;
   skippedFiles: number;
+  indexedBytes?: number;
 };
 
 export type VaultLayoutState = {
@@ -96,6 +108,14 @@ export type VaultLayoutState = {
   uiScale: number;
 };
 
+export type VaultCenterGraphState = {
+  open: boolean;
+  activeView: "markdown" | "graph";
+  selectedTag: string;
+  isolatedOnly: boolean;
+  showUnresolved: boolean;
+};
+
 export type VaultWorkspaceState = {
   version: 1;
   recentFiles: string[];
@@ -103,6 +123,7 @@ export type VaultWorkspaceState = {
   selectedDir: string;
   expandedDirs: string[];
   layout: VaultLayoutState;
+  centerGraph: VaultCenterGraphState;
 };
 
 export type VaultConfig = {
@@ -112,10 +133,16 @@ export type VaultConfig = {
   updatedAt: string;
 };
 
+export type VaultObsidianSettings = {
+  detected: boolean;
+  attachmentFolderPath: string | null;
+};
+
 export type VaultInitResponse = {
   root: string;
   config: VaultConfig;
   workspace: VaultWorkspaceState;
+  obsidian: VaultObsidianSettings;
 };
 
 export type ActiveNote = Note;

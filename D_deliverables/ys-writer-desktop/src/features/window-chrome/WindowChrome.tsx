@@ -22,6 +22,7 @@ type WindowChromeProps = {
   hasActiveDocument: boolean;
   editorMode: EditorMode;
   modeCommandId: string;
+  windowActionPending: "minimize" | "maximize" | "close" | null;
   onChromeMouseDown: (event: ReactMouseEvent<HTMLElement>) => void;
   onChromeDoubleClick: (event: ReactMouseEvent<HTMLElement>) => void;
   onWindowAction: (action: "minimize" | "maximize" | "close") => void;
@@ -42,6 +43,7 @@ export function WindowChrome({
   hasActiveDocument,
   editorMode,
   modeCommandId,
+  windowActionPending,
   onChromeMouseDown,
   onChromeDoubleClick,
   onWindowAction,
@@ -58,10 +60,31 @@ export function WindowChrome({
       >
         <strong className="window-title" title={windowTitle} data-tauri-drag-region>{windowTitle}</strong>
         <div className="titlebar-drag-region" data-tauri-drag-region />
-        <div className="window-controls" aria-label={t.aria.windowControls}>
-          <IconButton icon={<Minus size={14} />} label={t.aria.minimize} onClick={() => onWindowAction("minimize")} />
-          <IconButton icon={<Maximize2 size={13} />} label={t.aria.maximize} onClick={() => onWindowAction("maximize")} />
-          <IconButton className="close" icon={<X size={14} />} label={t.aria.closeWindow} onClick={() => onWindowAction("close")} />
+        <div
+          className="window-controls"
+          aria-label={t.aria.windowControls}
+          onMouseDown={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          <IconButton
+            icon={<Minus size={14} />}
+            label={t.aria.minimize}
+            disabled={windowActionPending === "close"}
+            onClick={() => onWindowAction("minimize")}
+          />
+          <IconButton
+            icon={<Maximize2 size={13} />}
+            label={t.aria.maximize}
+            disabled={windowActionPending === "close"}
+            onClick={() => onWindowAction("maximize")}
+          />
+          <IconButton
+            className="close"
+            icon={<X size={14} />}
+            label={t.aria.closeWindow}
+            disabled={windowActionPending !== null}
+            onClick={() => onWindowAction("close")}
+          />
         </div>
       </header>
 

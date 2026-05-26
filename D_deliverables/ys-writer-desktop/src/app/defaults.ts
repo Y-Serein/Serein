@@ -31,10 +31,10 @@ export const defaultSettings: AppSettings = {
   vaultRecoveryBlocked: false,
   defaultEditorMode,
   restoreWorkspace: true,
-  editorLatinFont: "Times New Roman",
-  editorCjkFont: "SimSun",
+  editorLatinFont: "Avenir Next",
+  editorCjkFont: "Noto Sans SC",
   editorFontSize: 16,
-  editorLineHeight: 1.76,
+  editorLineHeight: 1.68,
   editorLeftGap: 42,
   uiScale: 100,
   zoomWithWheel: true,
@@ -64,6 +64,13 @@ export function defaultVaultWorkspaceState(layout = defaultSettings): VaultWorks
       rightPanelWidth: layout.rightPanelWidth,
       editorLeftGap: layout.editorLeftGap,
       uiScale: layout.uiScale,
+    },
+    centerGraph: {
+      open: false,
+      activeView: "markdown",
+      selectedTag: "",
+      isolatedOnly: false,
+      showUnresolved: false,
     },
   };
 }

@@ -15,6 +15,43 @@ pub fn ensure_supported_text_path(path: &str) -> Result<(), String> {
     }
 }
 
+pub fn ensure_supported_export_path(path: &str, format: &str) -> Result<(), String> {
+    let file_path = Path::new(path);
+    let Some(extension) = normalized_extension(file_path) else {
+        return Err("Export target must end with .html or .pdf.".to_string());
+    };
+
+    match (format, extension.as_str()) {
+        ("html", "html" | "htm") => Ok(()),
+        ("pdf", "pdf") => Ok(()),
+        _ => Err("Export target extension does not match the selected export format.".to_string()),
+    }
+}
+
+pub fn ensure_supported_image_name(name: &str) -> Result<String, String> {
+    let clean = name
+        .trim()
+        .replace('\\', "_")
+        .replace('/', "_")
+        .replace('\0', "");
+    let clean = clean.trim_matches('.').trim();
+    if clean.is_empty() {
+        return Err("Image file name is empty.".to_string());
+    }
+
+    let path = Path::new(clean);
+    let extension = normalized_extension(path).ok_or_else(|| "Image file needs an extension.".to_string())?;
+    if !is_supported_image_extension(&extension) {
+        return Err("Only png, jpg, jpeg, gif, webp and svg images are supported.".to_string());
+    }
+
+    Ok(clean.to_string())
+}
+
+pub fn is_supported_image_extension(extension: &str) -> bool {
+    matches!(extension, "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg")
+}
+
 pub fn is_supported_text_path(path: &Path) -> bool {
     normalized_extension(path)
         .map(|extension| matches!(extension.as_str(), "md" | "markdown" | "txt"))

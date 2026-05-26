@@ -70,6 +70,55 @@ export function extractOutline(markdown: string) {
   return extractMarkdownHeadings(markdown).map(({ level, text }) => ({ level, text }));
 }
 
+function normalizeHeadingMatch(value: string) {
+  return value
+    .replace(/^#+\s*/, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function headingSlug(value: string) {
+  return normalizeHeadingMatch(value)
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
+    .replace(/\s+/g, "-");
+}
+
+function headingMatchTexts(value: string) {
+  const clean = value.trim();
+  const beforeAlias = clean.split("|", 1)[0]?.trim();
+  return [clean, beforeAlias ?? ""]
+    .filter((item, index, items) => item && items.indexOf(item) === index);
+}
+
+export function findHeadingIndex(markdown: string, heading: string) {
+  const wantedTexts = headingMatchTexts(heading);
+  const wanted = wantedTexts.map(normalizeHeadingMatch);
+  const wantedSlugs = wantedTexts.map(headingSlug);
+  return extractOutline(markdown).findIndex((item) => (
+    headingMatchTexts(item.text).some((text) => wanted.includes(normalizeHeadingMatch(text)))
+    || headingMatchTexts(item.text).some((text) => wantedSlugs.includes(headingSlug(text)))
+  ));
+}
+
+export function normalizeWikiLinkEscapes(markdown: string) {
+  let inFence = false;
+  return markdown.split(/(\r?\n)/).map((part) => {
+    if (part === "\n" || part === "\r\n") return part;
+    if (/^\s{0,3}(```+|~~~+)/.test(part)) {
+      inFence = !inFence;
+      return part;
+    }
+    if (inFence) return part;
+
+    return part.replace(/(!?)((?:\\?\[){2})([^\]\n]+?)((?:\\?\]){2})/g, (match, embedded: string, opener: string, target: string, closer: string) => {
+      if (!opener.includes("\\") && !closer.includes("\\")) return match;
+      return `${embedded}[[${target}]]`;
+    });
+  }).join("");
+}
+
 export function extractFirstLineTitle(markdown: string) {
   const firstLine = markdown.split(/\r?\n/, 1)[0] ?? "";
   const match = firstLine.match(/^#(?!#)\s+(.+?)\s*$/);

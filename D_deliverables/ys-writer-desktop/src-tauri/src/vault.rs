@@ -7,7 +7,7 @@ use std::{
 use crate::{
     model::{
         VaultConfig, VaultDirectory, VaultIndexFile, VaultIndexResponse, VaultInitResponse,
-        VaultLayoutState, VaultTreeEntry, VaultWorkspaceState,
+        VaultLayoutState, VaultObsidianSettings, VaultTreeEntry, VaultWorkspaceState,
     },
     path_security::{
         ensure_path_inside_root, ensure_supported_text_path, is_supported_text_path,
@@ -22,6 +22,7 @@ const WORKSPACE_CONFIG: &str = "workspace.json";
 const TRASH_DIR: &str = "trash";
 const INDEX_FILE_LIMIT: usize = 2000;
 const INDEX_FILE_SIZE_LIMIT: u64 = 1024 * 1024;
+const INDEX_TOTAL_CONTENT_LIMIT: u64 = 32 * 1024 * 1024;
 
 pub fn init_vault(root: String) -> Result<VaultInitResponse, String> {
     let root_path = fs::canonicalize(&root)
@@ -43,6 +44,7 @@ pub fn init_vault(root: String) -> Result<VaultInitResponse, String> {
         root: root_path.to_string_lossy().to_string(),
         config,
         workspace,
+        obsidian: read_obsidian_settings(&root_path),
     })
 }
 
@@ -167,7 +169,20 @@ pub fn read_vault_index_files(root: String) -> Result<VaultIndexResponse, String
     let mut files = Vec::new();
     let mut truncated = false;
     let mut skipped_files = 0;
-    collect_vault_index_files(&root_path, &root_path, &mut files, &mut truncated, &mut skipped_files)?;
+    let mut indexed_bytes = 0;
+    collect_vault_index_files(
+        &root_path,
+        &root_path,
+        &mut files,
+        &mut truncated,
+        &mut skipped_files,
+        &mut indexed_bytes,
+        IndexLimits {
+            file_count: INDEX_FILE_LIMIT,
+            per_file_bytes: INDEX_FILE_SIZE_LIMIT,
+            total_bytes: INDEX_TOTAL_CONTENT_LIMIT,
+        },
+    )?;
 
     files.sort_by(|left, right| left.relative_path.to_lowercase().cmp(&right.relative_path.to_lowercase()));
 
@@ -175,6 +190,7 @@ pub fn read_vault_index_files(root: String) -> Result<VaultIndexResponse, String
         files,
         truncated,
         skipped_files,
+        indexed_bytes,
     })
 }
 
@@ -260,8 +276,14 @@ fn collect_vault_index_files(
     files: &mut Vec<VaultIndexFile>,
     truncated: &mut bool,
     skipped_files: &mut usize,
+    indexed_bytes: &mut u64,
+    limits: IndexLimits,
 ) -> Result<(), String> {
-    if files.len() >= INDEX_FILE_LIMIT {
+    if *truncated {
+        return Ok(());
+    }
+
+    if files.len() >= limits.file_count {
         *truncated = true;
         return Ok(());
     }
@@ -270,7 +292,11 @@ fn collect_vault_index_files(
         .map_err(|error| format!("Failed to read vault index directory: {error}"))?;
 
     for entry in entries {
-        if files.len() >= INDEX_FILE_LIMIT {
+        if *truncated {
+            break;
+        }
+
+        if files.len() >= limits.file_count {
             *truncated = true;
             break;
         }
@@ -290,7 +316,15 @@ fn collect_vault_index_files(
                 continue;
             }
 
-            collect_vault_index_files(root, &entry_path, files, truncated, skipped_files)?;
+            collect_vault_index_files(
+                root,
+                &entry_path,
+                files,
+                truncated,
+                skipped_files,
+                indexed_bytes,
+                limits,
+            )?;
             continue;
         }
 
@@ -300,9 +334,14 @@ fn collect_vault_index_files(
 
         let metadata = entry.metadata()
             .map_err(|error| format!("Failed to read vault index file metadata: {error}"))?;
-        if metadata.len() > INDEX_FILE_SIZE_LIMIT {
+        if metadata.len() > limits.per_file_bytes {
             *skipped_files += 1;
             continue;
+        }
+        if indexed_bytes.saturating_add(metadata.len()) > limits.total_bytes {
+            *truncated = true;
+            *skipped_files += 1;
+            break;
         }
 
         let content = match fs::read_to_string(&entry_path) {
@@ -312,6 +351,7 @@ fn collect_vault_index_files(
                 continue;
             }
         };
+        *indexed_bytes = indexed_bytes.saturating_add(metadata.len());
 
         files.push(VaultIndexFile {
             path: entry_path.to_string_lossy().to_string(),
@@ -327,6 +367,13 @@ fn collect_vault_index_files(
     }
 
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct IndexLimits {
+    file_count: usize,
+    per_file_bytes: u64,
+    total_bytes: u64,
 }
 
 fn read_or_create_vault_config(root: &Path, path: &Path) -> Result<VaultConfig, String> {
@@ -382,9 +429,11 @@ fn default_workspace_state() -> VaultWorkspaceState {
             sidebar_width: 240,
             sidebar_visible: true,
             right_panel_visible: true,
+            right_panel_width: 300,
             editor_left_gap: 42,
             ui_scale: 100,
         },
+        center_graph: default_center_graph_state(),
     }
 }
 
@@ -395,15 +444,54 @@ fn normalize_workspace_state(mut workspace: VaultWorkspaceState) -> VaultWorkspa
         workspace.expanded_dirs.push(String::new());
     }
     workspace.layout.sidebar_width = workspace.layout.sidebar_width.clamp(180, 360);
+    workspace.layout.right_panel_width = workspace.layout.right_panel_width.clamp(240, 520);
     workspace.layout.editor_left_gap = workspace.layout.editor_left_gap.clamp(16, 140);
     workspace.layout.ui_scale = workspace.layout.ui_scale.clamp(85, 130);
+    if workspace.center_graph.active_view != "graph" {
+        workspace.center_graph.active_view = "markdown".to_string();
+    }
+    if !workspace.center_graph.open {
+        workspace.center_graph.active_view = "markdown".to_string();
+    }
     workspace
+}
+
+fn default_center_graph_state() -> crate::model::VaultCenterGraphState {
+    crate::model::VaultCenterGraphState {
+        open: false,
+        active_view: "markdown".to_string(),
+        selected_tag: String::new(),
+        isolated_only: false,
+        show_unresolved: false,
+    }
 }
 
 fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let serialized = serde_json::to_string_pretty(value)
         .map_err(|error| format!("Failed to serialize vault metadata: {error}"))?;
     atomic_write(path, serialized.as_bytes())
+}
+
+fn read_obsidian_settings(root: &Path) -> VaultObsidianSettings {
+    let obsidian_dir = root.join(".obsidian");
+    if !obsidian_dir.is_dir() {
+        return VaultObsidianSettings {
+            detected: false,
+            attachment_folder_path: None,
+        };
+    }
+
+    let app_json = obsidian_dir.join("app.json");
+    let attachment_folder_path = fs::read_to_string(app_json)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| value.get("attachmentFolderPath").and_then(|item| item.as_str()).map(str::to_string))
+        .filter(|value| !value.trim().is_empty());
+
+    VaultObsidianSettings {
+        detected: true,
+        attachment_folder_path,
+    }
 }
 
 fn unique_trash_path(trash_dir: &Path, target: &Path) -> Result<PathBuf, String> {
@@ -432,4 +520,52 @@ fn timestamp_string() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs().to_string())
         .unwrap_or_else(|_| "0".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vault_index_stops_when_total_content_limit_is_reached() {
+        let root = temp_dir("index-total-limit");
+        fs::create_dir_all(&root).expect("create temp vault");
+        fs::write(root.join("a.md"), "alpha").expect("write a");
+        fs::write(root.join("b.md"), "bravo").expect("write b");
+        fs::write(root.join("c.md"), "charlie").expect("write c");
+
+        let mut files = Vec::new();
+        let mut truncated = false;
+        let mut skipped_files = 0;
+        let mut indexed_bytes = 0;
+        collect_vault_index_files(
+            &root,
+            &root,
+            &mut files,
+            &mut truncated,
+            &mut skipped_files,
+            &mut indexed_bytes,
+            IndexLimits {
+                file_count: 10,
+                per_file_bytes: 1024,
+                total_bytes: 10,
+            },
+        )
+        .expect("collect index files");
+
+        assert!(truncated);
+        assert_eq!(skipped_files, 1);
+        assert!(indexed_bytes <= 10);
+        assert!(files.len() < 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "serein-vault-{}-{}-{}",
+            label,
+            std::process::id(),
+            timestamp_ms()
+        ))
+    }
 }

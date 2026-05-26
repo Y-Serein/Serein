@@ -26,6 +26,8 @@ export type EditorCommandAction =
   | "bulletList"
   | "orderedList"
   | "codeBlock"
+  | "table"
+  | "image"
   | "bold"
   | "italic"
   | "inlineCode"
@@ -37,6 +39,7 @@ export type EditorCommandSignal = {
   id: number;
   action: EditorCommandAction;
   payload?: string;
+  alt?: string;
 };
 
 export type Whiteboard = {

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ImportedAssetResponse,
+  LocalAssetDataResponse,
   MarkdownFileResponse,
   VaultDirectoryResponse,
   VaultInitResponse,
@@ -22,6 +24,44 @@ export function writeMarkdownFile(
     content,
     expectedModifiedAtMs: expectedModifiedAtMs ?? null,
     expectedSize: expectedSize ?? null,
+  });
+}
+
+export function writeExportFile(path: string, format: "html" | "pdf", bytes: number[]) {
+  return invoke<void>("write_export_file", { path, format, bytes });
+}
+
+export function importEditorAsset(
+  vaultRoot: string | null,
+  currentFilePath: string,
+  fileName: string,
+  bytes: number[],
+) {
+  return invoke<ImportedAssetResponse>("import_editor_asset", {
+    vaultRoot,
+    currentFilePath,
+    fileName,
+    bytes,
+  });
+}
+
+export function importEditorAssetFromPath(
+  vaultRoot: string | null,
+  currentFilePath: string,
+  sourcePath: string,
+) {
+  return invoke<ImportedAssetResponse>("import_editor_asset_from_path", {
+    vaultRoot,
+    currentFilePath,
+    sourcePath,
+  });
+}
+
+export function readLocalAssetDataUrl(vaultRoot: string | null, currentFilePath: string, source: string) {
+  return invoke<LocalAssetDataResponse>("read_local_asset_data_url", {
+    vaultRoot,
+    currentFilePath,
+    source,
   });
 }
 

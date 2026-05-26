@@ -19,18 +19,19 @@ import type { VaultIndex } from "../../vault";
 
 type Updater<T> = T | ((current: T) => T);
 
-export type LeftPanelTab = "files" | "outline";
-export type KnowledgePanelTab = "backlinks" | "outgoing" | "graph";
+export type LeftPanelTab = "files" | "search" | "bookmarks" | "tags" | "outline";
+export type KnowledgePanelTab = "backlinks" | "outgoing" | "properties" | "graph" | "tags";
 export type VaultIndexStatus = "idle" | "indexing" | "ready" | "error";
 
 export type AppDialog = {
   id: number;
-  kind: "input" | "confirm" | "alert";
+  kind: "input" | "confirm" | "alert" | "choice";
   title: string;
   message?: string;
   confirmLabel: string;
   cancelLabel?: string;
   danger?: boolean;
+  choices?: Array<{ value: string; label: string; description?: string }>;
 };
 
 export type AppDialogResult = string | boolean | null;

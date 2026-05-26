@@ -39,5 +39,9 @@ env CARGO_TARGET_DIR=/tmp/ys-writer-tauri-target cargo check
 Windows release packaging should be run on Windows:
 
 ```powershell
-.\T_tools\build_windows.ps1 -SkipInstall
+.\T_tools\build_windows.ps1
 ```
+
+After Windows dependencies have been installed once, `-SkipInstall` can be used
+for repeat builds. Do not use `-SkipInstall` with `node_modules` created from
+WSL/Linux.

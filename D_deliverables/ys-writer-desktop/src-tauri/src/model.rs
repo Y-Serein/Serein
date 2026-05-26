@@ -13,6 +13,21 @@ pub struct MarkdownFile {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportedAsset {
+    pub path: String,
+    pub relative_markdown_path: String,
+    pub file_name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAssetData {
+    pub data_url: String,
+    pub mime: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultTreeEntry {
     pub name: String,
     pub path: String,
@@ -50,6 +65,7 @@ pub struct VaultIndexResponse {
     pub files: Vec<VaultIndexFile>,
     pub truncated: bool,
     pub skipped_files: usize,
+    pub indexed_bytes: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -67,8 +83,20 @@ pub struct VaultLayoutState {
     pub sidebar_width: u16,
     pub sidebar_visible: bool,
     pub right_panel_visible: bool,
+    #[serde(default = "default_right_panel_width")]
+    pub right_panel_width: u16,
     pub editor_left_gap: u16,
     pub ui_scale: u16,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultCenterGraphState {
+    pub open: bool,
+    pub active_view: String,
+    pub selected_tag: String,
+    pub isolated_only: bool,
+    pub show_unresolved: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -80,6 +108,22 @@ pub struct VaultWorkspaceState {
     pub selected_dir: String,
     pub expanded_dirs: Vec<String>,
     pub layout: VaultLayoutState,
+    #[serde(default = "default_center_graph_state")]
+    pub center_graph: VaultCenterGraphState,
+}
+
+fn default_right_panel_width() -> u16 {
+    300
+}
+
+fn default_center_graph_state() -> VaultCenterGraphState {
+    VaultCenterGraphState {
+        open: false,
+        active_view: "markdown".to_string(),
+        selected_tag: String::new(),
+        isolated_only: false,
+        show_unresolved: false,
+    }
 }
 
 #[derive(Serialize)]
@@ -88,4 +132,12 @@ pub struct VaultInitResponse {
     pub root: String,
     pub config: VaultConfig,
     pub workspace: VaultWorkspaceState,
+    pub obsidian: VaultObsidianSettings,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultObsidianSettings {
+    pub detected: bool,
+    pub attachment_folder_path: Option<String>,
 }

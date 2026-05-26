@@ -27,6 +27,7 @@ export function AppDialogHost({ dialog, input, inputRef, onInputChange, onClose 
             onClose(input);
             return;
           }
+          if (dialog.kind === "choice") return;
           onClose(true);
         }}
       >
@@ -41,15 +42,33 @@ export function AppDialogHost({ dialog, input, inputRef, onInputChange, onClose 
             onChange={(event) => onInputChange(event.target.value)}
           />
         ) : null}
+        {dialog.kind === "choice" && dialog.choices ? (
+          <div className="app-dialog-choice-list">
+            {dialog.choices.map((choice, index) => (
+              <button
+                key={choice.value}
+                type="button"
+                className="app-dialog-choice"
+                autoFocus={index === 0}
+                onClick={() => onClose(choice.value)}
+              >
+                <span>{choice.label}</span>
+                {choice.description ? <small>{choice.description}</small> : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="app-dialog-actions">
           {dialog.cancelLabel ? (
             <Button variant="soft" className="app-dialog-secondary" onClick={() => onClose(dialog.kind === "confirm" ? false : null)}>
               {dialog.cancelLabel}
             </Button>
           ) : null}
-          <Button type="submit" variant={dialog.danger ? "danger" : "primary"} className={dialog.danger ? "app-dialog-danger" : "app-dialog-primary"}>
-            {dialog.confirmLabel}
-          </Button>
+          {dialog.kind === "choice" ? null : (
+            <Button type="submit" variant={dialog.danger ? "danger" : "primary"} className={dialog.danger ? "app-dialog-danger" : "app-dialog-primary"}>
+              {dialog.confirmLabel}
+            </Button>
+          )}
         </div>
       </form>
     </div>

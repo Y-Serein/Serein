@@ -14,6 +14,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::read_markdown_file,
             commands::write_markdown_file,
+            commands::write_export_file,
+            commands::import_editor_asset,
+            commands::import_editor_asset_from_path,
+            commands::read_local_asset_data_url,
             commands::init_vault,
             commands::read_vault_directory,
             commands::read_vault_index_files,

@@ -29,23 +29,35 @@ import {
   writeShortcuts,
 } from "./command/shortcuts";
 import type { EditorCommandAction, Note } from "./domain/model";
+import { createDemoVault, readDemoMarkdownFile } from "./dev/demoVault";
 import { applyPlainEditorCommand } from "./editor/plainCommands";
 import { directoryFromResponse, updateVaultNode } from "./explorer/tree";
 import { AppDialogHost } from "./features/dialogs/AppDialogHost";
 import { EditorWorkspace } from "./features/editor-workspace/EditorWorkspace";
+import { collectLocalImageSources, htmlDocument, utf8Bytes } from "./export/markdownExport";
+import { markdownToPdfBytes } from "./export/pdfExport";
 import { KnowledgeRail } from "./features/knowledge-rail/KnowledgeRail";
+import { CommandPalette } from "./features/palette/CommandPalette";
 import { SettingsDialog, resetEditorLayoutDefaults } from "./features/settings/SettingsDialog";
+import { WorkspaceCenter } from "./features/shell/WorkspaceCenter";
+import { WorkspaceGraphLeaf } from "./features/shell/WorkspaceGraphLeaf";
+import { WorkspaceRibbon } from "./features/shell/WorkspaceRibbon";
+import { WorkspaceStatusBar } from "./features/shell/WorkspaceStatusBar";
 import { VaultSidebar } from "./features/vault-sidebar/VaultSidebar";
 import { WindowChrome } from "./features/window-chrome/WindowChrome";
 import {
   createVaultEntry,
   deleteVaultEntry,
+  importEditorAsset,
+  importEditorAssetFromPath,
   initVault,
   openExternalTarget,
+  readLocalAssetDataUrl,
   readMarkdownFile,
   readVaultIndexFiles,
   readVaultDirectory,
   renameVaultEntry,
+  writeExportFile,
   writeMarkdownFile,
   writeVaultWorkspaceState,
 } from "./services/files";
@@ -61,11 +73,14 @@ import {
 import {
   countDocumentText,
   ensureSaveExtension,
+  ensureVaultFileName,
   extractFirstLineTitle,
   extractOutline,
+  findHeadingIndex,
   getHeadingOffsets,
   isSameOrChildPath,
   joinVaultPath,
+  normalizeWikiLinkEscapes,
   normalizeFilePath,
   parentVaultDir,
   pathExtension,
@@ -73,7 +88,21 @@ import {
   stripExtension,
   vaultFileNameCandidate,
 } from "./shared/markdown";
-import { buildVaultIndex, createDraftIndexedFile, createLocalGraph, findIndexedFile, getBacklinks } from "./vault/index";
+import {
+  buildVaultIndex,
+  createDraftIndexedFile,
+  createGlobalGraph,
+  createLocalGraph,
+  findIndexedFile,
+  getBacklinks,
+  getIncomingUnlinkedMentions,
+  listVaultTags,
+  planVaultLinkRewrite,
+  resolveVaultLinkTarget,
+  rewriteVaultLinksInMarkdown,
+  suggestedVaultLinkPath,
+} from "./vault/index";
+import type { VaultIndexedFile, VaultLink } from "./vault";
 import {
   createDraftNote,
   createEmptyNote,
@@ -87,6 +116,12 @@ import {
 import "./styles.css";
 
 const DIRECTORY_INDEX_FILE_NAMES = ["index.md", "index.markdown", "index.txt", "readme.md", "readme.markdown", "readme.txt"];
+const WINDOW_ACTION_TIMEOUT_MS = 1500;
+type PaletteMode = "quickOpen" | "command";
+type SourceLocationTarget = {
+  line: number;
+  text: string | null;
+};
 
 function isEditorTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
@@ -118,8 +153,20 @@ function isFormTarget(target: EventTarget | null) {
 }
 
 function isWindowDragBlockedTarget(target: EventTarget | null) {
-  return target instanceof HTMLElement
+  return target instanceof Element
     && Boolean(target.closest("button, input, textarea, select, [role='menu'], .menu-popover, .window-controls"));
+}
+
+function windowActionWithTimeout<T>(action: Promise<T>, label: string) {
+  let timeout = 0;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = window.setTimeout(() => reject(new Error(`${label} timed out`)), WINDOW_ACTION_TIMEOUT_MS);
+  });
+
+  return Promise.race([
+    action.finally(() => window.clearTimeout(timeout)),
+    timeoutPromise,
+  ]);
 }
 
 function titleFromMarkdown(markdown: string, fallback: string) {
@@ -140,6 +187,69 @@ function normalizeVaultRelativePath(path: string) {
 
 function stripLinkTargetMeta(target: string) {
   return target.split("#", 1)[0].split("?", 1)[0].trim();
+}
+
+function headingFromLinkTarget(target: string) {
+  const hashIndex = target.indexOf("#");
+  if (hashIndex < 0) return null;
+  const fragment = target.slice(hashIndex + 1).split("?", 1)[0].trim();
+  if (!fragment) return null;
+  try {
+    return decodeURIComponent(fragment).trim();
+  } catch {
+    return fragment;
+  }
+}
+
+function sourceLineBounds(markdown: string, lineNumber: number) {
+  if (!Number.isFinite(lineNumber) || lineNumber < 1) return null;
+
+  let start = 0;
+  for (let line = 1; line < lineNumber; line += 1) {
+    const nextBreak = markdown.indexOf("\n", start);
+    if (nextBreak < 0) return null;
+    start = nextBreak + 1;
+  }
+
+  const nextBreak = markdown.indexOf("\n", start);
+  const rawEnd = nextBreak < 0 ? markdown.length : nextBreak;
+  const end = rawEnd > start && markdown[rawEnd - 1] === "\r" ? rawEnd - 1 : rawEnd;
+  return {
+    start,
+    end,
+    text: markdown.slice(start, end),
+  };
+}
+
+function normalizeSourceMatchText(value: string) {
+  return value
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function markdownSourceDisplayText(value: string) {
+  return value
+    .replace(/!\[\[([^\]]+)]]/g, (_, raw: string) => raw.split("|", 2)[1] ?? raw.split("#", 1)[0])
+    .replace(/\[\[([^\]]+)]]/g, (_, raw: string) => raw.split("|", 2)[1] ?? raw.split("#", 1)[0])
+    .replace(/!\[([^\]]*)]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[*_~>#-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sourceMatchCandidates(lineText: string, targetText: string | null) {
+  return [
+    targetText ?? "",
+    lineText,
+    markdownSourceDisplayText(targetText ?? ""),
+    markdownSourceDisplayText(lineText),
+  ]
+    .map(normalizeSourceMatchText)
+    .filter((candidate, index, candidates) => candidate.length >= 2 && candidates.indexOf(candidate) === index)
+    .sort((left, right) => right.length - left.length);
 }
 
 function normalizeMarkdownHrefTarget(href: string) {
@@ -241,6 +351,27 @@ function relativePathFromRoot(root: string, path: string) {
   if (!normalizedPath.startsWith(`${normalizedRoot}/`)) return null;
   return normalizedPath.slice(normalizedRoot.length + 1);
 }
+
+function ensureExportExtension(path: string, format: "html" | "pdf") {
+  const extension = pathExtension(path);
+  if (format === "html" && (extension === "html" || extension === "htm")) return path;
+  if (format === "pdf" && extension === "pdf") return path;
+  return `${path}.${format}`;
+}
+
+function markdownImageText(src: string, alt: string) {
+  const cleanAlt = alt.replace(/[\]\n\r]/g, " ").trim();
+  const cleanSrc = src.includes(" ") ? `<${src}>` : src;
+  return `![${cleanAlt}](${cleanSrc})`;
+}
+
+function readableError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  const message = String(error);
+  return message.length > 180 ? `${message.slice(0, 177)}...` : message;
+}
+
+const imageFileFilters = [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"] }];
 
 export default function App() {
   const store = useAppStore();
@@ -347,10 +478,23 @@ export default function App() {
   const plainEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const restoredVaultRef = useRef(false);
   const restoredStandaloneFileRef = useRef(false);
+  const loadedDemoVaultRef = useRef(false);
+  const pendingHeadingRef = useRef<string | null>(null);
   const richCommandIdRef = useRef(0);
   const vaultIndexRefreshIdRef = useRef(0);
   const windowActionPendingRef = useRef(false);
+  const appInitiatedWindowCloseRef = useRef(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [pendingSourceLocation, setPendingSourceLocation] = useState<SourceLocationTarget | null>(null);
+  const [imagePreviewMap, setImagePreviewMap] = useState<Record<string, string>>({});
+  const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
+  const [windowActionPending, setWindowActionPending] = useState<"minimize" | "maximize" | "close" | null>(null);
+  const [centerView, setCenterView] = useState<"markdown" | "graph">("markdown");
+  const [centerGraphOpen, setCenterGraphOpen] = useState(false);
+  const [centerGraphTag, setCenterGraphTag] = useState("");
+  const [centerGraphIsolatedOnly, setCenterGraphIsolatedOnly] = useState(false);
+  const [centerGraphShowUnresolved, setCenterGraphShowUnresolved] = useState(false);
+  const [demoVaultMode, setDemoVaultMode] = useState(false);
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0];
   const t = appText[language];
@@ -364,7 +508,38 @@ export default function App() {
   const activeOutgoingLinks = activeIndexedFile?.outgoingLinks ?? [];
   const activeResolvedLinks = activeOutgoingLinks.filter((link) => link.targetPath);
   const activeUnresolvedLinks = activeOutgoingLinks.filter((link) => !link.targetPath);
+  const activeUnlinkedMentions = useMemo(
+    () => getIncomingUnlinkedMentions(vaultIndex, activeNote.filePath, activeIndexedFile),
+    [activeIndexedFile, activeNote.filePath, vaultIndex],
+  );
   const localGraph = useMemo(() => createLocalGraph(vaultIndex, activeNote.filePath, activeIndexedFile), [activeIndexedFile, activeNote.filePath, vaultIndex]);
+  const vaultTags = useMemo(() => listVaultTags(vaultIndex), [vaultIndex]);
+  const wikiLinkSuggestions = useMemo(() => {
+    if (!vaultIndex) return [];
+    const baseNameCounts = new Map<string, number>();
+    for (const file of vaultIndex.files) {
+      const baseName = stripExtension(pathFileName(file.relativePath)).toLocaleLowerCase();
+      baseNameCounts.set(baseName, (baseNameCounts.get(baseName) ?? 0) + 1);
+    }
+
+    return vaultIndex.files.map((file) => {
+      const baseName = stripExtension(pathFileName(file.relativePath));
+      const target = (baseNameCounts.get(baseName.toLocaleLowerCase()) ?? 0) > 1
+        ? stripExtension(file.relativePath)
+        : baseName;
+      return {
+        target,
+        label: file.title || baseName,
+        description: file.relativePath,
+      };
+    });
+  }, [vaultIndex]);
+  const centerGraph = useMemo(() => createGlobalGraph(vaultIndex, {
+    tag: centerGraphTag || null,
+    isolatedOnly: centerGraphIsolatedOnly,
+    showUnresolved: centerGraphShowUnresolved,
+    maxNodes: 180,
+  }), [centerGraphIsolatedOnly, centerGraphShowUnresolved, centerGraphTag, vaultIndex]);
   const shortcutConflicts = useMemo(() => findShortcutConflicts(shortcuts), [shortcuts]);
   const vaultMode = Boolean(vaultRoot);
   const windowTitle = hasActiveDocument
@@ -428,48 +603,93 @@ export default function App() {
     })
   ), [t.dialog.close]);
 
+  const showChoiceDialog = useCallback((
+    title: string,
+    choices: Array<{ value: string; label: string; description?: string }>,
+    message?: string,
+  ) => (
+    new Promise<string | null>((resolve) => {
+      appDialogResolverRef.current = (value) => resolve(typeof value === "string" ? value : null);
+      setAppDialog({
+        id: Date.now(),
+        kind: "choice",
+        title,
+        message,
+        confirmLabel: t.dialog.ok,
+        cancelLabel: t.dialog.cancel,
+        choices,
+      });
+    })
+  ), [t.dialog.cancel, t.dialog.ok]);
+
   const confirmDiscardUnsavedChanges = useCallback(async () => {
     if (!notes.some((note) => note.dirty)) return true;
     return showConfirmDialog(t.prompts.unsavedChangesTitle, t.prompts.unsavedChangesMessage, true, t.dialog.confirm);
   }, [notes, showConfirmDialog, t.dialog.confirm, t.prompts.unsavedChangesMessage, t.prompts.unsavedChangesTitle]);
 
+  const destroyCurrentWindow = useCallback(async () => {
+    const currentWindow = getCurrentWindow();
+    appInitiatedWindowCloseRef.current = true;
+    try {
+      await windowActionWithTimeout(currentWindow.close(), "window close");
+    } catch (closeError) {
+      console.warn("Window close failed; falling back to destroy", closeError);
+      try {
+        await windowActionWithTimeout(currentWindow.destroy(), "window destroy");
+      } finally {
+        window.setTimeout(() => {
+          appInitiatedWindowCloseRef.current = false;
+        }, 500);
+      }
+    }
+  }, []);
+
+  const requestCloseWindow = useCallback(async () => {
+    if (windowActionPendingRef.current) return;
+    windowActionPendingRef.current = true;
+    setWindowActionPending("close");
+    setOpenMenuId(null);
+    setSettingsOpen(false);
+
+    try {
+      if (!await confirmDiscardUnsavedChanges()) return;
+      await destroyCurrentWindow();
+    } catch (error) {
+      console.warn("Failed to close window", error);
+      setToastMessage(t.status.closeFailed);
+    } finally {
+      windowActionPendingRef.current = false;
+      setWindowActionPending(null);
+    }
+  }, [confirmDiscardUnsavedChanges, destroyCurrentWindow, setOpenMenuId, setSettingsOpen, t.status.closeFailed]);
+
   const handleWindowAction = useCallback((action: "minimize" | "maximize" | "close") => {
     const run = async () => {
       if (windowActionPendingRef.current) return;
+      if (action === "close") {
+        await requestCloseWindow();
+        return;
+      }
+
       windowActionPendingRef.current = true;
+      setWindowActionPending(action);
 
       try {
         const currentWindow = getCurrentWindow();
-        if (action === "minimize") await currentWindow.minimize();
+        if (action === "minimize") await windowActionWithTimeout(currentWindow.minimize(), "window minimize");
         if (action === "maximize") {
-          const maximized = await currentWindow.isMaximized();
-          if (maximized) {
-            await currentWindow.unmaximize();
-          } else {
-            await currentWindow.maximize();
-          }
-        }
-        if (action === "close") {
-          setOpenMenuId(null);
-          setSettingsOpen(false);
-          if (!await confirmDiscardUnsavedChanges()) return;
-          await currentWindow.close();
-          window.setTimeout(() => {
-            currentWindow.destroy().catch((error) => {
-              console.warn("Window destroy fallback failed", error);
-            });
-          }, 180);
+          await windowActionWithTimeout(currentWindow.toggleMaximize(), "window toggle maximize");
         }
       } catch (error) {
         console.warn("Window action is only available inside Tauri", error);
-        if (action === "close") setToastMessage(t.status.closeFailed);
       } finally {
         windowActionPendingRef.current = false;
+        setWindowActionPending(null);
       }
     };
 
     void run();
-  }, [confirmDiscardUnsavedChanges, setOpenMenuId, setSettingsOpen, t.status.closeFailed]);
+  }, [requestCloseWindow]);
 
   const handleChromeDragMouseDown = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0 || event.detail > 1) return;
@@ -487,13 +707,42 @@ export default function App() {
     handleWindowAction("maximize");
   }, [handleWindowAction]);
 
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    try {
+      getCurrentWindow().onCloseRequested((event) => {
+        if (appInitiatedWindowCloseRef.current) return;
+        event.preventDefault();
+        void requestCloseWindow();
+      }).then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
+      }).catch((error) => {
+        console.warn("Window close request listener is only available inside Tauri", error);
+      });
+    } catch (error) {
+      console.warn("Window close request listener is only available inside Tauri", error);
+    }
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [requestCloseWindow]);
+
   const handleMarkdownChange = useCallback((markdown: string) => {
+    const normalizedMarkdown = normalizeWikiLinkEscapes(markdown);
     setNotes((currentNotes) => currentNotes.map((note) => {
       if (note.id !== activeNoteId) return note;
       return {
         ...note,
-        title: titleFromMarkdown(markdown, note.title),
-        markdown,
+        title: titleFromMarkdown(normalizedMarkdown, note.title),
+        markdown: normalizedMarkdown,
         updatedAt: new Date().toISOString(),
         dirty: true,
       };
@@ -621,12 +870,21 @@ export default function App() {
     setSaveStatus("saved");
   }, [activeNote, persistVaultPatch, vaultRoot, vaultWorkspace.recentFiles]);
 
-  const openMarkdownFile = useCallback(async (path: string, options: { skipUnsavedCheck?: boolean } = {}) => {
+  const openMarkdownFile = useCallback(async (path: string, options: {
+    skipUnsavedCheck?: boolean;
+    targetHeading?: string | null;
+    targetLine?: number | null;
+    targetText?: string | null;
+  } = {}) => {
     const currentPath = activeNote.filePath ? normalizeFilePath(activeNote.filePath) : null;
     if (!options.skipUnsavedCheck && normalizeFilePath(path) !== currentPath && !await confirmDiscardUnsavedChanges()) return;
-    const file = await readMarkdownFile(path);
+    const file = demoVaultMode ? readDemoMarkdownFile(path) : await readMarkdownFile(path);
     applyOpenedFile(file);
-  }, [activeNote.filePath, applyOpenedFile, confirmDiscardUnsavedChanges]);
+    pendingHeadingRef.current = options.targetHeading?.trim() || null;
+    setPendingSourceLocation(options.targetLine
+      ? { line: options.targetLine, text: options.targetText?.trim() || null }
+      : null);
+  }, [activeNote.filePath, applyOpenedFile, confirmDiscardUnsavedChanges, demoVaultMode, setPendingSourceLocation]);
 
   const handleOpenFile = useCallback(async () => {
     try {
@@ -667,6 +925,12 @@ export default function App() {
     setEditorLeftGap(clampEditorLeftGap(workspace.layout.editorLeftGap));
     setUiScale(clampUiScale(workspace.layout.uiScale));
     setVaultRecoveryBlocked(false);
+    setDemoVaultMode(false);
+    setCenterGraphOpen(workspace.centerGraph.open);
+    setCenterView(workspace.centerGraph.open ? workspace.centerGraph.activeView : "markdown");
+    setCenterGraphTag(workspace.centerGraph.selectedTag);
+    setCenterGraphIsolatedOnly(workspace.centerGraph.isolatedOnly);
+    setCenterGraphShowUnresolved(workspace.centerGraph.showUnresolved);
     setExpandedDirs(new Set(workspace.expandedDirs.length ? workspace.expandedDirs : [""]));
     const emptyNote = createEmptyNote();
     setNotes([emptyNote]);
@@ -706,6 +970,54 @@ export default function App() {
       setVaultError(t.errors.openVaultFailed);
     }
   }, [activateVault, confirmDiscardUnsavedChanges, t.errors.openVaultFailed]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || loadedDemoVaultRef.current) return;
+    if (new URLSearchParams(window.location.search).get("demoVault") !== "obsidian") return;
+    loadedDemoVaultRef.current = true;
+
+    const demo = createDemoVault();
+    const nextNote = createFileNote(demo.activeFile);
+    restoredVaultRef.current = true;
+    restoredStandaloneFileRef.current = true;
+
+    setVaultRoot(demo.root);
+    setDemoVaultMode(true);
+    setVaultTree(demo.tree);
+    setVaultIndex(buildVaultIndex(demo.root, demo.indexResponse));
+    setVaultIndexStatus("ready");
+    setVaultIndexError(null);
+    setVaultError(null);
+    setSelectedVaultDir("");
+    setExpandedDirs(new Set(demo.expandedDirs));
+    setLastOpenedFile(nextNote.filePath ?? null);
+    setNotes([nextNote]);
+    setActiveNoteId(nextNote.id);
+    setSaveStatus("saved");
+    setSaveError(null);
+    setSidebarVisible(true);
+    setRightPanelVisible(true);
+    setKnowledgePanelTab("outgoing");
+    setCenterGraphOpen(true);
+    setCenterView("graph");
+  }, [
+    setActiveNoteId,
+    setExpandedDirs,
+    setKnowledgePanelTab,
+    setLastOpenedFile,
+    setNotes,
+    setRightPanelVisible,
+    setSaveError,
+    setSaveStatus,
+    setSelectedVaultDir,
+    setSidebarVisible,
+    setVaultError,
+    setVaultIndex,
+    setVaultIndexError,
+    setVaultIndexStatus,
+    setVaultRoot,
+    setVaultTree,
+  ]);
 
   const saveNoteToPath = useCallback(async (note: Note, path: string) => {
     const normalizedPath = ensureSaveExtension(path, defaultSaveExt);
@@ -779,6 +1091,180 @@ export default function App() {
       setSaveStatus("error");
     }
   }, [activeNote, handleSaveAs, saveNoteToPath, t.errors.saveFailed]);
+
+  const importImagesForEditor = useCallback(async (files: File[]) => {
+    try {
+      if (!activeNote.filePath) {
+        throw new Error(t.errors.saveBeforeImageImport);
+      }
+      const currentFilePath = activeNote.filePath;
+
+      const imageFiles = files.filter((file) => file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/i.test(file.name));
+      if (!imageFiles.length) return [];
+
+      const imported = [];
+      for (const file of imageFiles) {
+        const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+        const asset = await importEditorAsset(vaultRoot, currentFilePath, file.name || "image.png", bytes);
+        imported.push({
+          src: asset.relativeMarkdownPath,
+          alt: stripExtension(asset.fileName || file.name || "image"),
+        });
+      }
+
+      if (vaultRoot) {
+        const relativeFilePath = relativePathFromRoot(vaultRoot, currentFilePath);
+        const currentDir = relativeFilePath ? parentVaultDir(relativeFilePath) : selectedVaultDir;
+        await loadVaultDirectory(currentDir);
+        void refreshVaultIndex(vaultRoot);
+      }
+
+      return imported;
+    } catch (error) {
+      console.error("Failed to import image", error);
+      setSaveError(t.errors.imageImportFailed);
+      setSaveStatus("error");
+      setToastMessage(`${t.errors.imageImportFailed}: ${readableError(error)}`);
+      throw error;
+    }
+  }, [
+    activeNote.filePath,
+    loadVaultDirectory,
+    refreshVaultIndex,
+    setSaveError,
+    setSaveStatus,
+    t.errors.saveBeforeImageImport,
+    t.errors.imageImportFailed,
+    vaultRoot,
+    selectedVaultDir,
+  ]);
+
+  const importImagePathForEditor = useCallback(async (sourcePath: string) => {
+    try {
+      if (!activeNote.filePath) {
+        throw new Error(t.errors.saveBeforeImageImport);
+      }
+      const currentFilePath = activeNote.filePath;
+
+      const asset = await importEditorAssetFromPath(vaultRoot, currentFilePath, sourcePath);
+      if (vaultRoot) {
+        const relativeFilePath = relativePathFromRoot(vaultRoot, currentFilePath);
+        const currentDir = relativeFilePath ? parentVaultDir(relativeFilePath) : selectedVaultDir;
+        await loadVaultDirectory(currentDir);
+        void refreshVaultIndex(vaultRoot);
+      }
+      return {
+        src: asset.relativeMarkdownPath,
+        alt: stripExtension(asset.fileName || pathFileName(sourcePath) || "image"),
+      };
+    } catch (error) {
+      console.error("Failed to import selected image", error);
+      setSaveError(t.errors.imageImportFailed);
+      setSaveStatus("error");
+      setToastMessage(`${t.errors.imageImportFailed}: ${readableError(error)}`);
+      throw error;
+    }
+  }, [
+    activeNote.filePath,
+    loadVaultDirectory,
+    refreshVaultIndex,
+    selectedVaultDir,
+    setSaveError,
+    setSaveStatus,
+    t.errors.imageImportFailed,
+    t.errors.saveBeforeImageImport,
+    vaultRoot,
+  ]);
+
+  const handlePlainEditorImageFiles = useCallback(async (files: File[]) => {
+    if (!activeNote) return false;
+    try {
+      const images = await importImagesForEditor(files);
+      if (!images.length) return false;
+
+      const textarea = plainEditorRef.current;
+      const selectionStart = textarea?.selectionStart ?? activeNote.markdown.length;
+      const selectionEnd = textarea?.selectionEnd ?? selectionStart;
+      const insertion = images.map((image) => markdownImageText(image.src, image.alt)).join("\n\n");
+      const prefix = selectionStart > 0 && !activeNote.markdown.slice(0, selectionStart).endsWith("\n") ? "\n" : "";
+      const suffix = activeNote.markdown.slice(selectionEnd).startsWith("\n") ? "" : "\n";
+      const nextMarkdown = `${activeNote.markdown.slice(0, selectionStart)}${prefix}${insertion}${suffix}${activeNote.markdown.slice(selectionEnd)}`;
+      const nextCursor = selectionStart + prefix.length + insertion.length;
+
+      setNotes((currentNotes) => currentNotes.map((note) => (
+        note.id === activeNote.id
+          ? { ...note, markdown: nextMarkdown, title: titleFromMarkdown(nextMarkdown, note.title), updatedAt: new Date().toISOString(), dirty: true }
+          : note
+      )));
+      window.requestAnimationFrame(() => {
+        textarea?.focus();
+        textarea?.setSelectionRange(nextCursor, nextCursor);
+      });
+      return true;
+    } catch (error) {
+      console.error("Failed to import image", error);
+      return false;
+    }
+  }, [activeNote, importImagesForEditor, setNotes]);
+
+  const buildExportImageMap = useCallback(async () => {
+    const sources = collectLocalImageSources(activeNote.markdown);
+    if (!sources.length) return {};
+    if (!activeNote.filePath) {
+      throw new Error(t.errors.saveBeforeExportImages);
+    }
+
+    const entries = await Promise.all(sources.map(async (source) => {
+      try {
+        const asset = await readLocalAssetDataUrl(vaultRoot, activeNote.filePath!, source);
+        return [source, asset.dataUrl] as const;
+      } catch (error) {
+        throw new Error(`${t.errors.exportImageMissing}: ${source} (${readableError(error)})`);
+      }
+    }));
+    return Object.fromEntries(entries);
+  }, [activeNote.filePath, activeNote.markdown, t.errors.exportImageMissing, t.errors.saveBeforeExportImages, vaultRoot]);
+
+  const handleExport = useCallback(async () => {
+    if (!activeNote) return;
+
+    try {
+      const selectedFormat = await showChoiceDialog(t.prompts.exportFormat, [
+        { value: "html", label: t.prompts.exportHtml, description: t.prompts.exportHtmlHint },
+        { value: "pdf", label: t.prompts.exportPdf, description: t.prompts.exportPdfHint },
+      ], t.prompts.exportFormatHint);
+      if (!selectedFormat) return;
+
+      const format = selectedFormat === "pdf" ? "pdf" : selectedFormat === "html" ? "html" : null;
+      if (!format) {
+        setToastMessage(t.errors.exportFormatUnsupported);
+        return;
+      }
+
+      const fallbackBase = activeNote.fileName ? stripExtension(activeNote.fileName) : activeNote.title || "Serein Export";
+      const selected = await save({
+        defaultPath: `${fallbackBase}.${format}`,
+        filters: format === "html"
+          ? [{ name: "HTML", extensions: ["html"] }]
+          : [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (!selected) return;
+
+      const imageMap = await buildExportImageMap();
+      const title = extractFirstLineTitle(activeNote.markdown) ?? (stripExtension(activeNote.fileName ?? "") || activeNote.title);
+      const bytes = format === "html"
+        ? utf8Bytes(htmlDocument(activeNote.markdown, { title, imageMap }))
+        : await markdownToPdfBytes(activeNote.markdown, { title, imageMap });
+      await writeExportFile(ensureExportExtension(selected, format), format, bytes);
+      setSaveError(null);
+      setToastMessage(t.status.exported(format.toUpperCase()));
+    } catch (error) {
+      console.error("Failed to export file", error);
+      setSaveError(t.errors.exportFailed);
+      setSaveStatus("error");
+      setToastMessage(`${t.errors.exportFailed}: ${readableError(error)}`);
+    }
+  }, [activeNote, buildExportImageMap, showChoiceDialog, t, setSaveError, setSaveStatus]);
 
   const createVaultNoteFromDefaultName = useCallback(async () => {
     if (!vaultRoot) return;
@@ -865,19 +1351,153 @@ export default function App() {
     const nextName = await showInputDialog(t.prompts.rename, entry.name);
     if (!nextName || nextName === entry.name) return;
 
-    renameVaultEntry(vaultRoot, entry.relativePath, nextName)
-      .then(async (nextPath) => {
-        await loadVaultDirectory(parentVaultDir(entry.relativePath));
-        await refreshVaultIndex(vaultRoot);
-        if (activeNote.filePath === entry.path) {
-          await openMarkdownFile(nextPath);
+    const oldEntryPath = normalizeFilePath(entry.path);
+    const renamedDirtyNote = notes.find((note) => (
+      note.dirty
+      && note.filePath
+      && normalizeFilePath(note.filePath) === oldEntryPath
+    ));
+    if (renamedDirtyNote) {
+      await showMessageDialog(t.prompts.unsavedChangesTitle, t.errors.saveBeforeRename);
+      return;
+    }
+
+    const nextRelativePath = joinVaultPath(parentVaultDir(entry.relativePath), nextName.trim());
+    const indexBeforeRename = vaultIndex;
+    const linkRewritePlan = entry.kind === "file" && indexBeforeRename
+      ? planVaultLinkRewrite(indexBeforeRename, entry.path, nextRelativePath)
+      : null;
+    let shouldUpdateLinks = false;
+
+    if (linkRewritePlan?.replacementCount) {
+      const previewFiles = linkRewritePlan.sources
+        .slice(0, 3)
+        .map((source) => source.sourceRelativePath)
+        .join(", ");
+      const filesPreview = linkRewritePlan.sources.length > 3 ? `${previewFiles}, ...` : previewFiles;
+      const choice = await showChoiceDialog(t.prompts.updateLinksTitle, [
+        { value: "update", label: t.prompts.updateLinksAction, description: t.prompts.updateLinksHint },
+        { value: "renameOnly", label: t.prompts.renameOnlyAction, description: t.prompts.renameOnlyHint },
+      ], t.prompts.updateLinksMessage(linkRewritePlan.replacementCount, linkRewritePlan.sources.length, filesPreview));
+      if (!choice) return;
+      shouldUpdateLinks = choice === "update";
+
+      if (shouldUpdateLinks) {
+        const affectedPaths = new Set(linkRewritePlan.sources.map((source) => normalizeFilePath(source.sourcePath)));
+        const dirtyAffectedNote = notes.find((note) => (
+          note.dirty
+          && note.filePath
+          && affectedPaths.has(normalizeFilePath(note.filePath))
+        ));
+        if (dirtyAffectedNote) {
+          await showMessageDialog(t.prompts.unsavedChangesTitle, t.errors.saveBeforeLinkUpdate);
+          return;
         }
-      })
-      .catch((error) => {
-        console.error("Failed to rename vault entry", error);
-        setVaultError(t.errors.renameFailed);
-      });
-  }, [activeNote.filePath, loadVaultDirectory, openMarkdownFile, refreshVaultIndex, showInputDialog, t.errors.renameFailed, t.prompts.rename, vaultRoot]);
+      }
+    }
+
+    let nextPath: string;
+    try {
+      nextPath = await renameVaultEntry(vaultRoot, entry.relativePath, nextName);
+    } catch (error) {
+      console.error("Failed to rename vault entry", error);
+      setVaultError(t.errors.renameFailed);
+      return;
+    }
+
+    let updatedLinkCount = 0;
+    let linkUpdateError: unknown = null;
+    const updatedFiles: Awaited<ReturnType<typeof readMarkdownFile>>[] = [];
+
+    if (shouldUpdateLinks && linkRewritePlan && indexBeforeRename) {
+      try {
+        for (const source of linkRewritePlan.sources) {
+          const renamedSource = normalizeFilePath(source.sourcePath) === oldEntryPath;
+          const sourcePath = renamedSource ? nextPath : source.sourcePath;
+          const sourceRelativePath = renamedSource ? linkRewritePlan.newRelativePath : source.sourceRelativePath;
+          const file = await readMarkdownFile(sourcePath);
+          const rewrite = rewriteVaultLinksInMarkdown(
+            indexBeforeRename,
+            sourceRelativePath,
+            file.content,
+            linkRewritePlan.oldPath,
+            linkRewritePlan.newRelativePath,
+          );
+          if (!rewrite.replacements.length || rewrite.content === file.content) continue;
+
+          const updatedFile = await writeMarkdownFile(sourcePath, rewrite.content, file.modifiedAtMs, file.size);
+          updatedFiles.push(updatedFile);
+          updatedLinkCount += rewrite.replacements.length;
+        }
+      } catch (error) {
+        console.error("Failed to update renamed note links", error);
+        linkUpdateError = error;
+      }
+    }
+
+    if (updatedFiles.length) {
+      const updatedFilesByPath = new Map(updatedFiles.map((file) => [normalizeFilePath(file.path), file]));
+      setNotes((currentNotes) => currentNotes.map((note) => {
+        if (!note.filePath || note.dirty) return note;
+        const updatedFile = updatedFilesByPath.get(normalizeFilePath(note.filePath));
+        if (!updatedFile) return note;
+        const nextNote = createFileNote(updatedFile);
+        return {
+          ...nextNote,
+          id: note.id,
+          createdAt: note.createdAt,
+        };
+      }));
+    }
+
+    try {
+      await loadVaultDirectory(parentVaultDir(entry.relativePath));
+      await refreshVaultIndex(vaultRoot);
+      if (activeNote.filePath && normalizeFilePath(activeNote.filePath) === oldEntryPath) {
+        await openMarkdownFile(nextPath, { skipUnsavedCheck: true });
+      }
+    } catch (error) {
+      console.error("Failed to refresh renamed vault entry", error);
+      setVaultError(t.errors.renameFailed);
+      return;
+    }
+
+    if (linkUpdateError) {
+      setVaultError(t.errors.linkUpdateFailed);
+      setToastMessage(`${t.errors.linkUpdateFailed}: ${readableError(linkUpdateError)}`);
+      return;
+    }
+
+    setVaultError(null);
+    if (updatedLinkCount > 0) {
+      setToastMessage(t.status.linksUpdated(updatedLinkCount));
+    }
+  }, [
+    activeNote.filePath,
+    loadVaultDirectory,
+    notes,
+    openMarkdownFile,
+    refreshVaultIndex,
+    setNotes,
+    showChoiceDialog,
+    showInputDialog,
+    showMessageDialog,
+    t.errors.linkUpdateFailed,
+    t.errors.renameFailed,
+    t.errors.saveBeforeLinkUpdate,
+    t.errors.saveBeforeRename,
+    t.prompts.rename,
+    t.prompts.renameOnlyAction,
+    t.prompts.renameOnlyHint,
+    t.prompts.unsavedChangesTitle,
+    t.prompts.updateLinksAction,
+    t.prompts.updateLinksHint,
+    t.prompts.updateLinksMessage,
+    t.prompts.updateLinksTitle,
+    t.status.linksUpdated,
+    vaultIndex,
+    vaultRoot,
+  ]);
 
   const handleDeleteVaultEntry = useCallback(async (entry: VaultTreeEntry) => {
     if (!vaultRoot || !entry.relativePath) return;
@@ -912,7 +1532,7 @@ export default function App() {
     proseMirror?.focus();
   }, [editorMode]);
 
-  const runEditorCommand = useCallback((action: EditorCommandAction, payload?: string) => {
+  const runEditorCommand = useCallback((action: EditorCommandAction, payload?: string, alt?: string) => {
     if (!activeNote) return;
 
     if (editorMode === "plain") {
@@ -925,6 +1545,7 @@ export default function App() {
         textarea.selectionEnd,
         action,
         payload,
+        alt,
       );
 
       setNotes((currentNotes) => currentNotes.map((note) => {
@@ -946,7 +1567,7 @@ export default function App() {
     }
 
     richCommandIdRef.current += 1;
-    setRichCommand({ id: richCommandIdRef.current, action, payload });
+    setRichCommand({ id: richCommandIdRef.current, action, payload, alt });
   }, [activeNote, editorMode]);
 
   const runLinkCommand = useCallback(async () => {
@@ -954,6 +1575,22 @@ export default function App() {
     if (!href) return;
     runEditorCommand("link", href);
   }, [runEditorCommand, showInputDialog, t.prompts.linkUrl]);
+
+  const runImageCommand = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: imageFileFilters,
+      });
+      const sourcePath = Array.isArray(selected) ? selected[0] : selected;
+      if (!sourcePath) return;
+
+      const image = await importImagePathForEditor(sourcePath);
+      runEditorCommand("image", image.src, image.alt);
+    } catch (error) {
+      console.error("Failed to insert image", error);
+    }
+  }, [importImagePathForEditor, runEditorCommand]);
 
   const handleFind = useCallback(async () => {
     if (!activeNote) return;
@@ -997,7 +1634,19 @@ export default function App() {
     "file.openVault": { id: "file.openVault", label: t.commandLabels["file.openVault"], enabled: true, run: handleOpenVault },
     "file.save": { id: "file.save", label: t.commandLabels["file.save"], enabled: hasActiveDocument, run: handleSave },
     "file.saveAs": { id: "file.saveAs", label: t.commandLabels["file.saveAs"], enabled: hasActiveDocument, run: handleSaveAs },
-    "file.export": { id: "file.export", label: t.commandLabels["file.export"], enabled: hasActiveDocument, run: handleSaveAs },
+    "file.export": { id: "file.export", label: t.commandLabels["file.export"], enabled: hasActiveDocument, run: handleExport },
+    "app.openQuickOpen": {
+      id: "app.openQuickOpen",
+      label: t.commandLabels["app.openQuickOpen"],
+      enabled: Boolean(vaultIndex?.files.length),
+      run: () => setPaletteMode("quickOpen"),
+    },
+    "app.openCommandPalette": {
+      id: "app.openCommandPalette",
+      label: t.commandLabels["app.openCommandPalette"],
+      enabled: true,
+      run: () => setPaletteMode("command"),
+    },
     "app.openSettings": {
       id: "app.openSettings",
       label: t.commandLabels["app.openSettings"],
@@ -1032,11 +1681,13 @@ export default function App() {
     "paragraph.bulletList": { id: "paragraph.bulletList", label: t.commandLabels["paragraph.bulletList"], enabled: hasActiveDocument, run: () => runEditorCommand("bulletList") },
     "paragraph.orderedList": { id: "paragraph.orderedList", label: t.commandLabels["paragraph.orderedList"], enabled: hasActiveDocument, run: () => runEditorCommand("orderedList") },
     "paragraph.codeBlock": { id: "paragraph.codeBlock", label: t.commandLabels["paragraph.codeBlock"], enabled: hasActiveDocument, run: () => runEditorCommand("codeBlock") },
+    "paragraph.table": { id: "paragraph.table", label: t.commandLabels["paragraph.table"], enabled: hasActiveDocument, run: () => runEditorCommand("table") },
     "format.bold": { id: "format.bold", label: t.commandLabels["format.bold"], enabled: hasActiveDocument, run: () => runEditorCommand("bold") },
     "format.italic": { id: "format.italic", label: t.commandLabels["format.italic"], enabled: hasActiveDocument, run: () => runEditorCommand("italic") },
     "format.inlineCode": { id: "format.inlineCode", label: t.commandLabels["format.inlineCode"], enabled: hasActiveDocument, run: () => runEditorCommand("inlineCode") },
     "format.strike": { id: "format.strike", label: t.commandLabels["format.strike"], enabled: hasActiveDocument, run: () => runEditorCommand("strike") },
     "format.link": { id: "format.link", label: t.commandLabels["format.link"], enabled: hasActiveDocument, run: runLinkCommand },
+    "format.image": { id: "format.image", label: t.commandLabels["format.image"], enabled: hasActiveDocument, run: runImageCommand },
     "view.setPlainEdit": { id: "view.setPlainEdit", label: t.commandLabels["view.setPlainEdit"], enabled: editorMode !== "plain", run: () => setEditorMode("plain") },
     "view.setRichEdit": { id: "view.setRichEdit", label: t.commandLabels["view.setRichEdit"], enabled: editorMode !== "rich", run: () => setEditorMode("rich") },
     "view.toggleSidebar": { id: "view.toggleSidebar", label: t.commandLabels["view.toggleSidebar"], enabled: true, run: () => setSidebarVisible((visible) => !visible) },
@@ -1053,15 +1704,18 @@ export default function App() {
     handleCreateVaultFolder,
     handleCreateNote,
     handleFind,
+    handleExport,
     handleOpenFile,
     handleOpenVault,
     handleSave,
     handleSaveAs,
     runEditorCommand,
+    runImageCommand,
     runLinkCommand,
     showMessageDialog,
     t,
     theme,
+    vaultIndex,
   ]);
 
   const dispatchCommand = useCallback(async (commandId: string) => {
@@ -1172,6 +1826,34 @@ export default function App() {
   }, [toastMessage]);
 
   useEffect(() => {
+    let active = true;
+    const sources = collectLocalImageSources(activeNote.markdown);
+    if (!activeNote.filePath || !sources.length) {
+      setImagePreviewMap({});
+      return undefined;
+    }
+
+    const timeout = window.setTimeout(() => {
+      Promise.all(sources.map(async (source) => {
+        try {
+          const asset = await readLocalAssetDataUrl(vaultRoot, activeNote.filePath!, source);
+          return [source, asset.dataUrl] as const;
+        } catch {
+          return null;
+        }
+      })).then((entries) => {
+        if (!active) return;
+        setImagePreviewMap(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))));
+      });
+    }, 150);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [activeNote.filePath, activeNote.markdown, vaultRoot]);
+
+  useEffect(() => {
     if (!appDialog || appDialog.kind !== "input") return undefined;
     const frame = window.requestAnimationFrame(() => {
       appDialogInputRef.current?.focus();
@@ -1194,8 +1876,20 @@ export default function App() {
         editorLeftGap,
         uiScale,
       },
+      centerGraph: {
+        open: centerGraphOpen,
+        activeView: centerGraphOpen ? centerView : "markdown",
+        selectedTag: centerGraphTag,
+        isolatedOnly: centerGraphIsolatedOnly,
+        showUnresolved: centerGraphShowUnresolved,
+      },
     });
   }, [
+    centerGraphIsolatedOnly,
+    centerGraphOpen,
+    centerGraphShowUnresolved,
+    centerGraphTag,
+    centerView,
     editorLeftGap,
     expandedDirs,
     lastOpenedFile,
@@ -1209,7 +1903,7 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!vaultRoot) return undefined;
+    if (!vaultRoot || demoVaultMode) return undefined;
 
     const timeout = window.setTimeout(() => {
       writeVaultWorkspaceState(vaultRoot, vaultWorkspace)
@@ -1220,7 +1914,7 @@ export default function App() {
     }, 450);
 
     return () => window.clearTimeout(timeout);
-  }, [t.errors.workspaceSaveFailed, vaultRoot, vaultWorkspace]);
+  }, [demoVaultMode, t.errors.workspaceSaveFailed, vaultRoot, vaultWorkspace]);
 
   useEffect(() => {
     if (!zoomWithWheel) return undefined;
@@ -1287,11 +1981,14 @@ export default function App() {
         isFormTarget(event.target)
         && shortcut.commandId !== "file.save"
         && shortcut.commandId !== "file.saveAs"
+        && shortcut.commandId !== "file.export"
         && shortcut.commandId !== "file.open"
         && shortcut.commandId !== "file.openVault"
         && shortcut.commandId !== "file.new"
         && shortcut.commandId !== "edit.selectAll"
         && shortcut.commandId !== "app.openSettings"
+        && shortcut.commandId !== "app.openQuickOpen"
+        && shortcut.commandId !== "app.openCommandPalette"
       ) {
         return;
       }
@@ -1322,6 +2019,170 @@ export default function App() {
     heading?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [activeNote.markdown, editorMode]);
 
+  const scrollToHeading = useCallback((heading: string) => {
+    const index = findHeadingIndex(activeNote.markdown, heading);
+    if (index < 0) return false;
+
+    if (editorMode === "plain") {
+      const target = getHeadingOffsets(activeNote.markdown)[index];
+      if (!target) return false;
+      plainEditorRef.current?.focus();
+      plainEditorRef.current?.setSelectionRange(target.start, target.end);
+      return true;
+    }
+
+    const headings = editorSurfaceRef.current?.querySelectorAll(".milkdown h1, .milkdown h2, .milkdown h3, .milkdown h4, .milkdown h5, .milkdown h6");
+    const target = headings?.item(index);
+    if (!target) return false;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    return true;
+  }, [activeNote.markdown, editorMode]);
+
+  const scrollToSourceLocation = useCallback((target: SourceLocationTarget) => {
+    const line = sourceLineBounds(activeNote.markdown, target.line);
+    if (!line) return false;
+
+    if (editorMode === "plain") {
+      const textarea = plainEditorRef.current;
+      if (!textarea) return false;
+
+      const lineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 22;
+      textarea.focus();
+      textarea.setSelectionRange(line.start, line.end);
+      textarea.scrollTop = Math.max(0, (target.line - 4) * lineHeight);
+      return true;
+    }
+
+    const surface = editorSurfaceRef.current;
+    const proseMirror = surface?.querySelector<HTMLElement>(".ProseMirror");
+    if (!surface || !proseMirror) return false;
+
+    const candidates = sourceMatchCandidates(line.text, target.text);
+    const highlightId = `${Date.now()}-${target.line}`;
+    const findMatchedBlock = () => {
+      const blocks = [...surface.querySelectorAll<HTMLElement>([
+        ".milkdown .ProseMirror p",
+        ".milkdown .ProseMirror li",
+        ".milkdown .ProseMirror h1",
+        ".milkdown .ProseMirror h2",
+        ".milkdown .ProseMirror h3",
+        ".milkdown .ProseMirror h4",
+        ".milkdown .ProseMirror h5",
+        ".milkdown .ProseMirror h6",
+        ".milkdown .ProseMirror blockquote",
+        ".milkdown .ProseMirror pre",
+        ".milkdown .ProseMirror table",
+      ].join(", "))].filter((node) => (node.textContent ?? "").trim());
+
+      return blocks.find((block) => {
+        const blockText = normalizeSourceMatchText(block.textContent ?? "");
+        return candidates.some((candidate) => blockText.includes(candidate) || candidate.includes(blockText));
+      }) ?? null;
+    };
+    const markMatchedBlock = (scroll: boolean) => {
+      const matched = findMatchedBlock();
+      if (!matched) return false;
+
+      surface.querySelectorAll<HTMLElement>(".source-location-target").forEach((node) => {
+        if (node.dataset.sourceLocationTarget !== highlightId) {
+          node.classList.remove("source-location-target");
+          delete node.dataset.sourceLocationTarget;
+        }
+      });
+      matched.classList.add("source-location-target");
+      matched.dataset.sourceLocationTarget = highlightId;
+      if (scroll) matched.scrollIntoView({ behavior: "smooth", block: "center" });
+      window.setTimeout(() => {
+        if (matched.dataset.sourceLocationTarget !== highlightId) return;
+        matched.classList.remove("source-location-target");
+        delete matched.dataset.sourceLocationTarget;
+      }, 4000);
+      return true;
+    };
+
+    if (!markMatchedBlock(true)) return false;
+    [120, 360, 800].forEach((delay) => {
+      window.setTimeout(() => {
+        markMatchedBlock(false);
+      }, delay);
+    });
+    proseMirror.focus();
+    return true;
+  }, [activeNote.markdown, editorMode]);
+
+  useEffect(() => {
+    const heading = pendingHeadingRef.current;
+    if (!heading) return undefined;
+
+    let disposed = false;
+    let attempts = 0;
+    let timeout = 0;
+
+    const tryScroll = () => {
+      if (disposed) return;
+      if (scrollToHeading(heading)) {
+        pendingHeadingRef.current = null;
+        return;
+      }
+
+      attempts += 1;
+      if (attempts >= 12) {
+        pendingHeadingRef.current = null;
+        setToastMessage(t.status.linkOpenFailed);
+        return;
+      }
+
+      timeout = window.setTimeout(tryScroll, 100);
+    };
+
+    timeout = window.setTimeout(tryScroll, 40);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+    };
+  }, [activeNote.id, activeNote.markdown, scrollToHeading, t.status.linkOpenFailed]);
+
+  useEffect(() => {
+    const target = pendingSourceLocation;
+    if (!target) return undefined;
+
+    let disposed = false;
+    let attempts = 0;
+    let timeout = 0;
+
+    const tryScroll = () => {
+      if (disposed) return;
+      if (scrollToSourceLocation(target)) {
+        setPendingSourceLocation(null);
+        return;
+      }
+
+      attempts += 1;
+      if (attempts >= 150) {
+        setPendingSourceLocation(null);
+        setToastMessage(t.status.linkOpenFailed);
+        return;
+      }
+
+      timeout = window.setTimeout(tryScroll, 100);
+    };
+
+    timeout = window.setTimeout(tryScroll, 40);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+    };
+  }, [activeNote.id, activeNote.markdown, pendingSourceLocation, scrollToSourceLocation, t.status.linkOpenFailed]);
+
+  const handleSourceLocationClick = useCallback((path: string, line: number, text?: string | null) => {
+    const file = vaultIndex?.filesByPath.get(normalizeFilePath(path));
+    if (!file) return;
+    openMarkdownFile(file.path, { targetLine: line, targetText: text }).catch((error) => {
+      console.error("Failed to open source location", error);
+      setVaultError(t.errors.openGraphNodeFailed);
+    });
+  }, [openMarkdownFile, t.errors.openGraphNodeFailed, vaultIndex]);
+
   const handleGraphNodeClick = useCallback((path: string) => {
     const file = vaultIndex?.filesByPath.get(normalizeFilePath(path));
     if (!file) return;
@@ -1331,6 +2192,92 @@ export default function App() {
     });
   }, [openMarkdownFile, t.errors.openGraphNodeFailed, vaultIndex]);
 
+  const handleOpenAmbiguousLink = useCallback(async (link: VaultLink) => {
+    if (!vaultIndex || link.targetCandidates.length <= 1) return;
+    const choices = link.targetCandidates
+      .map((path) => vaultIndex.filesByPath.get(normalizeFilePath(path)))
+      .filter((file): file is VaultIndexedFile => Boolean(file))
+      .map((file) => ({
+        value: file.path,
+        label: file.title,
+        description: file.relativePath,
+      }));
+    const selected = await showChoiceDialog(link.rawTarget, choices, link.unresolvedReason ?? undefined);
+    if (!selected) return;
+    openMarkdownFile(selected, { targetHeading: link.targetHeading }).catch((error) => {
+      console.error("Failed to open ambiguous link target", error);
+      setVaultError(t.errors.openGraphNodeFailed);
+    });
+  }, [openMarkdownFile, showChoiceDialog, t.errors.openGraphNodeFailed, vaultIndex]);
+
+  const handleCreateUnresolvedLink = useCallback(async (link: VaultLink) => {
+    if (!vaultRoot) return;
+    const relativePath = suggestedVaultLinkPath(link);
+    if (!relativePath) return;
+
+    try {
+      const createdPath = await createVaultEntry(vaultRoot, relativePath, "file");
+      const title = stripExtension(pathFileName(relativePath)).trim() || "Untitled";
+      const file = await writeMarkdownFile(createdPath, `# ${title}\n\n`);
+      await loadVaultDirectory(parentVaultDir(relativePath));
+      await refreshVaultIndex(vaultRoot);
+      applyOpenedFile(file);
+    } catch (error) {
+      console.error("Failed to create unresolved link target", error);
+      setVaultError(t.errors.createFileFailed);
+      setToastMessage(`${t.errors.createFileFailed}: ${readableError(error)}`);
+    }
+  }, [
+    applyOpenedFile,
+    loadVaultDirectory,
+    refreshVaultIndex,
+    t.errors.createFileFailed,
+    vaultRoot,
+  ]);
+
+  const handleCreateWikiLinkTarget = useCallback(async (targetInput: string) => {
+    if (!vaultRoot) return null;
+    const cleanTarget = stripLinkTargetMeta(targetInput)
+      .split("|", 1)[0]
+      .trim()
+      .replace(/^\/+/, "");
+    if (!cleanTarget) return null;
+
+    const sourceFile = findIndexedFile(vaultIndex, activeNote.filePath);
+    const sourceDir = sourceFile ? parentVaultDir(sourceFile.relativePath) : selectedVaultDir;
+    const relativeBase = cleanTarget.includes("/")
+      ? normalizeVaultRelativePath(cleanTarget)
+      : joinVaultPath(sourceDir, cleanTarget);
+    const relativePath = ensureVaultFileName(relativeBase, defaultSaveExt);
+    const returnTarget = cleanTarget.includes("/")
+      ? stripExtension(normalizeVaultRelativePath(cleanTarget))
+      : stripExtension(pathFileName(cleanTarget));
+
+    try {
+      const createdPath = await createVaultEntry(vaultRoot, relativePath, "file");
+      const title = stripExtension(pathFileName(relativePath)).trim() || "Untitled";
+      await writeMarkdownFile(createdPath, `# ${title}\n\n`);
+      await loadVaultDirectory(parentVaultDir(relativePath));
+      await refreshVaultIndex(vaultRoot);
+      return returnTarget;
+    } catch (error) {
+      if (String(error).toLowerCase().includes("already exists")) return returnTarget;
+      console.error("Failed to create wiki link target", error);
+      setVaultError(t.errors.createFileFailed);
+      setToastMessage(`${t.errors.createFileFailed}: ${readableError(error)}`);
+      return null;
+    }
+  }, [
+    activeNote.filePath,
+    defaultSaveExt,
+    loadVaultDirectory,
+    refreshVaultIndex,
+    selectedVaultDir,
+    t.errors.createFileFailed,
+    vaultIndex,
+    vaultRoot,
+  ]);
+
   const showLinkOpenFailedToast = useCallback(() => {
     setToastMessage(t.status.linkOpenFailed);
   }, [t.status.linkOpenFailed]);
@@ -1339,8 +2286,39 @@ export default function App() {
     const target = normalizeMarkdownHrefTarget(href);
     if (!target) return false;
 
-    if (target.startsWith("#")) {
+    if (target.toLowerCase().startsWith("serein-wiki:")) {
+      const wikiTarget = target.slice("serein-wiki:".length).trim();
+      if (!wikiTarget || !vaultIndex || !activeNote.filePath) {
+        showLinkOpenFailedToast();
+        return true;
+      }
+
+      const resolvedLink = resolveVaultLinkTarget(vaultIndex, activeNote.filePath, "wiki", wikiTarget);
+      if (resolvedLink.targetPath) {
+        openMarkdownFile(resolvedLink.targetPath, { targetHeading: resolvedLink.targetHeading ?? headingFromLinkTarget(wikiTarget) }).catch((error) => {
+          console.error("Failed to open wiki editor link", error);
+          showLinkOpenFailedToast();
+        });
+        return true;
+      }
+      if (resolvedLink.targetCandidates.length > 1) {
+        handleOpenAmbiguousLink(resolvedLink).catch((error) => {
+          console.error("Failed to choose wiki editor link target", error);
+          showLinkOpenFailedToast();
+        });
+        return true;
+      }
+
       showLinkOpenFailedToast();
+      return true;
+    }
+
+    const targetHeading = headingFromLinkTarget(target);
+
+    if (target.startsWith("#")) {
+      if (!targetHeading || !scrollToHeading(targetHeading)) {
+        showLinkOpenFailedToast();
+      }
       return true;
     }
 
@@ -1364,6 +2342,24 @@ export default function App() {
     }
 
     const cleanLocalTarget = localPathFromHrefTarget(targetPath);
+    if (vaultIndex && !isAbsoluteLocalPath(cleanLocalTarget)) {
+      const resolvedLink = resolveVaultLinkTarget(vaultIndex, activeNote.filePath, "markdown", target);
+      if (resolvedLink.targetPath) {
+        openMarkdownFile(resolvedLink.targetPath, { targetHeading: resolvedLink.targetHeading ?? targetHeading }).catch((error) => {
+          console.error("Failed to open resolved editor link", error);
+          showLinkOpenFailedToast();
+        });
+        return true;
+      }
+      if (resolvedLink.targetCandidates.length > 1) {
+        handleOpenAmbiguousLink(resolvedLink).catch((error) => {
+          console.error("Failed to choose editor link target", error);
+          showLinkOpenFailedToast();
+        });
+        return true;
+      }
+    }
+
     const sourceDir = filePathDirectory(activeNote.filePath);
     const absoluteTarget = isAbsoluteLocalPath(cleanLocalTarget)
       ? localPathFromHrefTarget(cleanLocalTarget)
@@ -1394,7 +2390,7 @@ export default function App() {
     }
 
     if (indexedTarget) {
-      openMarkdownFile(indexedTarget.path).catch((error) => {
+      openMarkdownFile(indexedTarget.path, { targetHeading }).catch((error) => {
         console.error("Failed to open indexed editor link", error);
         showLinkOpenFailedToast();
       });
@@ -1402,7 +2398,7 @@ export default function App() {
     }
 
     if (isMarkdownLikePath(absoluteTarget)) {
-      openMarkdownFile(absoluteTarget).catch((error) => {
+      openMarkdownFile(absoluteTarget, { targetHeading }).catch((error) => {
         console.error("Failed to open local markdown editor link", error);
         showLinkOpenFailedToast();
       });
@@ -1414,7 +2410,7 @@ export default function App() {
       showLinkOpenFailedToast();
     });
     return true;
-  }, [activeNote.filePath, openMarkdownFile, showLinkOpenFailedToast, vaultIndex, vaultRoot]);
+  }, [activeNote.filePath, handleOpenAmbiguousLink, openMarkdownFile, scrollToHeading, showLinkOpenFailedToast, vaultIndex, vaultRoot]);
 
   const handleFloatingPanelPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
@@ -1564,6 +2560,17 @@ export default function App() {
     }
   }, [expandedDirs, loadVaultDirectory]);
 
+  const handleCloseWorkspaceLeaf = useCallback(async () => {
+    if (!await confirmDiscardUnsavedChanges()) return;
+    const nextNote = createEmptyNote();
+    setNotes([nextNote]);
+    setActiveNoteId(nextNote.id);
+    setLastOpenedFile(null);
+    persistVaultPatch({ lastOpenedFile: null });
+    setSaveError(null);
+    setSaveStatus("idle");
+  }, [confirmDiscardUnsavedChanges, persistVaultPatch, setActiveNoteId, setLastOpenedFile, setNotes, setSaveError, setSaveStatus]);
+
   const modeCommandId = editorMode === "plain" ? "view.setRichEdit" : "view.setPlainEdit";
 
   return (
@@ -1597,11 +2604,42 @@ export default function App() {
         hasActiveDocument={hasActiveDocument}
         editorMode={editorMode}
         modeCommandId={modeCommandId}
+        windowActionPending={windowActionPending}
         onChromeMouseDown={handleChromeDragMouseDown}
         onChromeDoubleClick={handleChromeDoubleClick}
         onWindowAction={handleWindowAction}
         onOpenMenu={setOpenMenuId}
         onDispatchCommand={dispatchCommand}
+      />
+
+      <WorkspaceRibbon
+        sidebarVisible={sidebarVisible}
+        rightPanelVisible={rightPanelVisible}
+        vaultMode={vaultMode}
+        graphOpen={centerGraphOpen}
+        onToggleSidebar={() => setSidebarVisible((visible) => !visible)}
+        onToggleRightPanel={() => {
+          setKnowledgePanelFloating(false);
+          setRightPanelVisible((visible) => !visible);
+        }}
+        onOpenVault={() => dispatchCommand("file.openVault")}
+        onOpenQuickOpen={() => setPaletteMode("quickOpen")}
+        onOpenCommandPalette={() => setPaletteMode("command")}
+        onOpenSettings={() => {
+          setSettingsSection("general");
+          setSettingsOpen(true);
+        }}
+        onOpenGraphPanel={() => {
+          setCenterGraphOpen((open) => {
+            const nextOpen = !open;
+            setCenterView(nextOpen ? "graph" : "markdown");
+            return nextOpen;
+          });
+        }}
+        onOpenSearchPanel={() => {
+          setSidebarVisible(true);
+          setLeftPanelTab("search");
+        }}
       />
 
       {sidebarVisible ? (
@@ -1611,6 +2649,7 @@ export default function App() {
           vaultMode={vaultMode}
           vaultRoot={vaultRoot}
           vaultTree={vaultTree}
+          vaultIndex={vaultIndex}
           vaultError={vaultError}
           vaultRecoveryBlocked={vaultRecoveryBlocked}
           expandedDirs={expandedDirs}
@@ -1647,17 +2686,55 @@ export default function App() {
         />
       ) : null}
 
-      <EditorWorkspace
-        t={t}
-        activeNote={activeNote}
-        hasActiveDocument={hasActiveDocument}
-        editorMode={editorMode}
-        richCommand={richCommand}
-        editorSurfaceRef={editorSurfaceRef}
-        plainEditorRef={plainEditorRef}
-        onMarkdownChange={handleMarkdownChange}
-        onOpenLink={handleEditorLinkOpen}
-      />
+      <WorkspaceCenter
+        title={activeNote.title}
+        filePath={activeNote.filePath ?? null}
+        dirty={Boolean(activeNote.dirty)}
+        graphOpen={centerGraphOpen}
+        activeView={centerGraphOpen ? centerView : "markdown"}
+        graphTitle={t.knowledge.graph}
+        graphChildren={(
+          <WorkspaceGraphLeaf
+            t={t}
+            vaultMode={vaultMode}
+            graph={centerGraph}
+            tags={vaultTags}
+            selectedTag={centerGraphTag}
+            isolatedOnly={centerGraphIsolatedOnly}
+            showUnresolved={centerGraphShowUnresolved}
+            onTagChange={setCenterGraphTag}
+            onIsolatedOnlyChange={setCenterGraphIsolatedOnly}
+            onShowUnresolvedChange={setCenterGraphShowUnresolved}
+            onGraphNodeClick={handleGraphNodeClick}
+          />
+        )}
+        onViewChange={(view) => {
+          if (view === "graph") setCenterGraphOpen(true);
+          setCenterView(view);
+        }}
+        onClose={handleCloseWorkspaceLeaf}
+        onCloseGraph={() => {
+          setCenterGraphOpen(false);
+          setCenterView("markdown");
+        }}
+      >
+        <EditorWorkspace
+          t={t}
+          activeNote={activeNote}
+          hasActiveDocument={hasActiveDocument}
+          editorMode={editorMode}
+          richCommand={richCommand}
+          editorSurfaceRef={editorSurfaceRef}
+          plainEditorRef={plainEditorRef}
+          onMarkdownChange={handleMarkdownChange}
+          onOpenLink={handleEditorLinkOpen}
+          wikiLinkSuggestions={wikiLinkSuggestions}
+          onCreateWikiLink={handleCreateWikiLinkTarget}
+          onImportImages={importImagesForEditor}
+          onPlainImageFiles={handlePlainEditorImageFiles}
+          imagePreviewMap={imagePreviewMap}
+        />
+      </WorkspaceCenter>
 
       {rightPanelVisible && !knowledgePanelFloating ? (
         <div
@@ -1684,6 +2761,7 @@ export default function App() {
           activeOutgoingLinks={activeOutgoingLinks}
           activeResolvedLinks={activeResolvedLinks}
           activeUnresolvedLinks={activeUnresolvedLinks}
+          activeUnlinkedMentions={activeUnlinkedMentions}
           localGraph={localGraph}
           lineCount={lineCount}
           textStats={textStats}
@@ -1691,6 +2769,9 @@ export default function App() {
           onToggleFloating={() => setKnowledgePanelFloating((floating) => !floating)}
           onFloatingPointerDown={handleFloatingPanelPointerDown}
           onGraphNodeClick={handleGraphNodeClick}
+          onSourceLocationClick={handleSourceLocationClick}
+          onCreateUnresolvedLink={handleCreateUnresolvedLink}
+          onOpenAmbiguousLink={handleOpenAmbiguousLink}
         />
       ) : null}
 
@@ -1709,6 +2790,7 @@ export default function App() {
           activeOutgoingLinks={activeOutgoingLinks}
           activeResolvedLinks={activeResolvedLinks}
           activeUnresolvedLinks={activeUnresolvedLinks}
+          activeUnlinkedMentions={activeUnlinkedMentions}
           localGraph={localGraph}
           lineCount={lineCount}
           textStats={textStats}
@@ -1717,8 +2799,47 @@ export default function App() {
           onToggleFloating={() => setKnowledgePanelFloating((floating) => !floating)}
           onFloatingPointerDown={handleFloatingPanelPointerDown}
           onGraphNodeClick={handleGraphNodeClick}
+          onSourceLocationClick={handleSourceLocationClick}
+          onCreateUnresolvedLink={handleCreateUnresolvedLink}
+          onOpenAmbiguousLink={handleOpenAmbiguousLink}
         />
       ) : null}
+
+      <WorkspaceStatusBar
+        filePath={activeNote.filePath ?? null}
+        dirty={Boolean(activeNote.dirty)}
+        editorMode={editorMode}
+        vaultRoot={vaultRoot}
+        vaultIndexStatus={vaultIndexStatus}
+        vaultFileCount={vaultIndex?.files.length ?? 0}
+        lineCount={lineCount}
+        words={textStats.words}
+        characters={textStats.characters}
+        resolvedLinks={activeResolvedLinks.length}
+        unresolvedLinks={activeUnresolvedLinks.length}
+      />
+
+      <CommandPalette
+        open={paletteMode !== null}
+        mode={paletteMode ?? "quickOpen"}
+        title={paletteMode === "command" ? t.palette.commandPalette : t.palette.quickOpen}
+        placeholder={paletteMode === "command" ? t.palette.commandPlaceholder : t.palette.quickOpenPlaceholder}
+        emptyText={t.palette.noResults}
+        vaultIndex={vaultIndex}
+        commands={commands}
+        onClose={() => setPaletteMode(null)}
+        onOpenFile={(path) => {
+          setPaletteMode(null);
+          openMarkdownFile(path).catch((error) => {
+            console.error("Failed to open quick-open file", error);
+            setVaultError(t.errors.openVaultFileFailed);
+          });
+        }}
+        onRunCommand={(commandId) => {
+          setPaletteMode(null);
+          dispatchCommand(commandId);
+        }}
+      />
 
       <AppDialogHost
         dialog={appDialog}

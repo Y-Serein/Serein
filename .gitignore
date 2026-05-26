@@ -29,6 +29,8 @@ tmp/
 **/tmp/
 *.tmp
 *.log
+**/.serein/
+**/.serein-backups/
 
 # OS/editor files
 .DS_Store

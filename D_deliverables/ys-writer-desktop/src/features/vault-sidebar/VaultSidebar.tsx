@@ -1,10 +1,13 @@
+import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import { FileText, Folder, FolderOpen, Plus, RotateCcw, Trash2, Edit3 } from "lucide-react";
+import { Bookmark, FileText, Folder, FolderOpen, Plus, RotateCcw, Search, Tag, Trash2, Edit3 } from "lucide-react";
 import type { LeftPanelTab } from "../../app/store/appStore";
 import type { AppLanguage, appText } from "../../app/i18n";
 import type { VaultTreeEntry } from "../../app/types";
 import type { Note } from "../../domain/model";
 import type { OutlineItem } from "../../shared/markdown";
+import type { VaultIndex } from "../../vault";
+import { listVaultTags, searchVaultIndex } from "../../vault";
 import { Button, IconButton, SegmentedTabs, cx } from "../../shared/ui";
 
 type TextBundle = (typeof appText)[AppLanguage];
@@ -15,6 +18,7 @@ type VaultSidebarProps = {
   vaultMode: boolean;
   vaultRoot: string | null;
   vaultTree: VaultTreeEntry | null;
+  vaultIndex: VaultIndex | null;
   vaultError: string | null;
   vaultRecoveryBlocked: boolean;
   expandedDirs: Set<string>;
@@ -139,6 +143,7 @@ export function VaultSidebar({
   vaultMode,
   vaultRoot,
   vaultTree,
+  vaultIndex,
   vaultError,
   vaultRecoveryBlocked,
   expandedDirs,
@@ -158,6 +163,11 @@ export function VaultSidebar({
   onOutlineClick,
   onSelectNote,
 }: VaultSidebarProps) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchResults = useMemo(() => searchVaultIndex(vaultIndex, searchQuery, { limit: 60 }), [searchQuery, vaultIndex]);
+  const tags = useMemo(() => listVaultTags(vaultIndex), [vaultIndex]);
+  const hasSidebarSearchIntent = searchQuery.trim().length > 0;
+
   return (
     <aside className="left-rail">
       <SegmentedTabs
@@ -166,6 +176,9 @@ export function VaultSidebar({
         value={tab}
         items={[
           { id: "files", label: t.sidebar.files },
+          { id: "search", label: t.sidebar.search },
+          { id: "bookmarks", label: t.sidebar.bookmarks },
+          { id: "tags", label: t.sidebar.tags },
           { id: "outline", label: t.sidebar.outline },
         ]}
         onChange={onTabChange}
@@ -224,6 +237,75 @@ export function VaultSidebar({
               {item.text}
             </button>
           )) : <p className="muted">{t.sidebar.noHeadings}</p>}
+        </div>
+      ) : null}
+
+      {tab === "search" ? (
+        <div className="sidebar-plugin-panel" role="tabpanel">
+          <label className="sidebar-search-box">
+            <Search size={14} aria-hidden="true" />
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder={t.knowledge.searchPlaceholder}
+            />
+          </label>
+          <div className="link-list sidebar-search-results">
+            {searchResults.length ? searchResults.map((result) => (
+              <button
+                key={result.path}
+                type="button"
+                className="link-item search-result-item"
+                onClick={() => onOpenMarkdownFile(result.path)}
+              >
+                <Search size={14} aria-hidden="true" />
+                <strong>{result.title}</strong>
+                <span>{result.relativePath}</span>
+                <small>{result.snippet}</small>
+              </button>
+            )) : (
+              <p className="muted">
+                {!vaultMode
+                  ? t.knowledge.openVaultForGraph
+                  : hasSidebarSearchIntent
+                    ? t.knowledge.noSearchResults
+                    : t.knowledge.searchPlaceholder}
+              </p>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {tab === "bookmarks" ? (
+        <div className="sidebar-plugin-panel" role="tabpanel">
+          <div className="empty-plugin-state">
+            <Bookmark size={18} aria-hidden="true" />
+            <p>{t.sidebar.noBookmarks}</p>
+          </div>
+        </div>
+      ) : null}
+
+      {tab === "tags" ? (
+        <div className="sidebar-plugin-panel" role="tabpanel">
+          <div className="tag-list sidebar-tag-list">
+            {tags.length ? tags.map((item) => (
+              <button
+                key={item.tag}
+                type="button"
+                className="tag-filter-button"
+                onClick={() => {
+                  setSearchQuery(item.tag);
+                  onTabChange("search");
+                }}
+              >
+                <Tag size={13} aria-hidden="true" />
+                <span>#{item.tag}</span>
+                <small>{item.count}</small>
+              </button>
+            )) : (
+              <p className="muted">{t.knowledge.noTags}</p>
+            )}
+          </div>
         </div>
       ) : null}
 

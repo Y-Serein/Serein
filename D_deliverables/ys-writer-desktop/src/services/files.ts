@@ -1,12 +1,16 @@
 export {
   createVaultEntry,
   deleteVaultEntry,
+  importEditorAsset,
+  importEditorAssetFromPath,
   initVault,
   openExternalTarget,
+  readLocalAssetDataUrl,
   readMarkdownFile,
   readVaultDirectory,
   readVaultIndexFiles,
   renameVaultEntry,
+  writeExportFile,
   writeMarkdownFile,
   writeVaultWorkspaceState,
 } from "../fs/tauriFs";

@@ -2,6 +2,7 @@ import { lazy, Suspense, type RefObject } from "react";
 import type { EditorCommandSignal, Note } from "../../domain/model";
 import type { EditorMode } from "../../app/types";
 import type { AppLanguage, appText } from "../../app/i18n";
+import type { WikiLinkSuggestion } from "../../components/MilkdownEditor";
 
 const MilkdownEditor = lazy(() => import("../../components/MilkdownEditor").then((module) => ({
   default: module.MilkdownEditor,
@@ -19,6 +20,11 @@ type EditorWorkspaceProps = {
   plainEditorRef: RefObject<HTMLTextAreaElement>;
   onMarkdownChange: (markdown: string) => void;
   onOpenLink: (href: string) => boolean;
+  wikiLinkSuggestions: WikiLinkSuggestion[];
+  onCreateWikiLink: (target: string) => Promise<string | null>;
+  onImportImages: (files: File[]) => Promise<Array<{ src: string; alt: string }>>;
+  onPlainImageFiles: (files: File[]) => Promise<boolean>;
+  imagePreviewMap: Record<string, string>;
 };
 
 export function EditorWorkspace({
@@ -31,6 +37,11 @@ export function EditorWorkspace({
   plainEditorRef,
   onMarkdownChange,
   onOpenLink,
+  wikiLinkSuggestions,
+  onCreateWikiLink,
+  onImportImages,
+  onPlainImageFiles,
+  imagePreviewMap,
 }: EditorWorkspaceProps) {
   return (
     <main className="editor-column">
@@ -43,6 +54,21 @@ export function EditorWorkspace({
             className="markdown-editor"
             value={activeNote.markdown}
             onChange={(event) => onMarkdownChange(event.target.value)}
+            onPaste={(event) => {
+              const files = Array.from(event.clipboardData.files);
+              if (!files.length) return;
+              event.preventDefault();
+              void onPlainImageFiles(files);
+            }}
+            onDrop={(event) => {
+              const files = Array.from(event.dataTransfer.files);
+              if (!files.length) return;
+              event.preventDefault();
+              void onPlainImageFiles(files);
+            }}
+            onDragOver={(event) => {
+              if (Array.from(event.dataTransfer.types).includes("Files")) event.preventDefault();
+            }}
             spellCheck
           />
         ) : (
@@ -53,6 +79,10 @@ export function EditorWorkspace({
               onChange={onMarkdownChange}
               command={richCommand}
               onOpenLink={onOpenLink}
+              wikiLinkSuggestions={wikiLinkSuggestions}
+              onCreateWikiLink={onCreateWikiLink}
+              onImportImages={onImportImages}
+              imagePreviewMap={imagePreviewMap}
             />
           </Suspense>
         )}

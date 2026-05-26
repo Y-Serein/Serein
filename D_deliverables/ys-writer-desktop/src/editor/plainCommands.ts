@@ -88,6 +88,7 @@ export function applyPlainEditorCommand(
   end: number,
   action: EditorCommandAction,
   payload?: string,
+  alt?: string,
 ): PlainEditResult {
   if (action === "selectAllSmart") {
     const codeRange = findFenceContentRange(markdown, start);
@@ -118,6 +119,27 @@ export function applyPlainEditorCommand(
       markdown: `${markdown.slice(0, start)}${nextText}${markdown.slice(end)}`,
       selectionStart: start + 8,
       selectionEnd: start + 8 + selected.length,
+    };
+  }
+
+  if (action === "table") {
+    const nextText = "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |";
+    return {
+      markdown: `${markdown.slice(0, start)}${nextText}${markdown.slice(end)}`,
+      selectionStart: start,
+      selectionEnd: start + nextText.length,
+    };
+  }
+
+  if (action === "image") {
+    const src = payload || "assets/image.png";
+    const imageAlt = alt?.replace(/[\]\n\r]/g, " ").trim() || "image";
+    const cleanSrc = src.includes(" ") ? `<${src}>` : src;
+    const nextText = `![${imageAlt}](${cleanSrc})`;
+    return {
+      markdown: `${markdown.slice(0, start)}${nextText}${markdown.slice(end)}`,
+      selectionStart: start + 2,
+      selectionEnd: start + 2 + imageAlt.length,
     };
   }
 

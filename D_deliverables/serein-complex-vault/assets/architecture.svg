@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-label="Serein test architecture diagram">
+  <rect width="960" height="540" fill="#f5f7fb"/>
+  <rect x="80" y="90" width="210" height="110" rx="12" fill="#ffffff" stroke="#7c8aa5" stroke-width="3"/>
+  <text x="185" y="137" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" fill="#1f2937">Writer</text>
+  <text x="185" y="170" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#4b5563">Typora flow</text>
+  <rect x="375" y="90" width="210" height="110" rx="12" fill="#ffffff" stroke="#6d8b74" stroke-width="3"/>
+  <text x="480" y="137" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" fill="#1f2937">Vault</text>
+  <text x="480" y="170" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#4b5563">Links and index</text>
+  <rect x="670" y="90" width="210" height="110" rx="12" fill="#ffffff" stroke="#8b6d74" stroke-width="3"/>
+  <text x="775" y="137" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" fill="#1f2937">Export</text>
+  <text x="775" y="170" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#4b5563">PDF and HTML</text>
+  <line x1="290" y1="145" x2="375" y2="145" stroke="#64748b" stroke-width="4" marker-end="url(#arrow)"/>
+  <line x1="585" y1="145" x2="670" y2="145" stroke="#64748b" stroke-width="4" marker-end="url(#arrow)"/>
+  <rect x="205" y="315" width="550" height="95" rx="16" fill="#e7eef7" stroke="#94a3b8" stroke-width="2"/>
+  <text x="480" y="355" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" fill="#1f2937">Internal Alpha Test Vault</text>
+  <text x="480" y="388" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#4b5563">Use copies only. Never test against the only copy of real notes.</text>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
+    </marker>
+  </defs>
+</svg>
