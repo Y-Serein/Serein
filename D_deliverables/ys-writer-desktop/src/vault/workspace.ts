@@ -3,6 +3,19 @@ import type { MarkdownFileResponse, SaveFileExt, VaultWorkspaceState } from "../
 import type { Note } from "../domain/model";
 import { ensureVaultFileName, extractFirstLineTitle, stripExtension } from "../shared/markdown.js";
 
+export function normalizeEditorLineEndings(markdown: string) {
+  return markdown.replace(/\r\n?/g, "\n");
+}
+
+export function detectLineEnding(markdown: string): Note["lineEnding"] {
+  return markdown.includes("\r\n") ? "crlf" : "lf";
+}
+
+export function applyLineEnding(markdown: string, lineEnding: Note["lineEnding"]) {
+  const normalized = normalizeEditorLineEndings(markdown);
+  return lineEnding === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized;
+}
+
 export function createEmptyNote(): Note {
   const now = new Date().toISOString();
   const id = typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -16,6 +29,8 @@ export function createEmptyNote(): Note {
     tagIds: [],
     createdAt: now,
     updatedAt: now,
+    lineEnding: "lf",
+    savedMarkdown: "",
     dirty: false,
   };
 }
@@ -35,13 +50,17 @@ export function createDraftNote(defaultName = "未命名笔记", defaultExt: Sav
     tagIds: [],
     createdAt: now,
     updatedAt: now,
+    lineEnding: "lf",
+    savedMarkdown: "",
     dirty: true,
   };
 }
 
 export function createFileNote(file: MarkdownFileResponse): Note {
   const now = new Date().toISOString();
-  const titleFromHeading = extractFirstLineTitle(file.content);
+  const lineEnding = detectLineEnding(file.content);
+  const content = normalizeEditorLineEndings(file.content);
+  const titleFromHeading = extractFirstLineTitle(content);
   const titleFromFile = stripExtension(file.fileName).trim();
   const id = typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -50,7 +69,7 @@ export function createFileNote(file: MarkdownFileResponse): Note {
   return {
     id,
     title: titleFromFile || titleFromHeading || "未命名笔记",
-    markdown: file.content,
+    markdown: content,
     tagIds: [],
     createdAt: now,
     updatedAt: now,
@@ -59,6 +78,8 @@ export function createFileNote(file: MarkdownFileResponse): Note {
     fileExt: file.fileExt,
     fileModifiedAtMs: file.modifiedAtMs,
     fileSize: file.size,
+    lineEnding,
+    savedMarkdown: content,
     dirty: false,
   };
 }

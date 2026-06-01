@@ -118,6 +118,44 @@ Known non-blocking warnings:
 - Floating UI inside editor DOM may be mispositioned; use a portal to `document.body` for cursor popovers when needed.
 - Avoid duplicated UI entry points. The user rejected having search in too many places.
 - Never silently batch-rewrite user notes. Prompt, protect dirty files, and verify metadata before writing.
+- If Rich Edit code blocks show the same apparent cursor offset across space, Enter, delete, cut, and cross-line selection, do not patch each key separately. Treat it as a shared coordinate-system bug first.
+- Windows `.txt/.md` files may use CRLF. CodeMirror positions are LF-based; ProseMirror content that still contains `\r\n` can drift by one character per prior line. Inspect real file bytes before trusting browser repros.
+- Browser textarea and Playwright `.fill()` may normalize CRLF to LF, hiding bugs that only appear when the Windows release opens the real file.
+- Preserve original line endings when saving. Normalizing editor-internal state to LF is acceptable only if save writes CRLF back for originally CRLF files.
+
+## Rich Edit Code Block Triage
+
+When the user reports code-block cursor drift, selection drift, `Ctrl+X` deleting the wrong text, or cross-line selection grabbing text before the visible start:
+
+1. Confirm the exact runtime: Windows release `.exe`, Tauri dev, Vite dev, or browser preview.
+2. Confirm the exact file bytes with `file` and a byte count for `\r\n`, `\n`, and `\r`.
+3. Check whether many actions fail together:
+   - space insertion
+   - Enter/newline
+   - Backspace/Delete
+   - `Ctrl+X`
+   - context-menu cut
+   - cross-line selection
+4. If many actions drift together, prioritize line endings, invisible characters, and CodeMirror/ProseMirror offset mapping over DOM clipboard handling.
+5. Keep editor-internal markdown LF-normalized, record the original line ending on the note model, and apply that line ending when saving.
+6. Add a regression test that proves CRLF input becomes LF in editor state and saves back as CRLF.
+
+Relevant files:
+
+```text
+D_deliverables/ys-writer-desktop/src/vault/workspace.ts
+D_deliverables/ys-writer-desktop/src/domain/model.ts
+D_deliverables/ys-writer-desktop/src/App.tsx
+D_deliverables/ys-writer-desktop/src/components/sereinCodeBlockView.ts
+D_deliverables/ys-writer-desktop/src/components/MilkdownEditor.tsx
+D_deliverables/ys-writer-desktop/tests/vault.test.mjs
+```
+
+Useful prompt to trigger this triage:
+
+```text
+Windows release .exe 里 Rich Edit 代码块出现光标/选区偏移：空格、回车、删除、Ctrl+X、跨行选择都像少算字符。请先检查真实文件行尾/编码和 CodeMirror/ProseMirror 位置映射，不要只修快捷键；修复后保留原文件 CRLF/LF 保存格式，并跑最小测试和 Windows 复测清单。
+```
 
 ## Complex Test Vault
 

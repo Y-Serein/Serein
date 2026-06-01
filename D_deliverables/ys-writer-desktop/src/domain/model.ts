@@ -12,6 +12,9 @@ export type Note = {
   fileExt?: string;
   fileModifiedAtMs?: number | null;
   fileSize?: number;
+  lineEnding?: "lf" | "crlf";
+  savedMarkdown?: string;
+  richSavedMarkdown?: string;
   dirty?: boolean;
 };
 

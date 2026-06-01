@@ -92,8 +92,6 @@ export function WindowChrome({
         ref={menuBarRef}
         className="menu-bar command-bar"
         aria-label={t.aria.appMenu}
-        onMouseDown={onChromeMouseDown}
-        onDoubleClick={onChromeDoubleClick}
       >
         <div className="command-bar-left">
           <Search size={15} aria-hidden="true" />

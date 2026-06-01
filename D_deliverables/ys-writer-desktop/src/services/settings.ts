@@ -5,6 +5,7 @@ export {
   clampUiScale,
   normalizeDefaultNewNoteName,
   normalizeEditorFontFamily,
+  normalizeImageAttachmentFolder,
   readSettings,
   writeSettings,
 } from "../settings/storage";

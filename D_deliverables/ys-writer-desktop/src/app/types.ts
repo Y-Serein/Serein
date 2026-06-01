@@ -3,10 +3,11 @@ import type { AppLanguage } from "./i18n";
 
 export type SaveStatus = "idle" | "saved" | "error";
 export type EditorMode = "plain" | "rich";
-export type ThemeStyle = "daily" | "eye" | "ink" | "mint";
+export type ThemeStyle = "daily" | "eye" | "ink" | "mint" | "v5" | "v6";
 export type UIDensity = "comfortable" | "compact";
 export type SaveFileExt = "md" | "txt";
-export type SettingsSection = "general" | "editor" | "shortcuts" | "appearance" | "files";
+export type ImagePathStyle = "relative" | "absolute";
+export type SettingsSection = "general" | "files" | "editor" | "image" | "markdown" | "appearance" | "shortcuts";
 
 export type AppSettings = {
   theme: ThemeStyle;
@@ -31,6 +32,10 @@ export type AppSettings = {
   zoomWithWheel: boolean;
   defaultSaveExt: SaveFileExt;
   defaultNewNoteName: string;
+  imageAttachmentFolder: string;
+  imagePathStyle: ImagePathStyle;
+  showImageSourceOnFocus: boolean;
+  normalizeWindowsImagePaths: boolean;
 };
 
 export type CommandDefinition = {

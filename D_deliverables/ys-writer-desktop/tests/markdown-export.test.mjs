@@ -43,6 +43,11 @@ test("collects only local markdown image sources", () => {
   assert.deepEqual(sources, ["assets/a.png", "../c space.jpg", "assets/d.png"]);
 });
 
+test("collects Windows absolute markdown image sources", () => {
+  const sources = collectLocalImageSources("![a](<C:\\Serein_Y\\Sipeed\\rv_nano\\v8.png>)\n![b](C:\\Temp\\b.png)");
+  assert.deepEqual(sources, ["C:\\Serein_Y\\Sipeed\\rv_nano\\v8.png", "C:\\Temp\\b.png"]);
+});
+
 test("wraps rendered markdown in a complete html export document", () => {
   const html = htmlDocument("```ts\nconst ok = true\n```", { title: "Doc" });
   assert.match(html, /<!doctype html>/);

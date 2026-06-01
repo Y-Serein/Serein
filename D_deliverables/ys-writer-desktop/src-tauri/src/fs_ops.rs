@@ -49,6 +49,7 @@ pub fn write_markdown_file(
     content: String,
     expected_modified_at_ms: Option<u64>,
     expected_size: Option<u64>,
+    backup_root: PathBuf,
 ) -> Result<MarkdownFile, String> {
     ensure_supported_text_path(&path)?;
     ensure_reasonable_text_size(content.len())?;
@@ -68,7 +69,7 @@ pub fn write_markdown_file(
             }
         }
 
-        backup_existing_file(file_path)?;
+        backup_existing_file(file_path, &backup_root)?;
     }
 
     atomic_write(file_path, content.as_bytes())?;
@@ -110,6 +111,7 @@ pub fn import_editor_asset(
     current_file_path: String,
     file_name: String,
     bytes: Vec<u8>,
+    attachment_folder: Option<String>,
 ) -> Result<ImportedAsset, String> {
     ensure_supported_text_path(&current_file_path)?;
     if bytes.is_empty() {
@@ -132,10 +134,7 @@ pub fn import_editor_asset(
         ensure_path_inside_root(root, current_path, true)?;
     }
 
-    let target_dir = current_path
-        .parent()
-        .ok_or_else(|| "Current document has no parent folder.".to_string())?
-        .join("assets");
+    let target_dir = resolve_attachment_dir(current_path, attachment_folder.as_deref())?;
     if let Some(root) = vault_root.as_deref() {
         ensure_path_inside_root(root, &target_dir, false)?;
     }
@@ -160,6 +159,7 @@ pub fn import_editor_asset_from_path(
     vault_root: Option<String>,
     current_file_path: String,
     source_path: String,
+    attachment_folder: Option<String>,
 ) -> Result<ImportedAsset, String> {
     ensure_supported_text_path(&current_file_path)?;
     if source_path.trim().is_empty() || source_path.contains('\0') {
@@ -197,7 +197,7 @@ pub fn import_editor_asset_from_path(
     let bytes = fs::read(source)
         .map_err(|error| format!("Failed to read selected image: {error}"))?;
 
-    import_editor_asset(vault_root, current_file_path, file_name, bytes)
+    import_editor_asset(vault_root, current_file_path, file_name, bytes, attachment_folder)
 }
 
 pub fn read_local_asset_data_url(
@@ -223,8 +223,9 @@ pub fn read_local_asset_data_url(
         ensure_path_inside_root(root, current_path, true)?;
     }
 
+    let is_explicit_absolute_source = is_explicit_absolute_asset_source(source);
     let asset_path = resolve_asset_path(current_path, source)?;
-    if let Some(root) = vault_root.as_deref() {
+    if let Some(root) = vault_root.as_deref().filter(|_| !is_explicit_absolute_source) {
         ensure_path_inside_root(root, &asset_path, true)?;
     }
 
@@ -271,6 +272,58 @@ fn resolve_asset_path(current_path: &Path, source: &str) -> Result<PathBuf, Stri
         .parent()
         .ok_or_else(|| "Current document has no parent folder.".to_string())?;
     Ok(parent.join(source_path))
+}
+
+fn is_explicit_absolute_asset_source(source: &str) -> bool {
+    let source = source
+        .split('#')
+        .next()
+        .unwrap_or(source)
+        .split('?')
+        .next()
+        .unwrap_or(source)
+        .replace('\\', "/");
+
+    if source.starts_with("file://") {
+        let decoded = percent_decode(source.trim_start_matches("file://"));
+        return is_absolute_path_like(&decoded.replace('\\', "/"));
+    }
+
+    is_absolute_path_like(&source)
+}
+
+fn is_absolute_path_like(source: &str) -> bool {
+    Path::new(source).is_absolute() || is_windows_drive_absolute(source) || source.starts_with("//")
+}
+
+fn is_windows_drive_absolute(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && bytes[2] == b'/'
+}
+
+fn resolve_attachment_dir(current_path: &Path, attachment_folder: Option<&str>) -> Result<PathBuf, String> {
+    let parent = current_path
+        .parent()
+        .ok_or_else(|| "Current document has no parent folder.".to_string())?;
+    let folder = attachment_folder
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("assets")
+        .replace('\\', "/");
+    if folder.contains('\0')
+        || folder.starts_with('/')
+        || folder.starts_with("../")
+        || folder == ".."
+        || folder.contains("/../")
+        || folder.contains(':')
+    {
+        return Err("Image attachment folder must be a relative child folder.".to_string());
+    }
+    let folder = folder.trim_start_matches("./");
+    Ok(parent.join(folder))
 }
 
 fn relative_markdown_path(current_path: &Path, target_path: &Path) -> Result<String, String> {

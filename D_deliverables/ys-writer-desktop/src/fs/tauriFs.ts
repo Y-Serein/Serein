@@ -36,12 +36,14 @@ export function importEditorAsset(
   currentFilePath: string,
   fileName: string,
   bytes: number[],
+  attachmentFolder?: string,
 ) {
   return invoke<ImportedAssetResponse>("import_editor_asset", {
     vaultRoot,
     currentFilePath,
     fileName,
     bytes,
+    attachmentFolder,
   });
 }
 
@@ -49,11 +51,13 @@ export function importEditorAssetFromPath(
   vaultRoot: string | null,
   currentFilePath: string,
   sourcePath: string,
+  attachmentFolder?: string,
 ) {
   return invoke<ImportedAssetResponse>("import_editor_asset_from_path", {
     vaultRoot,
     currentFilePath,
     sourcePath,
+    attachmentFolder,
   });
 }
 

@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.0.1 - Unreleased
+## 0.0.2 - 2026-06-01
+
+- Harden Rich Edit file handling around CRLF line endings while preserving the original file line ending on save.
+- Improve Vault sidebar selection, new-note placement, and lazy directory refresh behavior.
+- Add safer unsaved-change navigation with Save and Continue / Continue without Saving / Cancel choices.
+- Refine code block spacing, language controls, context menus, image handling, settings, and release workflow checks.
+
+## 0.0.1 - 2026-05-29
 
 - Rename desktop product identity to Serein.
 - Add bilingual Chinese/English UI switching.

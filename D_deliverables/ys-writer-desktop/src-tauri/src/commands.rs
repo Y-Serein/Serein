@@ -1,12 +1,17 @@
 use crate::{
     fs_ops,
     model::{
-        ImportedAsset, LocalAssetData, MarkdownFile, VaultDirectory, VaultIndexResponse, VaultInitResponse,
-        VaultWorkspaceState,
+        ImportedAsset, LocalAssetData, MarkdownFile, VaultDirectory, VaultIndexResponse,
+        VaultInitResponse, VaultWorkspaceState,
     },
     vault,
 };
-use std::{path::Path, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+use tauri::{AppHandle, Manager};
 
 #[tauri::command]
 pub fn read_markdown_file(path: String) -> Result<MarkdownFile, String> {
@@ -15,12 +20,14 @@ pub fn read_markdown_file(path: String) -> Result<MarkdownFile, String> {
 
 #[tauri::command]
 pub fn write_markdown_file(
+    app: AppHandle,
     path: String,
     content: String,
     expected_modified_at_ms: Option<u64>,
     expected_size: Option<u64>,
 ) -> Result<MarkdownFile, String> {
-    fs_ops::write_markdown_file(path, content, expected_modified_at_ms, expected_size)
+    let backup_root = app_data_dir(&app)?.join("backups");
+    fs_ops::write_markdown_file(path, content, expected_modified_at_ms, expected_size, backup_root)
 }
 
 #[tauri::command]
@@ -34,8 +41,9 @@ pub fn import_editor_asset(
     current_file_path: String,
     file_name: String,
     bytes: Vec<u8>,
+    attachment_folder: Option<String>,
 ) -> Result<ImportedAsset, String> {
-    fs_ops::import_editor_asset(vault_root, current_file_path, file_name, bytes)
+    fs_ops::import_editor_asset(vault_root, current_file_path, file_name, bytes, attachment_folder)
 }
 
 #[tauri::command]
@@ -43,8 +51,9 @@ pub fn import_editor_asset_from_path(
     vault_root: Option<String>,
     current_file_path: String,
     source_path: String,
+    attachment_folder: Option<String>,
 ) -> Result<ImportedAsset, String> {
-    fs_ops::import_editor_asset_from_path(vault_root, current_file_path, source_path)
+    fs_ops::import_editor_asset_from_path(vault_root, current_file_path, source_path, attachment_folder)
 }
 
 #[tauri::command]
@@ -57,12 +66,16 @@ pub fn read_local_asset_data_url(
 }
 
 #[tauri::command]
-pub fn init_vault(root: String) -> Result<VaultInitResponse, String> {
-    vault::init_vault(root)
+pub fn init_vault(app: AppHandle, root: String) -> Result<VaultInitResponse, String> {
+    vault::init_vault(root, app_data_dir(&app)?)
 }
 
 #[tauri::command]
-pub fn read_vault_directory(root: String, relative_path: String, limit: Option<usize>) -> Result<VaultDirectory, String> {
+pub fn read_vault_directory(
+    root: String,
+    relative_path: String,
+    limit: Option<usize>,
+) -> Result<VaultDirectory, String> {
     vault::read_vault_directory(root, relative_path, limit)
 }
 
@@ -72,23 +85,35 @@ pub fn read_vault_index_files(root: String) -> Result<VaultIndexResponse, String
 }
 
 #[tauri::command]
-pub fn create_vault_entry(root: String, relative_path: String, kind: String) -> Result<String, String> {
+pub fn create_vault_entry(
+    root: String,
+    relative_path: String,
+    kind: String,
+) -> Result<String, String> {
     vault::create_vault_entry(root, relative_path, kind)
 }
 
 #[tauri::command]
-pub fn rename_vault_entry(root: String, relative_path: String, new_name: String) -> Result<String, String> {
+pub fn rename_vault_entry(
+    root: String,
+    relative_path: String,
+    new_name: String,
+) -> Result<String, String> {
     vault::rename_vault_entry(root, relative_path, new_name)
 }
 
 #[tauri::command]
-pub fn delete_vault_entry(root: String, relative_path: String) -> Result<(), String> {
-    vault::delete_vault_entry(root, relative_path)
+pub fn delete_vault_entry(app: AppHandle, root: String, relative_path: String) -> Result<(), String> {
+    vault::delete_vault_entry(root, relative_path, app_data_dir(&app)?)
 }
 
 #[tauri::command]
-pub fn write_vault_workspace_state(root: String, workspace: VaultWorkspaceState) -> Result<(), String> {
-    vault::write_workspace_state(root, workspace)
+pub fn write_vault_workspace_state(
+    app: AppHandle,
+    root: String,
+    workspace: VaultWorkspaceState,
+) -> Result<(), String> {
+    vault::write_workspace_state(root, workspace, app_data_dir(&app)?)
 }
 
 #[tauri::command]
@@ -166,4 +191,13 @@ fn has_url_scheme(target: &str) -> bool {
     };
     first.is_ascii_alphabetic()
         && chars.all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'))
+}
+
+fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve Serein app data directory: {error}"))?;
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("Failed to create Serein app data directory: {error}"))?;
+    Ok(dir)
 }

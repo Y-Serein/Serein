@@ -15,9 +15,35 @@ import {
 } from "../.test-dist/vault/index.js";
 import { normalizeWikiLinkEscapes } from "../.test-dist/shared/markdown.js";
 import { findHeadingIndex } from "../.test-dist/shared/markdown.js";
-import { mergeWorkspaceState } from "../.test-dist/vault/workspace.js";
+import {
+  directoryFromResponse,
+  preserveLoadedDirectoryChildren,
+} from "../.test-dist/explorer/tree.js";
+import {
+  applyLineEnding,
+  createFileNote,
+  mergeWorkspaceState,
+  normalizeEditorLineEndings,
+} from "../.test-dist/vault/workspace.js";
 
 const root = "/vault";
+
+function treeEntry(relativePath, kind = "file", children = []) {
+  const name = relativePath ? relativePath.split("/").pop() : "vault";
+  return {
+    name,
+    path: relativePath ? `${root}/${relativePath}` : root,
+    relativePath,
+    kind,
+    fileExt: kind === "file" ? name.split(".").pop() : null,
+    children,
+    loaded: kind === "file" || children.length > 0,
+    loading: false,
+    hasMore: false,
+    truncated: false,
+    loadError: null,
+  };
+}
 
 function file(relativePath, content) {
   const fileName = relativePath.split("/").pop();
@@ -30,6 +56,51 @@ function file(relativePath, content) {
     content,
   };
 }
+
+test("normalizes CRLF files for editor state while preserving save line endings", () => {
+  const response = {
+    path: `${root}/Project_00_Serein.txt`,
+    fileName: "Project_00_Serein.txt",
+    fileExt: "txt",
+    content: "```bash\r\ncodex\r\n```\r\n",
+    modifiedAtMs: 1,
+    size: 22,
+  };
+
+  const note = createFileNote(response);
+  assert.equal(note.lineEnding, "crlf");
+  assert.equal(note.markdown, "```bash\ncodex\n```\n");
+  assert.equal(note.savedMarkdown, note.markdown);
+  assert.equal(applyLineEnding(note.markdown, note.lineEnding), response.content);
+  assert.equal(normalizeEditorLineEndings(response.content), note.markdown);
+});
+
+test("preserves loaded lazy directory children when refreshing a parent directory", () => {
+  const previous = treeEntry("", "directory", [
+    treeEntry("docs", "directory", [
+      treeEntry("docs/kept.md"),
+    ]),
+  ]);
+  const refreshed = directoryFromResponse({
+    name: "vault",
+    path: root,
+    relativePath: "",
+    hasMore: false,
+    truncated: false,
+    error: null,
+    children: [
+      treeEntry("docs", "directory"),
+      treeEntry("new.md"),
+    ],
+  });
+
+  const merged = preserveLoadedDirectoryChildren(refreshed, previous);
+  const docs = merged.children.find((entry) => entry.relativePath === "docs");
+  assert.ok(docs);
+  assert.equal(docs.loaded, true);
+  assert.equal(docs.children[0].relativePath, "docs/kept.md");
+  assert.ok(merged.children.some((entry) => entry.relativePath === "new.md"));
+});
 
 test("resolves wiki links, embeds, headings, markdown links, and directory indexes", () => {
   const index = buildVaultIndex(root, {

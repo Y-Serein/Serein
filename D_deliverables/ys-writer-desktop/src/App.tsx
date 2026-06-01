@@ -1,3 +1,4 @@
+import { EditorView as CodeMirrorView } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -24,6 +25,7 @@ import type {
 import {
   defaultShortcutRegistry,
   findShortcutConflicts,
+  getShortcutForCommand,
   normalizeShortcutList,
   shortcutFromEvent,
   writeShortcuts,
@@ -31,7 +33,9 @@ import {
 import type { EditorCommandAction, Note } from "./domain/model";
 import { createDemoVault, readDemoMarkdownFile } from "./dev/demoVault";
 import { applyPlainEditorCommand } from "./editor/plainCommands";
-import { directoryFromResponse, updateVaultNode } from "./explorer/tree";
+import { directoryFromResponse, preserveLoadedDirectoryChildren, updateVaultNode } from "./explorer/tree";
+import { AppContextMenu } from "./features/context-menu/AppContextMenu";
+import type { AppContextMenuItem, ContextMenuIcon } from "./features/context-menu/AppContextMenu";
 import { AppDialogHost } from "./features/dialogs/AppDialogHost";
 import { EditorWorkspace } from "./features/editor-workspace/EditorWorkspace";
 import { collectLocalImageSources, htmlDocument, utf8Bytes } from "./export/markdownExport";
@@ -68,6 +72,7 @@ import {
   clampUiScale,
   normalizeDefaultNewNoteName,
   normalizeEditorFontFamily,
+  normalizeImageAttachmentFolder,
   writeSettings,
 } from "./services/settings";
 import {
@@ -104,20 +109,35 @@ import {
 } from "./vault/index";
 import type { VaultIndexedFile, VaultLink } from "./vault";
 import {
+  applyLineEnding,
   createDraftNote,
   createEmptyNote,
   createFileNote,
+  detectLineEnding,
   isEmptyDraft,
   isEmptyPlaceholder,
   mergeWorkspaceState,
   nextWorkspaceState,
+  normalizeEditorLineEndings,
   pushRecentFile,
 } from "./vault/workspace";
 import "./styles.css";
 
 const DIRECTORY_INDEX_FILE_NAMES = ["index.md", "index.markdown", "index.txt", "readme.md", "readme.markdown", "readme.txt"];
 const WINDOW_ACTION_TIMEOUT_MS = 1500;
+const MIN_EDITOR_FONT_SIZE = 14;
+const MAX_EDITOR_FONT_SIZE = 24;
 type PaletteMode = "quickOpen" | "command";
+type ContextMenuState = {
+  x: number;
+  y: number;
+  target: "editor" | "workspace" | "file" | "directory";
+  entry?: VaultTreeEntry;
+};
+type CodeMirrorSelectionRange = {
+  from: number;
+  to: number;
+};
 type SourceLocationTarget = {
   line: number;
   text: string | null;
@@ -126,6 +146,15 @@ type SourceLocationTarget = {
 function isEditorTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
     && Boolean(target.closest(".markdown-editor, .ProseMirror, .milkdown"));
+}
+
+function elementFromNode(node: Node | null) {
+  return node instanceof Element ? node : node?.parentElement ?? null;
+}
+
+function isCodeMirrorEditorTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement
+    && Boolean(target.closest(".milkdown-code-block .cm-editor"));
 }
 
 function selectRichCodeBlockDom(target: EventTarget | null) {
@@ -171,6 +200,169 @@ function windowActionWithTimeout<T>(action: Promise<T>, label: string) {
 
 function titleFromMarkdown(markdown: string, fallback: string) {
   return extractFirstLineTitle(markdown) ?? fallback;
+}
+
+function clampEditorFontSize(value: number) {
+  return Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, value));
+}
+
+function normalizeMarkdownDirtyText(markdown: string) {
+  return markdown.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+}
+
+function markdownEqualForDirty(left: string, right: string) {
+  return left === right || normalizeMarkdownDirtyText(left) === normalizeMarkdownDirtyText(right);
+}
+
+function splitYamlFrontmatter(markdown: string) {
+  const match = markdown.match(/^(---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$))/);
+  if (!match) return null;
+  return {
+    frontmatter: match[1],
+    body: markdown.slice(match[1].length),
+  };
+}
+
+function firstMeaningfulMarkdownLine(markdown: string) {
+  return markdown
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean) ?? null;
+}
+
+function preserveSavedFrontmatter(note: Note, markdown: string) {
+  const savedParts = splitYamlFrontmatter(note.savedMarkdown ?? "");
+  if (!savedParts || !note.richSavedMarkdown) return markdown;
+
+  const bodyAnchor = firstMeaningfulMarkdownLine(savedParts.body);
+  if (!bodyAnchor) return markdown;
+
+  const richBodyStart = note.richSavedMarkdown.indexOf(bodyAnchor);
+  if (richBodyStart <= 0) return markdown;
+
+  const richFrontmatterPrefix = note.richSavedMarkdown.slice(0, richBodyStart);
+  if (!markdown.startsWith(richFrontmatterPrefix)) return markdown;
+
+  return `${savedParts.frontmatter}${markdown.slice(richFrontmatterPrefix.length)}`;
+}
+
+function noteDirtyForMarkdown(note: Note, markdown: string, options: { compareRichBaseline?: boolean } = {}) {
+  const savedMarkdown = note.savedMarkdown ?? "";
+  if (markdownEqualForDirty(markdown, savedMarkdown)) return false;
+  return !(options.compareRichBaseline
+    && note.richSavedMarkdown
+    && markdownEqualForDirty(markdown, note.richSavedMarkdown));
+}
+
+function noteWithMarkdown(note: Note, markdown: string, options: { compareRichBaseline?: boolean } = {}): Note {
+  const dirty = noteDirtyForMarkdown(note, markdown, options);
+  const savedMarkdown = note.savedMarkdown ?? "";
+  const editedMarkdown = dirty && options.compareRichBaseline
+    ? preserveSavedFrontmatter(note, markdown)
+    : markdown;
+  const nextMarkdown = !dirty && options.compareRichBaseline && !markdownEqualForDirty(markdown, savedMarkdown)
+    ? savedMarkdown
+    : editedMarkdown;
+
+  return {
+    ...note,
+    title: titleFromMarkdown(nextMarkdown, note.title),
+    markdown: nextMarkdown,
+    richSavedMarkdown: options.compareRichBaseline ? note.richSavedMarkdown : undefined,
+    updatedAt: dirty ? new Date().toISOString() : note.updatedAt,
+    dirty,
+  };
+}
+
+function contextMenuPosition(event: { clientX: number; clientY: number }) {
+  return {
+    x: Math.min(event.clientX, Math.max(12, window.innerWidth - 272)),
+    y: Math.min(event.clientY, Math.max(12, window.innerHeight - 360)),
+  };
+}
+
+function fallbackWriteClipboardText(text: string) {
+  const textarea = document.createElement("textarea");
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const selection = window.getSelection();
+  const previousRange = selection && selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null;
+
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+
+  if (previousRange) {
+    selection?.removeAllRanges();
+    selection?.addRange(previousRange);
+  }
+  previousFocus?.focus({ preventScroll: true });
+}
+
+function writeClipboardText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => fallbackWriteClipboardText(text));
+    return;
+  }
+  fallbackWriteClipboardText(text);
+}
+
+function codeMirrorSelectedText(view: CodeMirrorView) {
+  return view.state.selection.ranges
+    .filter((range) => !range.empty)
+    .map((range) => view.state.sliceDoc(range.from, range.to))
+    .join("\n");
+}
+
+function normalizedCodeMirrorRange(range: CodeMirrorSelectionRange | null | undefined) {
+  if (!range || range.from === range.to) return null;
+  return {
+    from: Math.min(range.from, range.to),
+    to: Math.max(range.from, range.to),
+  };
+}
+
+function runCodeMirrorClipboardCommand(
+  codeMirror: HTMLElement,
+  command: "cut" | "copy",
+  storedCodeMirrorRange?: CodeMirrorSelectionRange | null,
+) {
+  const view = CodeMirrorView.findFromDOM(codeMirror);
+  if (!view) return false;
+
+  const capturedRange = normalizedCodeMirrorRange(storedCodeMirrorRange);
+  if (capturedRange) {
+    const text = view.state.sliceDoc(capturedRange.from, capturedRange.to);
+    if (!text) return false;
+    writeClipboardText(text);
+    if (command === "cut") {
+      view.dispatch({
+        changes: { from: capturedRange.from, to: capturedRange.to, insert: "" },
+        selection: { anchor: capturedRange.from },
+        userEvent: "delete.cut",
+      });
+      view.focus();
+    }
+    return true;
+  }
+
+  const textFromState = codeMirrorSelectedText(view);
+  if (textFromState) {
+    writeClipboardText(textFromState);
+    if (command === "cut") {
+      view.dispatch(view.state.replaceSelection(""));
+      view.focus();
+    }
+    return true;
+  }
+
+  return false;
 }
 
 function quoteCssFontFamily(fontFamily: string) {
@@ -361,7 +553,7 @@ function ensureExportExtension(path: string, format: "html" | "pdf") {
 
 function markdownImageText(src: string, alt: string) {
   const cleanAlt = alt.replace(/[\]\n\r]/g, " ").trim();
-  const cleanSrc = src.includes(" ") ? `<${src}>` : src;
+  const cleanSrc = /[\s\\()]/.test(src) ? `<${src}>` : src;
   return `![${cleanAlt}](${cleanSrc})`;
 }
 
@@ -456,6 +648,14 @@ export default function App() {
     setDefaultSaveExt,
     defaultNewNoteName,
     setDefaultNewNoteName,
+    imageAttachmentFolder,
+    setImageAttachmentFolder,
+    imagePathStyle,
+    setImagePathStyle,
+    showImageSourceOnFocus,
+    setShowImageSourceOnFocus,
+    normalizeWindowsImagePaths,
+    setNormalizeWindowsImagePaths,
     settingsOpen,
     setSettingsOpen,
     settingsSection,
@@ -476,6 +676,10 @@ export default function App() {
   const appDialogResolverRef = useRef<((value: AppDialogResult) => void) | null>(null);
   const editorSurfaceRef = useRef<HTMLElement | null>(null);
   const plainEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorCommandFocusRef = useRef<HTMLElement | null>(null);
+  const editorCommandSelectionRef = useRef<Range | null>(null);
+  const editorCommandCodeMirrorSelectionRef = useRef<CodeMirrorSelectionRange | null>(null);
+  const saveBeforeContinueRef = useRef<(() => Promise<boolean>) | null>(null);
   const restoredVaultRef = useRef(false);
   const restoredStandaloneFileRef = useRef(false);
   const loadedDemoVaultRef = useRef(false);
@@ -484,10 +688,12 @@ export default function App() {
   const vaultIndexRefreshIdRef = useRef(0);
   const windowActionPendingRef = useRef(false);
   const appInitiatedWindowCloseRef = useRef(false);
+  const externalConflictKeyRef = useRef<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [pendingSourceLocation, setPendingSourceLocation] = useState<SourceLocationTarget | null>(null);
   const [imagePreviewMap, setImagePreviewMap] = useState<Record<string, string>>({});
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [windowActionPending, setWindowActionPending] = useState<"minimize" | "maximize" | "close" | null>(null);
   const [centerView, setCenterView] = useState<"markdown" | "graph">("markdown");
   const [centerGraphOpen, setCenterGraphOpen] = useState(false);
@@ -495,6 +701,7 @@ export default function App() {
   const [centerGraphIsolatedOnly, setCenterGraphIsolatedOnly] = useState(false);
   const [centerGraphShowUnresolved, setCenterGraphShowUnresolved] = useState(false);
   const [demoVaultMode, setDemoVaultMode] = useState(false);
+  const appShellRef = useRef<HTMLDivElement | null>(null);
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0];
   const t = appText[language];
@@ -624,8 +831,33 @@ export default function App() {
 
   const confirmDiscardUnsavedChanges = useCallback(async () => {
     if (!notes.some((note) => note.dirty)) return true;
-    return showConfirmDialog(t.prompts.unsavedChangesTitle, t.prompts.unsavedChangesMessage, true, t.dialog.confirm);
-  }, [notes, showConfirmDialog, t.dialog.confirm, t.prompts.unsavedChangesMessage, t.prompts.unsavedChangesTitle]);
+    const choice = await showChoiceDialog(t.prompts.unsavedChangesTitle, [
+      {
+        value: "save",
+        label: t.prompts.saveAndContinueAction,
+        description: t.prompts.saveAndContinueHint,
+      },
+      {
+        value: "discard",
+        label: t.prompts.discardChangesAction,
+        description: t.prompts.discardChangesHint,
+      },
+    ], t.prompts.unsavedChangesMessage);
+
+    if (choice === "discard") return true;
+    if (choice !== "save") return false;
+
+    return saveBeforeContinueRef.current ? saveBeforeContinueRef.current() : false;
+  }, [
+    notes,
+    showChoiceDialog,
+    t.prompts.discardChangesAction,
+    t.prompts.discardChangesHint,
+    t.prompts.saveAndContinueAction,
+    t.prompts.saveAndContinueHint,
+    t.prompts.unsavedChangesMessage,
+    t.prompts.unsavedChangesTitle,
+  ]);
 
   const destroyCurrentWindow = useCallback(async () => {
     const currentWindow = getCurrentWindow();
@@ -679,6 +911,7 @@ export default function App() {
         if (action === "minimize") await windowActionWithTimeout(currentWindow.minimize(), "window minimize");
         if (action === "maximize") {
           await windowActionWithTimeout(currentWindow.toggleMaximize(), "window toggle maximize");
+          window.setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
         }
       } catch (error) {
         console.warn("Window action is only available inside Tauri", error);
@@ -694,6 +927,7 @@ export default function App() {
   const handleChromeDragMouseDown = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0 || event.detail > 1) return;
     if (isWindowDragBlockedTarget(event.target)) return;
+    if (event.target instanceof Element && event.target.closest("[data-tauri-drag-region]")) return;
 
     try {
       void getCurrentWindow().startDragging();
@@ -704,6 +938,8 @@ export default function App() {
 
   const handleChromeDoubleClick = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     if (isWindowDragBlockedTarget(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
     handleWindowAction("maximize");
   }, [handleWindowAction]);
 
@@ -737,14 +973,23 @@ export default function App() {
 
   const handleMarkdownChange = useCallback((markdown: string) => {
     const normalizedMarkdown = normalizeWikiLinkEscapes(markdown);
+    const compareRichBaseline = editorMode === "rich";
     setNotes((currentNotes) => currentNotes.map((note) => {
       if (note.id !== activeNoteId) return note;
+      return noteWithMarkdown(note, normalizedMarkdown, { compareRichBaseline });
+    }));
+  }, [activeNoteId, editorMode]);
+
+  const handleRichMarkdownBaseline = useCallback((markdown: string) => {
+    const normalizedMarkdown = normalizeWikiLinkEscapes(markdown);
+    setNotes((currentNotes) => currentNotes.map((note) => {
+      if (note.id !== activeNoteId || note.dirty) return note;
+      const savedMarkdown = note.savedMarkdown ?? "";
+      if (!markdownEqualForDirty(note.markdown, savedMarkdown)) return note;
+      if (note.richSavedMarkdown && markdownEqualForDirty(note.richSavedMarkdown, normalizedMarkdown)) return note;
       return {
         ...note,
-        title: titleFromMarkdown(normalizedMarkdown, note.title),
-        markdown: normalizedMarkdown,
-        updatedAt: new Date().toISOString(),
-        dirty: true,
+        richSavedMarkdown: normalizedMarkdown,
       };
     }));
   }, [activeNoteId]);
@@ -781,8 +1026,9 @@ export default function App() {
       const directory = await readVaultDirectory(root, relativePath, VAULT_DIRECTORY_LIMIT);
       const nextDirectory = directoryFromResponse(directory);
       setVaultTree((current) => {
-        if (!current || relativePath === "") return nextDirectory;
-        return updateVaultNode(current, relativePath, () => nextDirectory);
+        if (!current) return nextDirectory;
+        if (relativePath === "") return preserveLoadedDirectoryChildren(nextDirectory, current);
+        return updateVaultNode(current, relativePath, (entry) => preserveLoadedDirectoryChildren(nextDirectory, entry));
       });
       setVaultError(null);
       setVaultRecoveryBlocked(false);
@@ -1021,23 +1267,32 @@ export default function App() {
 
   const saveNoteToPath = useCallback(async (note: Note, path: string) => {
     const normalizedPath = ensureSaveExtension(path, defaultSaveExt);
+    const markdownToSave = note.dirty ? note.markdown : (note.savedMarkdown ?? note.markdown);
+    const contentToWrite = applyLineEnding(markdownToSave, note.lineEnding ?? "lf");
     const isExistingFileSave = note.filePath
       ? normalizeFilePath(normalizedPath) === normalizeFilePath(note.filePath)
       : false;
     const file = await writeMarkdownFile(
       normalizedPath,
-      note.markdown,
+      contentToWrite,
       isExistingFileSave ? note.fileModifiedAtMs : null,
       isExistingFileSave ? note.fileSize : null,
     );
+    const richSavedMarkdown = editorMode === "rich"
+      ? (note.dirty ? markdownToSave : note.richSavedMarkdown)
+      : undefined;
     const nextNote: Note = {
       ...note,
-      title: stripExtension(file.fileName) || extractFirstLineTitle(note.markdown) || note.title,
+      title: stripExtension(file.fileName) || extractFirstLineTitle(markdownToSave) || note.title,
+      markdown: markdownToSave,
       filePath: file.path,
       fileName: file.fileName,
       fileExt: file.fileExt,
       fileModifiedAtMs: file.modifiedAtMs,
       fileSize: file.size,
+      lineEnding: note.lineEnding ?? detectLineEnding(file.content),
+      savedMarkdown: markdownToSave,
+      richSavedMarkdown,
       updatedAt: new Date().toISOString(),
       dirty: false,
     };
@@ -1049,16 +1304,88 @@ export default function App() {
       recentFiles: pushRecentFile(vaultWorkspace.recentFiles, nextNote.filePath ?? null),
     });
     if (vaultRoot) {
-      await loadVaultDirectory(selectedVaultDir);
-      await refreshVaultIndex(vaultRoot);
+      const savedVaultRelativePath = relativePathFromRoot(vaultRoot, file.path);
+      if (savedVaultRelativePath !== null) {
+        if (!isExistingFileSave) {
+          await loadVaultDirectory(parentVaultDir(savedVaultRelativePath));
+        }
+        await refreshVaultIndex(vaultRoot);
+      }
     }
     setSavedAt(new Date());
     setSaveError(null);
     setSaveStatus("saved");
-  }, [defaultSaveExt, loadVaultDirectory, persistVaultPatch, refreshVaultIndex, selectedVaultDir, vaultRoot, vaultWorkspace.recentFiles]);
+  }, [defaultSaveExt, editorMode, loadVaultDirectory, persistVaultPatch, refreshVaultIndex, vaultRoot, vaultWorkspace.recentFiles]);
+
+  const syncActiveNoteFromDisk = useCallback(async () => {
+    if (demoVaultMode || !activeNote?.filePath) return;
+
+    try {
+      const file = await readMarkdownFile(activeNote.filePath);
+      const normalizedDiskContent = normalizeEditorLineEndings(file.content);
+      const diskChanged = file.modifiedAtMs !== activeNote.fileModifiedAtMs
+        || file.size !== activeNote.fileSize
+        || normalizedDiskContent !== (activeNote.savedMarkdown ?? activeNote.markdown);
+      if (!diskChanged) return;
+
+      const conflictKey = `${file.path}:${file.modifiedAtMs ?? "unknown"}:${file.size}`;
+      if (noteDirtyForMarkdown(activeNote, activeNote.markdown)) {
+        if (externalConflictKeyRef.current !== conflictKey) {
+          externalConflictKeyRef.current = conflictKey;
+          setSaveError(t.status.externalFileConflict);
+          setSaveStatus("error");
+          setToastMessage(t.status.externalFileConflict);
+        }
+        return;
+      }
+
+      const nextNote: Note = {
+        ...activeNote,
+        title: stripExtension(file.fileName) || extractFirstLineTitle(normalizedDiskContent) || activeNote.title,
+        markdown: normalizedDiskContent,
+        fileName: file.fileName,
+        fileExt: file.fileExt,
+        fileModifiedAtMs: file.modifiedAtMs,
+        fileSize: file.size,
+        lineEnding: detectLineEnding(file.content),
+        savedMarkdown: normalizedDiskContent,
+        richSavedMarkdown: undefined,
+        updatedAt: new Date().toISOString(),
+        dirty: false,
+      };
+
+      setNotes((currentNotes) => currentNotes.map((note) => (
+        note.id === activeNote.id && normalizeFilePath(note.filePath ?? "") === normalizeFilePath(file.path)
+          ? nextNote
+          : note
+      )));
+
+      externalConflictKeyRef.current = null;
+      setSaveError(null);
+      setSaveStatus("idle");
+      setToastMessage(t.status.externalFileReloaded);
+      if (vaultRoot) {
+        await loadVaultDirectory(selectedVaultDir);
+        await refreshVaultIndex(vaultRoot);
+      }
+    } catch (error) {
+      console.warn("Failed to check active file on disk", error);
+    }
+  }, [
+    activeNote,
+    demoVaultMode,
+    loadVaultDirectory,
+    refreshVaultIndex,
+    selectedVaultDir,
+    setSaveError,
+    setSaveStatus,
+    t.status.externalFileConflict,
+    t.status.externalFileReloaded,
+    vaultRoot,
+  ]);
 
   const handleSaveAs = useCallback(async () => {
-    if (!activeNote) return;
+    if (!activeNote) return false;
 
     try {
       const fallbackName = `${activeNote.fileName ? stripExtension(activeNote.fileName) : activeNote.title || "Untitled"}.${defaultSaveExt}`;
@@ -1067,30 +1394,43 @@ export default function App() {
         filters: [{ name: "Markdown/Text", extensions: ["md", "markdown", "txt"] }],
       });
 
-      if (!selected) return;
+      if (!selected) return false;
       await saveNoteToPath(activeNote, selected);
+      return true;
     } catch (error) {
       console.error("Failed to save file as", error);
       setSaveError(t.errors.saveAsFailed);
       setSaveStatus("error");
+      return false;
     }
   }, [activeNote, defaultSaveExt, saveNoteToPath, t.errors.saveAsFailed]);
 
   const handleSave = useCallback(async () => {
-    if (!activeNote) return;
+    if (!activeNote) return false;
 
     try {
       if (activeNote.filePath) {
         await saveNoteToPath(activeNote, activeNote.filePath);
+        return true;
       } else {
-        await handleSaveAs();
+        return await handleSaveAs();
       }
     } catch (error) {
       console.error("Failed to save file", error);
       setSaveError(t.errors.saveFailed);
       setSaveStatus("error");
+      return false;
     }
   }, [activeNote, handleSaveAs, saveNoteToPath, t.errors.saveFailed]);
+
+  useEffect(() => {
+    saveBeforeContinueRef.current = handleSave;
+    return () => {
+      if (saveBeforeContinueRef.current === handleSave) {
+        saveBeforeContinueRef.current = null;
+      }
+    };
+  }, [handleSave]);
 
   const importImagesForEditor = useCallback(async (files: File[]) => {
     try {
@@ -1105,9 +1445,9 @@ export default function App() {
       const imported = [];
       for (const file of imageFiles) {
         const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-        const asset = await importEditorAsset(vaultRoot, currentFilePath, file.name || "image.png", bytes);
+        const asset = await importEditorAsset(vaultRoot, currentFilePath, file.name || "image.png", bytes, imageAttachmentFolder);
         imported.push({
-          src: asset.relativeMarkdownPath,
+          src: imagePathStyle === "absolute" ? asset.path : asset.relativeMarkdownPath,
           alt: stripExtension(asset.fileName || file.name || "image"),
         });
       }
@@ -1137,6 +1477,8 @@ export default function App() {
     t.errors.imageImportFailed,
     vaultRoot,
     selectedVaultDir,
+    imageAttachmentFolder,
+    imagePathStyle,
   ]);
 
   const importImagePathForEditor = useCallback(async (sourcePath: string) => {
@@ -1146,7 +1488,7 @@ export default function App() {
       }
       const currentFilePath = activeNote.filePath;
 
-      const asset = await importEditorAssetFromPath(vaultRoot, currentFilePath, sourcePath);
+      const asset = await importEditorAssetFromPath(vaultRoot, currentFilePath, sourcePath, imageAttachmentFolder);
       if (vaultRoot) {
         const relativeFilePath = relativePathFromRoot(vaultRoot, currentFilePath);
         const currentDir = relativeFilePath ? parentVaultDir(relativeFilePath) : selectedVaultDir;
@@ -1154,7 +1496,7 @@ export default function App() {
         void refreshVaultIndex(vaultRoot);
       }
       return {
-        src: asset.relativeMarkdownPath,
+        src: imagePathStyle === "absolute" ? asset.path : asset.relativeMarkdownPath,
         alt: stripExtension(asset.fileName || pathFileName(sourcePath) || "image"),
       };
     } catch (error) {
@@ -1174,6 +1516,8 @@ export default function App() {
     t.errors.imageImportFailed,
     t.errors.saveBeforeImageImport,
     vaultRoot,
+    imageAttachmentFolder,
+    imagePathStyle,
   ]);
 
   const handlePlainEditorImageFiles = useCallback(async (files: File[]) => {
@@ -1193,7 +1537,7 @@ export default function App() {
 
       setNotes((currentNotes) => currentNotes.map((note) => (
         note.id === activeNote.id
-          ? { ...note, markdown: nextMarkdown, title: titleFromMarkdown(nextMarkdown, note.title), updatedAt: new Date().toISOString(), dirty: true }
+          ? noteWithMarkdown(note, nextMarkdown)
           : note
       )));
       window.requestAnimationFrame(() => {
@@ -1532,6 +1876,81 @@ export default function App() {
     proseMirror?.focus();
   }, [editorMode]);
 
+  const focusEditorForNativeEditCommand = useCallback((command: "cut" | "copy" | "paste" | "undo" | "redo") => {
+    if (editorMode === "plain") {
+      plainEditorRef.current?.focus();
+      return;
+    }
+
+    const selection = window.getSelection();
+    const anchorElement = elementFromNode(selection?.anchorNode ?? null);
+    const selectionInsideEditor = Boolean(anchorElement && editorSurfaceRef.current?.contains(anchorElement));
+    if ((command === "cut" || command === "copy") && selectionInsideEditor && !selection?.isCollapsed) return;
+
+    const selectedCodeMirror = anchorElement?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
+    const storedCodeMirror = editorCommandFocusRef.current?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
+    if (command === "cut" || command === "copy") {
+      const storedRange = editorCommandSelectionRef.current;
+      const storedRangeElement = elementFromNode(storedRange?.commonAncestorContainer ?? null);
+      if (
+        storedRange
+        && storedRangeElement
+        && document.contains(storedRangeElement)
+        && editorSurfaceRef.current?.contains(storedRangeElement)
+      ) {
+        if (storedCodeMirror && document.contains(storedCodeMirror)) {
+          const codeMirrorView = CodeMirrorView.findFromDOM(storedCodeMirror);
+          codeMirrorView?.focus();
+          return;
+        }
+        const storedFocusTarget = editorSurfaceRef.current?.querySelector<HTMLElement>(".ProseMirror");
+        storedFocusTarget?.focus({ preventScroll: true });
+        const nextSelection = window.getSelection();
+        nextSelection?.removeAllRanges();
+        nextSelection?.addRange(storedRange.cloneRange());
+        return;
+      }
+    }
+
+    const codeMirror = selectedCodeMirror ?? (storedCodeMirror && document.contains(storedCodeMirror) ? storedCodeMirror : null);
+    if (codeMirror && editorSurfaceRef.current?.contains(codeMirror)) {
+      (codeMirror.querySelector<HTMLElement>(".cm-content") ?? codeMirror).focus();
+      return;
+    }
+
+    focusEditor();
+  }, [editorMode, focusEditor]);
+
+  const runNativeEditCommand = useCallback((command: "cut" | "copy" | "paste" | "undo" | "redo") => {
+    if (editorMode === "rich" && (command === "cut" || command === "copy")) {
+      const selection = window.getSelection();
+      const anchorElement = elementFromNode(selection?.anchorNode ?? null);
+      const selectedCodeMirror = anchorElement?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
+      const storedCodeMirror = editorCommandFocusRef.current?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
+      const codeMirror = selectedCodeMirror ?? (storedCodeMirror && document.contains(storedCodeMirror) ? storedCodeMirror : null);
+      if (codeMirror && editorSurfaceRef.current?.contains(codeMirror)) {
+        const handled = runCodeMirrorClipboardCommand(
+          codeMirror,
+          command,
+          editorCommandCodeMirrorSelectionRef.current,
+        );
+        const currentCodeMirrorSelection = CodeMirrorView.findFromDOM(codeMirror)?.state.selection.main;
+        const hasCodeMirrorSelection = Boolean(
+          editorCommandCodeMirrorSelectionRef.current
+          || (currentCodeMirrorSelection && !currentCodeMirrorSelection.empty),
+        );
+        if (handled || hasCodeMirrorSelection) {
+          editorCommandSelectionRef.current = null;
+          editorCommandCodeMirrorSelectionRef.current = null;
+          return;
+        }
+      }
+    }
+
+    focusEditorForNativeEditCommand(command);
+    document.execCommand(command);
+  }, [editorMode, focusEditorForNativeEditCommand]);
+
   const runEditorCommand = useCallback((action: EditorCommandAction, payload?: string, alt?: string) => {
     if (!activeNote) return;
 
@@ -1550,13 +1969,7 @@ export default function App() {
 
       setNotes((currentNotes) => currentNotes.map((note) => {
         if (note.id !== activeNote.id) return note;
-        return {
-          ...note,
-          title: titleFromMarkdown(result.markdown, note.title),
-          markdown: result.markdown,
-          updatedAt: new Date().toISOString(),
-          dirty: true,
-        };
+        return noteWithMarkdown(note, result.markdown);
       }));
 
       window.requestAnimationFrame(() => {
@@ -1632,8 +2045,8 @@ export default function App() {
     "file.newFolder": { id: "file.newFolder", label: t.commandLabels["file.newFolder"], enabled: Boolean(vaultRoot), run: handleCreateVaultFolder },
     "file.open": { id: "file.open", label: t.commandLabels["file.open"], enabled: true, run: handleOpenFile },
     "file.openVault": { id: "file.openVault", label: t.commandLabels["file.openVault"], enabled: true, run: handleOpenVault },
-    "file.save": { id: "file.save", label: t.commandLabels["file.save"], enabled: hasActiveDocument, run: handleSave },
-    "file.saveAs": { id: "file.saveAs", label: t.commandLabels["file.saveAs"], enabled: hasActiveDocument, run: handleSaveAs },
+    "file.save": { id: "file.save", label: t.commandLabels["file.save"], enabled: hasActiveDocument, run: () => { void handleSave(); } },
+    "file.saveAs": { id: "file.saveAs", label: t.commandLabels["file.saveAs"], enabled: hasActiveDocument, run: () => { void handleSaveAs(); } },
     "file.export": { id: "file.export", label: t.commandLabels["file.export"], enabled: hasActiveDocument, run: handleExport },
     "app.openQuickOpen": {
       id: "app.openQuickOpen",
@@ -1666,11 +2079,11 @@ export default function App() {
       },
     },
     "app.about": { id: "app.about", label: t.commandLabels["app.about"], enabled: true, run: () => showMessageDialog(t.commandLabels["app.about"], t.prompts.about) },
-    "edit.cut": { id: "edit.cut", label: t.commandLabels["edit.cut"], enabled: true, run: () => { focusEditor(); document.execCommand("cut"); } },
-    "edit.copy": { id: "edit.copy", label: t.commandLabels["edit.copy"], enabled: true, run: () => { focusEditor(); document.execCommand("copy"); } },
-    "edit.paste": { id: "edit.paste", label: t.commandLabels["edit.paste"], enabled: true, run: () => { focusEditor(); document.execCommand("paste"); } },
-    "edit.undo": { id: "edit.undo", label: t.commandLabels["edit.undo"], enabled: true, run: () => { focusEditor(); document.execCommand("undo"); } },
-    "edit.redo": { id: "edit.redo", label: t.commandLabels["edit.redo"], enabled: true, run: () => { focusEditor(); document.execCommand("redo"); } },
+    "edit.cut": { id: "edit.cut", label: t.commandLabels["edit.cut"], enabled: true, run: () => runNativeEditCommand("cut") },
+    "edit.copy": { id: "edit.copy", label: t.commandLabels["edit.copy"], enabled: true, run: () => runNativeEditCommand("copy") },
+    "edit.paste": { id: "edit.paste", label: t.commandLabels["edit.paste"], enabled: true, run: () => runNativeEditCommand("paste") },
+    "edit.undo": { id: "edit.undo", label: t.commandLabels["edit.undo"], enabled: true, run: () => runNativeEditCommand("undo") },
+    "edit.redo": { id: "edit.redo", label: t.commandLabels["edit.redo"], enabled: true, run: () => runNativeEditCommand("redo") },
     "edit.selectAll": { id: "edit.selectAll", label: t.commandLabels["edit.selectAll"], enabled: true, run: () => runEditorCommand("selectAllSmart") },
     "edit.find": { id: "edit.find", label: t.commandLabels["edit.find"], enabled: hasActiveDocument, run: handleFind },
     "paragraph.text": { id: "paragraph.text", label: t.commandLabels["paragraph.text"], enabled: hasActiveDocument, run: () => runEditorCommand("paragraph") },
@@ -1693,9 +2106,9 @@ export default function App() {
     "view.toggleSidebar": { id: "view.toggleSidebar", label: t.commandLabels["view.toggleSidebar"], enabled: true, run: () => setSidebarVisible((visible) => !visible) },
     "view.toggleRightPanel": { id: "view.toggleRightPanel", label: t.commandLabels["view.toggleRightPanel"], enabled: true, run: () => setRightPanelVisible((visible) => !visible) },
     "theme.daily": { id: "theme.daily", label: t.commandLabels["theme.daily"], enabled: theme !== "daily", run: () => setTheme("daily") },
-    "theme.eye": { id: "theme.eye", label: t.commandLabels["theme.eye"], enabled: theme !== "eye", run: () => setTheme("eye") },
     "theme.mint": { id: "theme.mint", label: t.commandLabels["theme.mint"], enabled: theme !== "mint", run: () => setTheme("mint") },
     "theme.ink": { id: "theme.ink", label: t.commandLabels["theme.ink"], enabled: theme !== "ink", run: () => setTheme("ink") },
+    "theme.v5": { id: "theme.v5", label: t.commandLabels["theme.v5"], enabled: theme !== "v5", run: () => setTheme("v5") },
   }), [
     activeNote,
     editorMode,
@@ -1710,6 +2123,7 @@ export default function App() {
     handleSave,
     handleSaveAs,
     runEditorCommand,
+    runNativeEditCommand,
     runImageCommand,
     runLinkCommand,
     showMessageDialog,
@@ -1724,6 +2138,96 @@ export default function App() {
     await command.run();
     setOpenMenuId(null);
   }, [commands]);
+
+  const commandMenuItem = useCallback((
+    commandId: string,
+    icon: ContextMenuIcon,
+    options: Partial<Pick<AppContextMenuItem, "separatorBefore" | "danger">> = {},
+  ): AppContextMenuItem => {
+    const command = commands[commandId];
+    return {
+      id: commandId,
+      label: command?.label ?? commandId,
+      shortcut: getShortcutForCommand(shortcuts, commandId),
+      icon,
+      disabled: !command?.enabled,
+      onSelect: () => {
+        void dispatchCommand(commandId);
+      },
+      ...options,
+    };
+  }, [commands, dispatchCommand, shortcuts]);
+
+  const openShellContextMenu = useCallback((event: { clientX: number; clientY: number; target: EventTarget | null }) => {
+    setOpenMenuId(null);
+    const eventElement = event.target instanceof Element ? event.target : null;
+    editorCommandFocusRef.current = eventElement?.closest<HTMLElement>(".milkdown-code-block .cm-editor, .markdown-editor, .ProseMirror") ?? null;
+    editorCommandSelectionRef.current = null;
+    editorCommandCodeMirrorSelectionRef.current = null;
+    const selection = window.getSelection();
+    const codeMirror = editorCommandFocusRef.current?.closest<HTMLElement>(".milkdown-code-block .cm-editor")
+      ?? elementFromNode(selection?.anchorNode ?? null)?.closest<HTMLElement>(".milkdown-code-block .cm-editor")
+      ?? null;
+    if (codeMirror && editorSurfaceRef.current?.contains(codeMirror)) {
+      const view = CodeMirrorView.findFromDOM(codeMirror);
+      const range = view?.state.selection.main;
+      if (range && !range.empty) {
+        editorCommandCodeMirrorSelectionRef.current = { from: range.from, to: range.to };
+      }
+    } else if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
+      const range = selection.getRangeAt(0);
+      const rangeElement = elementFromNode(range.commonAncestorContainer);
+      if (rangeElement && editorSurfaceRef.current?.contains(rangeElement)) {
+        editorCommandSelectionRef.current = range.cloneRange();
+      }
+    }
+    const target = eventElement?.closest(".editor-surface, .markdown-editor, .milkdown, .ProseMirror, textarea")
+      ? "editor"
+      : "workspace";
+    setContextMenu({
+      ...contextMenuPosition(event),
+      target,
+    });
+  }, [setOpenMenuId]);
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+    editorCommandSelectionRef.current = null;
+    editorCommandCodeMirrorSelectionRef.current = null;
+  }, []);
+
+  const handleShellContextMenu = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    if (event.defaultPrevented) return;
+    event.preventDefault();
+    openShellContextMenu(event);
+  }, [openShellContextMenu]);
+
+  const handleVaultEntryContextMenu = useCallback((entry: VaultTreeEntry, event: ReactMouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setOpenMenuId(null);
+    editorCommandSelectionRef.current = null;
+    editorCommandCodeMirrorSelectionRef.current = null;
+    setContextMenu({
+      ...contextMenuPosition(event),
+      target: entry.kind === "directory" ? "directory" : "file",
+      entry,
+    });
+  }, [setOpenMenuId]);
+
+  useEffect(() => {
+    const handleDocumentContextMenu = (event: MouseEvent) => {
+      const shell = appShellRef.current;
+      if (!shell || !(event.target instanceof Node) || !shell.contains(event.target)) return;
+      if (event.target instanceof Element && event.target.closest(".app-context-menu, .app-dialog-shell")) return;
+      event.preventDefault();
+      openShellContextMenu(event);
+    };
+
+    document.addEventListener("contextmenu", handleDocumentContextMenu, { capture: true });
+    return () => document.removeEventListener("contextmenu", handleDocumentContextMenu, { capture: true });
+  }, [openShellContextMenu]);
+
 
   useEffect(() => {
     if (restoredVaultRef.current || !vaultRoot) return;
@@ -1789,6 +2293,10 @@ export default function App() {
       zoomWithWheel,
       defaultSaveExt,
       defaultNewNoteName: normalizeDefaultNewNoteName(defaultNewNoteName),
+      imageAttachmentFolder: normalizeImageAttachmentFolder(imageAttachmentFolder),
+      imagePathStyle,
+      showImageSourceOnFocus,
+      normalizeWindowsImagePaths,
     });
   }, [
     defaultEditorModeSetting,
@@ -1799,12 +2307,16 @@ export default function App() {
     editorLatinFont,
     editorLeftGap,
     editorLineHeight,
+    imageAttachmentFolder,
+    imagePathStyle,
     language,
     lastOpenedFile,
+    normalizeWindowsImagePaths,
     restoreWorkspace,
     rightPanelWidth,
     rightPanelVisible,
     selectedVaultDir,
+    showImageSourceOnFocus,
     sidebarVisible,
     sidebarWidth,
     theme,
@@ -1824,6 +2336,36 @@ export default function App() {
     const timeout = window.setTimeout(() => setToastMessage(null), 2600);
     return () => window.clearTimeout(timeout);
   }, [toastMessage]);
+
+  useEffect(() => {
+    if (demoVaultMode || !activeNote.filePath) return undefined;
+
+    let checking = false;
+    let disposed = false;
+    const check = () => {
+      if (checking || disposed) return;
+      checking = true;
+      syncActiveNoteFromDisk()
+        .catch((error) => console.warn("Failed to sync active file", error))
+        .finally(() => {
+          checking = false;
+        });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") check();
+    };
+
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    const interval = window.setInterval(check, 5000);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.clearInterval(interval);
+    };
+  }, [activeNote.filePath, demoVaultMode, syncActiveNoteFromDisk]);
 
   useEffect(() => {
     let active = true;
@@ -1921,13 +2463,15 @@ export default function App() {
 
     const handleWheel = (event: WheelEvent) => {
       if (!event.ctrlKey) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target?.closest(".editor-surface, .markdown-editor, .milkdown, .ProseMirror")) return;
       event.preventDefault();
-      setUiScale((current) => clampUiScale(current + (event.deltaY < 0 ? 5 : -5)));
+      setEditorFontSize(clampEditorFontSize(editorFontSize + (event.deltaY < 0 ? 1 : -1)));
     };
 
     window.addEventListener("wheel", handleWheel, { passive: false });
     return () => window.removeEventListener("wheel", handleWheel);
-  }, [zoomWithWheel]);
+  }, [editorFontSize, setEditorFontSize, zoomWithWheel]);
 
   useEffect(() => {
     if (saveStatus === "idle") return undefined;
@@ -1950,6 +2494,10 @@ export default function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (contextMenu) {
+          closeContextMenu();
+          return;
+        }
         if (appDialog) {
           closeAppDialog(null);
           return;
@@ -1964,6 +2512,8 @@ export default function App() {
       const key = shortcutFromEvent(event);
       if (!key) return;
 
+      if ((key === "Ctrl+A" || key === "Meta+A") && isCodeMirrorEditorTarget(event.target)) return;
+
       if ((key === "Ctrl+A" || key === "Meta+A") && selectRichCodeBlockDom(event.target)) {
         event.preventDefault();
         event.stopPropagation();
@@ -1973,7 +2523,16 @@ export default function App() {
       const shortcut = shortcuts.find((item) => item.enabled && item.currentKeys.includes(key));
       if (!shortcut) return;
 
-      if (isEditorTarget(event.target) && (shortcut.commandId === "edit.undo" || shortcut.commandId === "edit.redo")) {
+      if (
+        isEditorTarget(event.target)
+        && (
+          shortcut.commandId === "edit.cut"
+          || shortcut.commandId === "edit.copy"
+          || shortcut.commandId === "edit.paste"
+          || shortcut.commandId === "edit.undo"
+          || shortcut.commandId === "edit.redo"
+        )
+      ) {
         return;
       }
 
@@ -2002,7 +2561,7 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [appDialog, closeAppDialog, commands, dispatchCommand, shortcuts]);
+  }, [appDialog, closeAppDialog, closeContextMenu, commands, contextMenu, dispatchCommand, shortcuts]);
 
   const handleOutlineClick = useCallback((index: number) => {
     if (editorMode === "plain") {
@@ -2541,11 +3100,13 @@ export default function App() {
   }, [confirmDiscardUnsavedChanges]);
 
   const handleVaultDirectoryClick = useCallback((entry: VaultTreeEntry) => {
-    setSelectedVaultDir(entry.relativePath);
     if (entry.relativePath === "") return;
 
     const isExpanded = expandedDirs.has(entry.relativePath);
     if (isExpanded) {
+      if (isSameOrChildPath(selectedVaultDir, entry.relativePath)) {
+        setSelectedVaultDir(parentVaultDir(entry.relativePath));
+      }
       setExpandedDirs((current) => {
         const next = new Set(current);
         next.delete(entry.relativePath);
@@ -2554,11 +3115,103 @@ export default function App() {
       return;
     }
 
+    setSelectedVaultDir(entry.relativePath);
     setExpandedDirs((current) => new Set(current).add(entry.relativePath));
     if (!entry.loaded && !entry.loading) {
       loadVaultDirectory(entry.relativePath);
     }
-  }, [expandedDirs, loadVaultDirectory]);
+  }, [expandedDirs, loadVaultDirectory, selectedVaultDir, setSelectedVaultDir]);
+
+  const contextMenuItems = useMemo<AppContextMenuItem[]>(() => {
+    if (!contextMenu) return [];
+
+    if (contextMenu.target === "file" || contextMenu.target === "directory") {
+      const entry = contextMenu.entry;
+      if (!entry) return [];
+
+      const isDirectory = entry.kind === "directory";
+      return [
+        {
+          id: "entry.open",
+          label: isDirectory ? t.sidebar.open : t.commandLabels["file.open"],
+          icon: isDirectory ? "folder" : "file",
+          onSelect: () => {
+            if (isDirectory) {
+              handleVaultDirectoryClick(entry);
+              return;
+            }
+
+            openMarkdownFile(entry.path).catch((error) => {
+              console.error("Failed to open vault file", error);
+              setVaultError(t.errors.openVaultFileFailed);
+            });
+          },
+        },
+        commandMenuItem("file.new", "file", { separatorBefore: true }),
+        commandMenuItem("file.newFolder", "folder"),
+        {
+          id: "entry.rename",
+          label: t.prompts.renameAction,
+          icon: "text",
+          separatorBefore: true,
+          disabled: !entry.relativePath,
+          onSelect: () => handleRenameVaultEntry(entry),
+        },
+        {
+          id: "entry.delete",
+          label: t.prompts.deleteAction,
+          icon: "trash",
+          danger: true,
+          disabled: !entry.relativePath,
+          onSelect: () => handleDeleteVaultEntry(entry),
+        },
+      ];
+    }
+
+    if (contextMenu.target === "editor") {
+      const redoItem = commandMenuItem("edit.redo", "redo");
+
+      return [
+        commandMenuItem("edit.undo", "undo"),
+        { ...redoItem, shortcut: redoItem.shortcut?.split(" / ")[0] },
+        commandMenuItem("edit.cut", "cut", { separatorBefore: true }),
+        commandMenuItem("edit.copy", "copy"),
+        commandMenuItem("edit.paste", "paste"),
+        commandMenuItem("format.bold", "bold", { separatorBefore: true }),
+        commandMenuItem("format.italic", "italic"),
+        commandMenuItem("format.inlineCode", "code"),
+        commandMenuItem("format.link", "link"),
+        commandMenuItem("paragraph.bulletList", "list", { separatorBefore: true }),
+        commandMenuItem("paragraph.orderedList", "orderedList"),
+        commandMenuItem("paragraph.blockquote", "quote"),
+        commandMenuItem("paragraph.table", "table"),
+        commandMenuItem("format.image", "image"),
+      ];
+    }
+
+    return [
+      commandMenuItem("file.new", "file"),
+      commandMenuItem("file.open", "folder"),
+      commandMenuItem("file.save", "save"),
+      commandMenuItem("app.openQuickOpen", "search", { separatorBefore: true }),
+      commandMenuItem("view.toggleSidebar", "panel"),
+      commandMenuItem("view.toggleRightPanel", "panel"),
+      commandMenuItem("app.openSettings", "settings", { separatorBefore: true }),
+    ];
+  }, [
+    commandMenuItem,
+    contextMenu,
+    handleDeleteVaultEntry,
+    handleRenameVaultEntry,
+    handleVaultDirectoryClick,
+    openMarkdownFile,
+    setVaultError,
+    t.commandLabels,
+    t.errors.openVaultFileFailed,
+    t.prompts.deleteAction,
+    t.prompts.renameAction,
+    t.sidebar.open,
+  ]);
 
   const handleCloseWorkspaceLeaf = useCallback(async () => {
     if (!await confirmDiscardUnsavedChanges()) return;
@@ -2575,18 +3228,20 @@ export default function App() {
 
   return (
     <div
+      ref={appShellRef}
       className="desktop-shell"
       data-theme={theme}
       data-density={uiDensity}
       data-sidebar={sidebarVisible ? "visible" : "hidden"}
       data-right-panel={rightPanelVisible && !knowledgePanelFloating ? "visible" : "hidden"}
+      onContextMenu={handleShellContextMenu}
       style={{
         "--sidebar-width": `${sidebarWidth}px`,
         "--right-panel-width": `${rightPanelWidth}px`,
         "--ui-scale": String(uiScale / 100),
         "--editor-font-latin": quoteCssFontFamily(normalizeEditorFontFamily(editorLatinFont, defaultSettings.editorLatinFont)),
         "--editor-font-cjk": quoteCssFontFamily(normalizeEditorFontFamily(editorCjkFont, defaultSettings.editorCjkFont)),
-        "--editor-font-size": `${editorFontSize * (uiScale / 100)}px`,
+        "--editor-font-size": `${editorFontSize}px`,
         "--editor-line-height": String(editorLineHeight),
         "--editor-left-gap": `${editorLeftGap}px`,
       } as CSSProperties}
@@ -2617,11 +3272,13 @@ export default function App() {
         rightPanelVisible={rightPanelVisible}
         vaultMode={vaultMode}
         graphOpen={centerGraphOpen}
+        newNoteLabel={t.sidebar.newNote}
         onToggleSidebar={() => setSidebarVisible((visible) => !visible)}
         onToggleRightPanel={() => {
           setKnowledgePanelFloating(false);
           setRightPanelVisible((visible) => !visible);
         }}
+        onCreateNote={() => dispatchCommand("file.new")}
         onOpenVault={() => dispatchCommand("file.openVault")}
         onOpenQuickOpen={() => setPaletteMode("quickOpen")}
         onOpenCommandPalette={() => setPaletteMode("command")}
@@ -2670,6 +3327,7 @@ export default function App() {
           onVaultDirectoryClick={handleVaultDirectoryClick}
           onRenameVaultEntry={handleRenameVaultEntry}
           onDeleteVaultEntry={handleDeleteVaultEntry}
+          onEntryContextMenu={handleVaultEntryContextMenu}
           onClearVaultState={clearVaultState}
           onOutlineClick={handleOutlineClick}
           onSelectNote={setActiveNoteId}
@@ -2727,12 +3385,15 @@ export default function App() {
           editorSurfaceRef={editorSurfaceRef}
           plainEditorRef={plainEditorRef}
           onMarkdownChange={handleMarkdownChange}
+          onRichMarkdownBaseline={handleRichMarkdownBaseline}
           onOpenLink={handleEditorLinkOpen}
           wikiLinkSuggestions={wikiLinkSuggestions}
           onCreateWikiLink={handleCreateWikiLinkTarget}
           onImportImages={importImagesForEditor}
           onPlainImageFiles={handlePlainEditorImageFiles}
           imagePreviewMap={imagePreviewMap}
+          showImageSourceOnFocus={showImageSourceOnFocus}
+          normalizeWindowsImagePaths={normalizeWindowsImagePaths}
         />
       </WorkspaceCenter>
 
@@ -2874,6 +3535,10 @@ export default function App() {
         uiDensity={uiDensity}
         defaultSaveExt={defaultSaveExt}
         defaultNewNoteName={defaultNewNoteName}
+        imageAttachmentFolder={imageAttachmentFolder}
+        imagePathStyle={imagePathStyle}
+        showImageSourceOnFocus={showImageSourceOnFocus}
+        normalizeWindowsImagePaths={normalizeWindowsImagePaths}
         vaultRoot={vaultRoot}
         lastOpenedFile={lastOpenedFile}
         onClose={() => setSettingsOpen(false)}
@@ -2913,6 +3578,11 @@ export default function App() {
         onDefaultSaveExtChange={setDefaultSaveExt}
         onDefaultNewNoteNameChange={setDefaultNewNoteName}
         onDefaultNewNoteNameBlur={() => setDefaultNewNoteName((current) => normalizeDefaultNewNoteName(current))}
+        onImageAttachmentFolderChange={setImageAttachmentFolder}
+        onImageAttachmentFolderBlur={() => setImageAttachmentFolder((current) => normalizeImageAttachmentFolder(current))}
+        onImagePathStyleChange={setImagePathStyle}
+        onShowImageSourceOnFocusChange={setShowImageSourceOnFocus}
+        onNormalizeWindowsImagePathsChange={setNormalizeWindowsImagePaths}
         onClearVaultState={clearVaultState}
       />
 
@@ -2920,6 +3590,17 @@ export default function App() {
         <div className="app-toast" role="status" aria-live="polite">
           {toastMessage}
         </div>
+      ) : null}
+
+      {contextMenu ? (
+        <AppContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems}
+          variant={contextMenu.target === "editor" ? "editor" : "default"}
+          submenuLabels={{ paragraph: t.menuGroups.paragraph, insert: language === "zh-CN" ? "插入" : "Insert" }}
+          onClose={closeContextMenu}
+        />
       ) : null}
     </div>
   );

@@ -31,23 +31,29 @@ export const defaultSettings: AppSettings = {
   vaultRecoveryBlocked: false,
   defaultEditorMode,
   restoreWorkspace: true,
-  editorLatinFont: "Avenir Next",
-  editorCjkFont: "Noto Sans SC",
+  editorLatinFont: "Segoe UI",
+  editorCjkFont: "Microsoft YaHei",
   editorFontSize: 16,
-  editorLineHeight: 1.68,
+  editorLineHeight: 1.6,
   editorLeftGap: 42,
   uiScale: 100,
   zoomWithWheel: true,
   defaultSaveExt: "md",
   defaultNewNoteName: "Untitled",
+  imageAttachmentFolder: "./image_ys",
+  imagePathStyle: "relative",
+  showImageSourceOnFocus: true,
+  normalizeWindowsImagePaths: true,
 };
 
 export const settingsSections: Array<{ id: SettingsSection; label: string }> = [
   { id: "general", label: "General" },
-  { id: "editor", label: "Editor" },
-  { id: "shortcuts", label: "Shortcuts" },
-  { id: "appearance", label: "Appearance" },
   { id: "files", label: "Files" },
+  { id: "editor", label: "Editor" },
+  { id: "image", label: "Image" },
+  { id: "markdown", label: "Markdown" },
+  { id: "appearance", label: "Appearance" },
+  { id: "shortcuts", label: "Shortcuts" },
 ];
 
 export function defaultVaultWorkspaceState(layout = defaultSettings): VaultWorkspaceState {

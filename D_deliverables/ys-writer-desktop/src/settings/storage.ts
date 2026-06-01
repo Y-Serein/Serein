@@ -12,10 +12,11 @@ import {
   defaultSettings,
 } from "../app/defaults";
 import { isAppLanguage } from "../app/i18n";
-import type { AppSettings, EditorMode, ThemeStyle, UIDensity } from "../app/types";
+import type { AppSettings, EditorMode, ImagePathStyle, ThemeStyle, UIDensity } from "../app/types";
 
 const DEFAULT_NOTE_NAME_MAX_LENGTH = 80;
 const EDITOR_FONT_MAX_LENGTH = 80;
+const IMAGE_ATTACHMENT_FOLDER_MAX_LENGTH = 120;
 
 export function clampSidebarWidth(width: number) {
   if (!Number.isFinite(width)) return defaultSettings.sidebarWidth;
@@ -57,6 +58,20 @@ export function normalizeEditorFontFamily(value: unknown, fallback: string) {
   return cleaned ? cleaned.slice(0, EDITOR_FONT_MAX_LENGTH) : fallback;
 }
 
+export function normalizeImageAttachmentFolder(value: unknown) {
+  if (typeof value !== "string") return defaultSettings.imageAttachmentFolder;
+  const cleaned = value
+    .replace(/\\/g, "/")
+    .replace(/[\0\r\n\t]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return defaultSettings.imageAttachmentFolder;
+  if (/^[A-Za-z]:/.test(cleaned) || cleaned.startsWith("/") || cleaned.includes("..")) {
+    return defaultSettings.imageAttachmentFolder;
+  }
+  return cleaned.slice(0, IMAGE_ATTACHMENT_FOLDER_MAX_LENGTH);
+}
+
 export function readSettings(): AppSettings {
   if (typeof window === "undefined") return defaultSettings;
 
@@ -71,13 +86,27 @@ export function readSettings(): AppSettings {
       selectedWorkspaceDir?: string;
       workspaceRecoveryBlocked?: boolean;
     };
-    const theme: ThemeStyle = parsed.theme === "eye" || parsed.theme === "ink" || parsed.theme === "mint"
+    const theme: ThemeStyle = parsed.theme === "ink"
+      || parsed.theme === "mint"
+      || parsed.theme === "v5"
       ? parsed.theme
       : "daily";
     const uiDensity: UIDensity = parsed.uiDensity === "compact" ? "compact" : "comfortable";
     const defaultEditorMode: EditorMode = parsed.defaultEditorMode === "plain" || parsed.defaultEditorMode === "rich"
       ? parsed.defaultEditorMode
       : defaultSettings.defaultEditorMode;
+    const imagePathStyle: ImagePathStyle = parsed.imagePathStyle === "absolute" ? "absolute" : "relative";
+    const editorLatinFont = normalizeEditorFontFamily(parsed.editorLatinFont, defaultSettings.editorLatinFont);
+    const editorCjkFont = normalizeEditorFontFamily(parsed.editorCjkFont, defaultSettings.editorCjkFont);
+    const editorLineHeight = typeof parsed.editorLineHeight === "number"
+      ? parsed.editorLineHeight
+      : defaultSettings.editorLineHeight;
+    const usesLegacyTypographyDefaults = editorLatinFont === "Avenir Next"
+      && editorCjkFont === "Noto Sans SC"
+      && editorLineHeight === 1.68;
+    const usesTrialTypographyDefaults = (editorLatinFont === "Times New Roman" || editorLatinFont === "Cambria")
+      && editorCjkFont === "SimSun"
+      && editorLineHeight === 1.6;
 
     return {
       theme,
@@ -109,15 +138,29 @@ export function readSettings(): AppSettings {
           : defaultSettings.vaultRecoveryBlocked,
       defaultEditorMode,
       restoreWorkspace: typeof parsed.restoreWorkspace === "boolean" ? parsed.restoreWorkspace : defaultSettings.restoreWorkspace,
-      editorLatinFont: normalizeEditorFontFamily(parsed.editorLatinFont, defaultSettings.editorLatinFont),
-      editorCjkFont: normalizeEditorFontFamily(parsed.editorCjkFont, defaultSettings.editorCjkFont),
+      editorLatinFont: usesLegacyTypographyDefaults || usesTrialTypographyDefaults
+        ? defaultSettings.editorLatinFont
+        : editorLatinFont,
+      editorCjkFont: usesLegacyTypographyDefaults || usesTrialTypographyDefaults
+        ? defaultSettings.editorCjkFont
+        : editorCjkFont,
       editorFontSize: typeof parsed.editorFontSize === "number" ? parsed.editorFontSize : defaultSettings.editorFontSize,
-      editorLineHeight: typeof parsed.editorLineHeight === "number" ? parsed.editorLineHeight : defaultSettings.editorLineHeight,
+      editorLineHeight: usesLegacyTypographyDefaults || usesTrialTypographyDefaults
+        ? defaultSettings.editorLineHeight
+        : editorLineHeight,
       editorLeftGap: typeof parsed.editorLeftGap === "number" ? clampEditorLeftGap(parsed.editorLeftGap) : defaultSettings.editorLeftGap,
       uiScale: typeof parsed.uiScale === "number" ? clampUiScale(parsed.uiScale) : defaultSettings.uiScale,
       zoomWithWheel: typeof parsed.zoomWithWheel === "boolean" ? parsed.zoomWithWheel : defaultSettings.zoomWithWheel,
       defaultSaveExt: parsed.defaultSaveExt === "txt" ? "txt" : "md",
       defaultNewNoteName: normalizeDefaultNewNoteName(parsed.defaultNewNoteName),
+      imageAttachmentFolder: normalizeImageAttachmentFolder(parsed.imageAttachmentFolder),
+      imagePathStyle,
+      showImageSourceOnFocus: typeof parsed.showImageSourceOnFocus === "boolean"
+        ? parsed.showImageSourceOnFocus
+        : defaultSettings.showImageSourceOnFocus,
+      normalizeWindowsImagePaths: typeof parsed.normalizeWindowsImagePaths === "boolean"
+        ? parsed.normalizeWindowsImagePaths
+        : defaultSettings.normalizeWindowsImagePaths,
     };
   } catch (error) {
     console.warn("Failed to read settings", error);

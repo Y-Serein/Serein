@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   MAX_EDITOR_LEFT_GAP,
   MAX_RIGHT_PANEL_WIDTH,
@@ -17,7 +18,7 @@ import {
   editorLatinFontOptions,
 } from "../../app/i18n";
 import type { AppLanguage, appText } from "../../app/i18n";
-import type { EditorMode, SaveFileExt, SettingsSection, ThemeStyle, UIDensity } from "../../app/types";
+import type { EditorMode, ImagePathStyle, SaveFileExt, SettingsSection, ThemeStyle, UIDensity } from "../../app/types";
 import type { ShortcutEntry } from "../../command/shortcuts";
 import { normalizeDefaultNewNoteName } from "../../services/settings";
 import { Button } from "../../shared/ui";
@@ -49,6 +50,10 @@ type SettingsDialogProps = {
   uiDensity: UIDensity;
   defaultSaveExt: SaveFileExt;
   defaultNewNoteName: string;
+  imageAttachmentFolder: string;
+  imagePathStyle: ImagePathStyle;
+  showImageSourceOnFocus: boolean;
+  normalizeWindowsImagePaths: boolean;
   vaultRoot: string | null;
   lastOpenedFile: string | null;
   onClose: () => void;
@@ -78,6 +83,11 @@ type SettingsDialogProps = {
   onDefaultSaveExtChange: (value: SaveFileExt) => void;
   onDefaultNewNoteNameChange: (value: string) => void;
   onDefaultNewNoteNameBlur: () => void;
+  onImageAttachmentFolderChange: (value: string) => void;
+  onImageAttachmentFolderBlur: () => void;
+  onImagePathStyleChange: (value: ImagePathStyle) => void;
+  onShowImageSourceOnFocusChange: (value: boolean) => void;
+  onNormalizeWindowsImagePathsChange: (value: boolean) => void;
   onClearVaultState: () => void;
 };
 
@@ -106,6 +116,10 @@ export function SettingsDialog({
   uiDensity,
   defaultSaveExt,
   defaultNewNoteName,
+  imageAttachmentFolder,
+  imagePathStyle,
+  showImageSourceOnFocus,
+  normalizeWindowsImagePaths,
   vaultRoot,
   lastOpenedFile,
   onClose,
@@ -135,16 +149,46 @@ export function SettingsDialog({
   onDefaultSaveExtChange,
   onDefaultNewNoteNameChange,
   onDefaultNewNoteNameBlur,
+  onImageAttachmentFolderChange,
+  onImageAttachmentFolderBlur,
+  onImagePathStyleChange,
+  onShowImageSourceOnFocusChange,
+  onNormalizeWindowsImagePathsChange,
   onClearVaultState,
 }: SettingsDialogProps) {
-  if (!open) return null;
+  const [visible, setVisible] = useState(open);
+  const [closing, setClosing] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setVisible(true);
+      setClosing(false);
+      return undefined;
+    }
+
+    if (!visible) return undefined;
+    setClosing(true);
+    const timeout = window.setTimeout(() => setVisible(false), 180);
+    return () => window.clearTimeout(timeout);
+  }, [open, visible]);
+
+  const requestClose = () => {
+    if (closing) return;
+    setClosing(true);
+    window.setTimeout(() => {
+      onClose();
+      setVisible(false);
+    }, 150);
+  };
+
+  if (!visible) return null;
 
   return (
-    <div className="settings-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="settings-backdrop" data-state={closing ? "closing" : "open"} role="presentation" onMouseDown={requestClose}>
       <section className="settings-panel" role="dialog" aria-modal="true" aria-label={t.aria.settingsDialog} onMouseDown={(event) => event.stopPropagation()}>
         <div className="settings-header">
           <h2>{t.settings.title}</h2>
-          <Button variant="ghost" onClick={onClose}>{t.settings.close}</Button>
+          <Button variant="ghost" className="settings-close-button" onClick={requestClose} aria-label={t.settings.close}>×</Button>
         </div>
 
         <div className="settings-layout">
@@ -250,6 +294,62 @@ export function SettingsDialog({
               </div>
             ) : null}
 
+            {section === "image" ? (
+              <div className="settings-section">
+                <h3>{t.settings.image}</h3>
+                <p>{t.settings.imageBehaviorHint}</p>
+                <label className="settings-field">
+                  <span>{t.settings.imageAttachmentFolder}</span>
+                  <input
+                    value={imageAttachmentFolder}
+                    placeholder="./image_ys"
+                    onChange={(event) => onImageAttachmentFolderChange(event.target.value)}
+                    onBlur={onImageAttachmentFolderBlur}
+                  />
+                </label>
+                <label className="settings-field">
+                  <span>{t.settings.imagePathStyle}</span>
+                  <select value={imagePathStyle} onChange={(event) => onImagePathStyleChange(event.target.value as ImagePathStyle)}>
+                    <option value="relative">{t.settings.imagePathRelative}</option>
+                    <option value="absolute">{t.settings.imagePathAbsolute}</option>
+                  </select>
+                </label>
+                <label className="settings-check">
+                  <input type="checkbox" checked={showImageSourceOnFocus} onChange={(event) => onShowImageSourceOnFocusChange(event.target.checked)} />
+                  {t.settings.showImageSourceOnFocus}
+                </label>
+                <label className="settings-check">
+                  <input type="checkbox" checked={normalizeWindowsImagePaths} onChange={(event) => onNormalizeWindowsImagePathsChange(event.target.checked)} />
+                  {t.settings.normalizeWindowsImagePaths}
+                </label>
+                <p>{t.settings.imageSafetyHint}</p>
+              </div>
+            ) : null}
+
+            {section === "markdown" ? (
+              <div className="settings-section">
+                <h3>{t.settings.markdown}</h3>
+                <label className="settings-field">
+                  <span>{t.settings.defaultEditMode}</span>
+                  <select value={defaultEditorModeSetting} onChange={(event) => onDefaultEditorModeChange(event.target.value as EditorMode)}>
+                    <option value="plain">{t.modeNames.plain}</option>
+                    <option value="rich">{t.modeNames.rich}</option>
+                  </select>
+                </label>
+                <label className="settings-field">
+                  <span>{t.settings.defaultSaveFormat}</span>
+                  <select value={defaultSaveExt} onChange={(event) => onDefaultSaveExtChange(event.target.value as SaveFileExt)}>
+                    <option value="md">.md</option>
+                    <option value="txt">.txt</option>
+                  </select>
+                </label>
+                <label className="settings-check">
+                  <input type="checkbox" checked={normalizeWindowsImagePaths} onChange={(event) => onNormalizeWindowsImagePathsChange(event.target.checked)} />
+                  {t.settings.normalizeWindowsImagePaths}
+                </label>
+              </div>
+            ) : null}
+
             {section === "shortcuts" ? (
               <div className="settings-section">
                 <div className="settings-section-title">
@@ -297,10 +397,10 @@ export function SettingsDialog({
                 <h3>{t.settings.appearance}</h3>
                 <div className="theme-options">
                   {([
-                    ["daily", "Daily", "theme.daily"],
-                    ["eye", "Eye Care", "theme.eye"],
-                    ["mint", "Mint", "theme.mint"],
-                    ["ink", "Dark", "theme.ink"],
+                    ["daily", t.commandLabels["theme.daily"], "theme.daily"],
+                    ["mint", t.commandLabels["theme.mint"], "theme.mint"],
+                    ["ink", t.commandLabels["theme.ink"], "theme.ink"],
+                    ["v5", t.commandLabels["theme.v5"], "theme.v5"],
                   ] as const).map(([id, label, commandId]) => (
                     <button key={id} type="button" className={theme === id ? "theme-option selected" : "theme-option"} onClick={() => onThemeCommand(commandId)}>
                       <span className={`theme-swatch ${id}`} />
@@ -340,7 +440,7 @@ export function SettingsDialog({
                     }}
                   />
                 </label>
-                <p>{t.settings.vaultMetadata}: <code>.serein/vault.json</code> / <code>.serein/workspace.json</code></p>
+                <p>{t.settings.vaultMetadata}: <code>Serein app data / vaults</code></p>
                 <p>{t.settings.vaultRoot}: <code>{vaultRoot ?? t.settings.none}</code></p>
                 <p>{t.settings.lastOpenedFile}: <code>{lastOpenedFile ?? t.settings.none}</code></p>
                 <Button variant="danger" className="settings-danger" onClick={onClearVaultState}>{t.settings.clearLastVaultState}</Button>

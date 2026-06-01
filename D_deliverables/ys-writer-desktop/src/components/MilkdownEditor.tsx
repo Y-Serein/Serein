@@ -3,10 +3,10 @@ import { createPortal } from "react-dom";
 import { defaultHighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages as codeMirrorLanguages } from "@codemirror/language-data";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { commandsCtx, defaultValueCtx, Editor, editorViewCtx, rootCtx } from "@milkdown/kit/core";
-import { codeBlockComponent, codeBlockConfig } from "@milkdown/kit/component/code-block";
+import { commandsCtx, defaultValueCtx, Editor, editorViewCtx, rootCtx, serializerCtx } from "@milkdown/kit/core";
+import { codeBlockConfig } from "@milkdown/kit/component/code-block";
 import { imageInlineComponent } from "@milkdown/kit/component/image-inline";
-import { tableBlock } from "@milkdown/kit/component/table-block";
+import { tableBlock, tableBlockConfig } from "@milkdown/kit/component/table-block";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
 import { history } from "@milkdown/kit/plugin/history";
 import { upload, uploadConfig } from "@milkdown/kit/plugin/upload";
@@ -27,23 +27,27 @@ import {
 import { gfm, insertTableCommand, toggleStrikethroughCommand } from "@milkdown/kit/preset/gfm";
 import { lift, selectAll } from "@milkdown/kit/prose/commands";
 import { liftListItem, splitListItem } from "@milkdown/kit/prose/schema-list";
-import { Plugin, PluginKey, TextSelection } from "@milkdown/kit/prose/state";
+import { Plugin, PluginKey, Selection, TextSelection } from "@milkdown/kit/prose/state";
 import type { Command } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $prose, $shortcut } from "@milkdown/kit/utils";
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from "@milkdown/react";
 import type { EditorCommandSignal } from "../domain/model";
+import { sereinCodeBlockView } from "./sereinCodeBlockView";
 
 type MilkdownEditorProps = {
   markdown: string;
   onChange: (markdown: string) => void;
+  onRichMarkdownBaseline: (markdown: string) => void;
   command: EditorCommandSignal | null;
   onOpenLink: (href: string) => boolean;
   wikiLinkSuggestions: WikiLinkSuggestion[];
   onCreateWikiLink: (target: string) => Promise<string | null>;
   onImportImages: (files: File[]) => Promise<Array<{ src: string; alt: string }>>;
   imagePreviewMap: Record<string, string>;
+  showImageSourceOnFocus: boolean;
+  normalizeWindowsImagePaths: boolean;
 };
 
 export type WikiLinkSuggestion = {
@@ -83,13 +87,90 @@ const codeBlockLanguages = codeMirrorLanguages.map((language) => {
   });
 });
 
+const tableButtonIcons = {
+  add_row: '<svg viewBox="0 0 16 16"><path d="M3 3.5h10M3 8h10M3 12.5h10M8 5.5v5M5.5 8h5"/></svg>',
+  add_col: '<svg viewBox="0 0 16 16"><path d="M3.5 3v10M8 3v10M12.5 3v10M5.5 8h5M8 5.5v5"/></svg>',
+  delete_row: '<svg viewBox="0 0 16 16"><path d="M3 5h10M5.5 3.5l5 5M10.5 3.5l-5 5M3 11h10"/></svg>',
+  delete_col: '<svg viewBox="0 0 16 16"><path d="M5 3v10M3.5 5.5l5 5M8.5 5.5l-5 5M11 3v10"/></svg>',
+  align_col_left: '<svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h7M3 12h9"/></svg>',
+  align_col_center: '<svg viewBox="0 0 16 16"><path d="M3 4h10M4.5 8h7M3.5 12h9"/></svg>',
+  align_col_right: '<svg viewBox="0 0 16 16"><path d="M3 4h10M6 8h7M4 12h9"/></svg>',
+  col_drag_handle: '<svg viewBox="0 0 16 16"><path d="M5 4h6M5 8h6M5 12h6"/></svg>',
+  row_drag_handle: '<svg viewBox="0 0 16 16"><path d="M4 5h8M4 8h8M4 11h8"/></svg>',
+};
+
+function renderTableButtonIcon(renderType: keyof typeof tableButtonIcons) {
+  return tableButtonIcons[renderType];
+}
+
+function markdownImageText(src: string, alt: string) {
+  const cleanAlt = alt.replace(/[\]\n\r]/g, " ").trim() || "image";
+  const cleanSrc = /[\s\\()]/.test(src) ? `<${src}>` : src;
+  return `![${cleanAlt}](${cleanSrc})`;
+}
+
+function normalizeMarkdownImageSource(source: string) {
+  const value = source.trim();
+  if (value.startsWith("<")) {
+    const end = value.indexOf(">");
+    return (end >= 0 ? value.slice(1, end) : value.slice(1)).trim();
+  }
+
+  return value.split(/\s+(?=["'])/)[0]?.trim() ?? "";
+}
+
+function localImagePreview(imagePreviewMap: Record<string, string>, source: string) {
+  const withoutDot = source.replace(/^\.\//, "");
+  return imagePreviewMap[source]
+    ?? imagePreviewMap[withoutDot]
+    ?? imagePreviewMap[`./${withoutDot}`];
+}
+
+function normalizeWindowsImageMarkdown(markdown: string) {
+  return markdown.replace(/!\[([^\]\n]*)]\(((?:[A-Za-z]:\\|\\\\)[^)\n]*)\)/g, (_, alt: string, source: string) => (
+    markdownImageText(source.trim(), alt)
+  ));
+}
+
 function refreshLocalImagePreviews(root: HTMLElement, imagePreviewMap: Record<string, string>) {
   root.querySelectorAll<HTMLImageElement>("img[src]").forEach((image) => {
+    if (image.classList.contains("ProseMirror-separator")) return;
     const original = image.dataset.sereinSrc ?? image.getAttribute("src") ?? "";
     if (!image.dataset.sereinSrc) image.dataset.sereinSrc = original;
-    const preview = imagePreviewMap[original.trim().replace(/^<|>$/g, "")];
+    const source = normalizeMarkdownImageSource(original);
+    const preview = localImagePreview(imagePreviewMap, source);
     if (preview && image.getAttribute("src") !== preview) image.setAttribute("src", preview);
+    const host = image.closest<HTMLElement>(".milkdown-image-inline") ?? image.parentElement;
+    if (host) {
+      host.classList.add("serein-image-source-host");
+      host.dataset.sereinImageMarkdown = markdownImageText(source, image.getAttribute("alt") ?? "image");
+    }
   });
+}
+
+function clearActiveImageSource(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>(".serein-image-source-active").forEach((node) => {
+    node.classList.remove("serein-image-source-active");
+    delete node.dataset.sereinImageMarkdown;
+  });
+  root.querySelectorAll<HTMLImageElement>("img[data-serein-image-active='true']").forEach((image) => {
+    delete image.dataset.sereinImageActive;
+  });
+}
+
+function setActiveImageSource(root: HTMLElement, image: HTMLImageElement | null, enabled: boolean) {
+  clearActiveImageSource(root);
+  if (!enabled || !image) return;
+
+  const source = normalizeMarkdownImageSource(image.dataset.sereinSrc ?? image.getAttribute("src") ?? "");
+  if (!source) return;
+
+  const host = image.closest<HTMLElement>(".milkdown-image-inline") ?? image.closest<HTMLElement>("p, figure, div") ?? image.parentElement;
+  if (!host || !root.contains(host)) return;
+
+  image.dataset.sereinImageActive = "true";
+  host.classList.add("serein-image-source-active");
+  host.dataset.sereinImageMarkdown = markdownImageText(source, image.getAttribute("alt") ?? "image");
 }
 
 const handleNestedEnter: Command = (state, dispatch) => {
@@ -158,6 +239,75 @@ const selectCurrentCodeBlock: Command = (state, dispatch) => {
 const smartSelectAllShortcut = $shortcut(() => ({
   "Mod-a": selectCurrentCodeBlock,
 }));
+
+function splitPipeTableRow(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return null;
+
+  const cells: string[] = [];
+  let current = "";
+  let escaped = false;
+  for (let index = 1; index < trimmed.length - 1; index += 1) {
+    const char = trimmed[index];
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "|") {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+
+  if (cells.length < 2 || cells.every((cell) => cell.length === 0)) return null;
+  return cells;
+}
+
+const convertTypedPipeTable = (view: EditorView) => {
+  const { state } = view;
+  const { selection, schema } = state;
+  if (!selection.empty) return false;
+
+  const { $from } = selection;
+  const parent = $from.parent;
+  if (parent.type.name !== "paragraph") return false;
+  if ($from.parentOffset !== parent.content.size) return false;
+
+  const cells = splitPipeTableRow(parent.textContent);
+  if (!cells) return false;
+
+  const tableType = schema.nodes.table;
+  const headerRowType = schema.nodes.table_header_row;
+  const headerType = schema.nodes.table_header;
+  const rowType = schema.nodes.table_row;
+  const cellType = schema.nodes.table_cell;
+  const paragraphType = schema.nodes.paragraph;
+  if (!tableType || !headerRowType || !headerType || !rowType || !cellType || !paragraphType) return false;
+
+  const paragraphNode = (text = "") => paragraphType.create(null, text ? schema.text(text) : undefined);
+  const headerCells = cells.map((text) => headerType.create({ alignment: "left" }, paragraphNode(text)));
+  const bodyCells = cells.map(() => cellType.create({ alignment: "left" }, paragraphNode()));
+  const headerRow = headerRowType.create(null, headerCells);
+  const bodyRow = rowType.create(null, bodyCells);
+  const table = tableType.create(null, [headerRow, bodyRow]);
+
+  const from = $from.before($from.depth);
+  const to = $from.after($from.depth);
+  const tr = state.tr.replaceWith(from, to, table);
+  const bodyFirstCellTextPos = from + 1 + headerRow.nodeSize + 1 + 1;
+  const nextSelection = Selection.findFrom(tr.doc.resolve(bodyFirstCellTextPos), 1, true);
+  if (nextSelection) tr.setSelection(nextSelection);
+  view.dispatch(tr.scrollIntoView());
+  return true;
+};
 
 const moveWithinMarkdownLink = (direction: -1 | 1 | "start" | "end"): Command => (_state, dispatch, view) => {
   if (!view || !view.state.selection.empty) return false;
@@ -352,6 +502,20 @@ function findCodeBlockPos(view: EditorView, codeBlockDom: HTMLElement) {
   return found;
 }
 
+function findTablePos(view: EditorView, tableBlockDom: HTMLElement) {
+  let found: number | null = null;
+  view.state.doc.descendants((node, pos) => {
+    if (found !== null || node.type.name !== "table") return false;
+    const dom = view.nodeDOM(pos);
+    if (dom instanceof HTMLElement && (dom === tableBlockDom || dom.contains(tableBlockDom) || tableBlockDom.contains(dom))) {
+      found = pos;
+      return false;
+    }
+    return true;
+  });
+  return found;
+}
+
 function exitCodeBlockAfter(view: EditorView, codeBlockDom: HTMLElement) {
   const pos = findCodeBlockPos(view, codeBlockDom);
   if (pos === null) return false;
@@ -359,6 +523,29 @@ function exitCodeBlockAfter(view: EditorView, codeBlockDom: HTMLElement) {
   const node = view.state.doc.nodeAt(pos);
   const paragraph = view.state.schema.nodes.paragraph;
   if (!node || node.type.name !== "code_block" || !paragraph) return false;
+
+  const after = pos + node.nodeSize;
+  let tr = view.state.tr;
+
+  if (after >= view.state.doc.content.size) {
+    tr = tr.insert(after, paragraph.create());
+    tr = tr.setSelection(TextSelection.create(tr.doc, after + 1));
+  } else {
+    tr = tr.setSelection(TextSelection.near(tr.doc.resolve(after), 1));
+  }
+
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
+}
+
+function exitTableAfter(view: EditorView, tableBlockDom: HTMLElement) {
+  const pos = findTablePos(view, tableBlockDom);
+  if (pos === null) return false;
+
+  const node = view.state.doc.nodeAt(pos);
+  const paragraph = view.state.schema.nodes.paragraph;
+  if (!node || node.type.name !== "table" || !paragraph) return false;
 
   const after = pos + node.nodeSize;
   let tr = view.state.tr;
@@ -405,6 +592,43 @@ function activeCodeMirrorLine(codeBlockDom: HTMLElement) {
     isLastLine: Boolean(activeLine && lines[lines.length - 1] === activeLine),
     isBlank: (activeLine?.textContent ?? "").trim() === "",
   };
+}
+
+function activeTableCell(target: HTMLElement | null) {
+  const directCell = target?.closest<HTMLTableCellElement>("td, th") ?? null;
+  if (directCell) return directCell;
+
+  const selection = window.getSelection();
+  const anchorElement = selection?.anchorNode instanceof HTMLElement
+    ? selection.anchorNode
+    : selection?.anchorNode?.parentElement ?? null;
+  return anchorElement?.closest<HTMLTableCellElement>("td, th") ?? null;
+}
+
+function isLastTableRowCell(cell: HTMLTableCellElement) {
+  const row = cell.closest("tr");
+  const table = cell.closest("table");
+  if (!row || !table) return false;
+  const rows = [...table.querySelectorAll("tr")];
+  return rows[rows.length - 1] === row;
+}
+
+function isTrailingParagraphAfterTable(view: EditorView) {
+  const { selection } = view.state;
+  if (!selection.empty) return false;
+
+  const { $from } = selection;
+  if ($from.parent.type.name !== "paragraph") return false;
+  if ($from.depth < 1) return false;
+
+  const parentDepth = $from.depth - 1;
+  const parent = $from.node(parentDepth);
+  const index = $from.index(parentDepth);
+  if (index <= 0) return false;
+
+  const previous = parent.child(index - 1);
+  const next = index + 1 < parent.childCount ? parent.child(index + 1) : null;
+  return previous.type.name === "table" && !next;
 }
 
 function currentLanguageText(button: HTMLButtonElement) {
@@ -470,10 +694,11 @@ function convertTypedMarkdownLink(view: EditorView) {
   if ($from.parent.type.name !== "paragraph") return false;
 
   const textBefore = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
-  const match = textBefore.match(/\[([^\]\n]+)\]\(([^)\n]+)\)$/);
+  const match = textBefore.match(/(!?)\[([^\]\n]+)\]\(([^)\n]+)\)$/);
   if (!match) return false;
+  if (match[1]) return false;
 
-  const [, label, rawHref] = match;
+  const [, , label, rawHref] = match;
   const href = rawHref.trim();
   if (!label || !href) return false;
 
@@ -487,6 +712,43 @@ function convertTypedMarkdownLink(view: EditorView) {
   tr = tr.setSelection(TextSelection.create(tr.doc, from + label.length));
   view.dispatch(tr.scrollIntoView());
   return true;
+}
+
+function convertTypedMarkdownImage(view: EditorView) {
+  const { state } = view;
+  const { selection } = state;
+  if (!selection.empty) return false;
+
+  const $from = selection.$from;
+  if ($from.parent.type.name !== "paragraph") return false;
+
+  const textBefore = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
+  const match = textBefore.match(/!\[([^\]\n]*)]\(([^)\n]+)\)$/);
+  if (!match) return false;
+
+  const [, rawAlt, rawSource] = match;
+  const source = normalizeMarkdownImageSource(rawSource);
+  if (!source) return false;
+
+  const imageType = state.schema.nodes.image;
+  if (!imageType) return false;
+
+  const image = imageType.createAndFill({
+    src: source,
+    alt: rawAlt.trim() || "image",
+    title: "",
+  });
+  if (!image) return false;
+
+  const from = selection.from - match[0].length;
+  let tr = state.tr.replaceWith(from, selection.from, image);
+  tr = tr.setSelection(Selection.near(tr.doc.resolve(Math.min(tr.doc.content.size, from + image.nodeSize)), 1));
+  view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+function convertTypedMarkdownInline(view: EditorView) {
+  return convertTypedMarkdownImage(view) || convertTypedMarkdownLink(view);
 }
 
 function sameLinkAttrs(left: Record<string, unknown>, right: Record<string, unknown>) {
@@ -559,6 +821,7 @@ function markdownLinkTextRangeAtCursor(view: EditorView): ExpandedLinkRange | nu
   while ((match = pattern.exec(parentText)) !== null) {
     const start = match.index;
     const end = start + match[0].length;
+    if (parentText[start - 1] === "!") continue;
     if ($from.parentOffset < start || $from.parentOffset > end) continue;
     return {
       from: $from.start() + start,
@@ -705,14 +968,28 @@ function runEditorCommand(editor: Editor, command: EditorCommandSignal) {
   });
 }
 
-function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSuggestions, onCreateWikiLink, onImportImages, imagePreviewMap }: MilkdownEditorProps) {
-  const initialMarkdownRef = useRef(markdown);
+function EditorSurface({
+  markdown,
+  onChange,
+  onRichMarkdownBaseline,
+  command,
+  onOpenLink,
+  wikiLinkSuggestions,
+  onCreateWikiLink,
+  onImportImages,
+  imagePreviewMap,
+  showImageSourceOnFocus,
+  normalizeWindowsImagePaths,
+}: MilkdownEditorProps) {
+  const initialMarkdownRef = useRef(normalizeWindowsImagePaths ? normalizeWindowsImageMarkdown(markdown) : markdown);
   const onChangeRef = useRef(onChange);
+  const onRichMarkdownBaselineRef = useRef(onRichMarkdownBaseline);
   const onOpenLinkRef = useRef(onOpenLink);
   const wikiLinkSuggestionsRef = useRef(wikiLinkSuggestions);
   const onCreateWikiLinkRef = useRef(onCreateWikiLink);
   const onImportImagesRef = useRef(onImportImages);
   const imagePreviewMapRef = useRef(imagePreviewMap);
+  const showImageSourceOnFocusRef = useRef(showImageSourceOnFocus);
   const editorViewRef = useRef<EditorView | null>(null);
   const wikiSuggestRef = useRef<WikiSuggestState | null>(null);
   const [wikiSuggest, setWikiSuggest] = useState<WikiSuggestState | null>(null);
@@ -721,6 +998,10 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  useEffect(() => {
+    onRichMarkdownBaselineRef.current = onRichMarkdownBaseline;
+  }, [onRichMarkdownBaseline]);
 
   useEffect(() => {
     onOpenLinkRef.current = onOpenLink;
@@ -742,6 +1023,11 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
     imagePreviewMapRef.current = imagePreviewMap;
     if (editorViewRef.current) refreshLocalImagePreviews(editorViewRef.current.dom, imagePreviewMap);
   }, [imagePreviewMap]);
+
+  useEffect(() => {
+    showImageSourceOnFocusRef.current = showImageSourceOnFocus;
+    if (!showImageSourceOnFocus && editorViewRef.current) clearActiveImageSource(editorViewRef.current.dom);
+  }, [showImageSourceOnFocus]);
 
   const closeWikiSuggest = () => {
     wikiSuggestRef.current = null;
@@ -780,10 +1066,11 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
       const view = ctx.get(editorViewCtx);
       editorViewRef.current = view;
       refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current);
+      onRichMarkdownBaselineRef.current(ctx.get(serializerCtx)(view.state.doc));
       const maybeConvertBeforeCursorMove = (event: KeyboardEvent) => {
         if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
         if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown", "Tab"].includes(event.key)) return false;
-        return convertTypedMarkdownLink(view);
+        return convertTypedMarkdownInline(view);
       };
       const updateWikiSuggest = (selectedIndex = wikiSuggestRef.current?.selectedIndex ?? 0) => {
         const trigger = wikiTriggerAtCursor(view);
@@ -873,7 +1160,73 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
         window.cancelAnimationFrame(linkExpandFrame);
         linkExpandFrame = window.requestAnimationFrame(refreshExpandedLink);
       };
+      let activeTableFrame = 0;
+      const setActiveTableBlock = (tableBlock: HTMLElement | null) => {
+        view.dom.querySelectorAll<HTMLElement>(".milkdown-table-block.serein-table-active").forEach((node) => {
+          if (node !== tableBlock) node.classList.remove("serein-table-active");
+        });
+        if (tableBlock) {
+          tableBlock.classList.add("serein-table-active");
+        }
+      };
+      const setActiveTableFromTarget = (target: EventTarget | null) => {
+        const element = target instanceof Element ? target : null;
+        setActiveTableBlock(element?.closest<HTMLElement>(".milkdown-table-block") ?? null);
+      };
+      const refreshActiveTableFromSelection = () => {
+        const { selection } = view.state;
+        try {
+          const domPosition = view.domAtPos(selection.from);
+          const node = domPosition.node;
+          const element = node instanceof HTMLElement ? node : node.parentElement;
+          setActiveTableBlock(element?.closest<HTMLElement>(".milkdown-table-block") ?? null);
+        } catch {
+          setActiveTableBlock(null);
+        }
+      };
+      const scheduleActiveTableRefresh = () => {
+        window.cancelAnimationFrame(activeTableFrame);
+        activeTableFrame = window.requestAnimationFrame(refreshActiveTableFromSelection);
+      };
+      let activeImageFrame = 0;
+      const setActiveImageFromTarget = (target: EventTarget | null) => {
+        const element = target instanceof Element ? target : null;
+        const image = element?.closest<HTMLImageElement>("img.image-inline, img:not(.ProseMirror-separator)")
+          ?? element?.querySelector<HTMLImageElement>("img.image-inline, img:not(.ProseMirror-separator)")
+          ?? null;
+        setActiveImageSource(view.dom, image, showImageSourceOnFocusRef.current);
+      };
+      const refreshActiveImageFromSelection = () => {
+        if (!showImageSourceOnFocusRef.current) {
+          clearActiveImageSource(view.dom);
+          return;
+        }
+
+        const { selection } = view.state;
+        try {
+          const domPosition = view.domAtPos(selection.from);
+          const node = domPosition.node;
+          const element = node instanceof HTMLElement ? node : node.parentElement;
+          const image = element?.closest<HTMLImageElement>("img.image-inline, img:not(.ProseMirror-separator)")
+            ?? element?.querySelector<HTMLImageElement>("img.image-inline, img:not(.ProseMirror-separator)")
+            ?? null;
+          if (image) setActiveImageSource(view.dom, image, true);
+        } catch {
+          // Pointer handling clears image focus when the user moves away; selection
+          // changes around atom images can be noisy, so don't clear active image UI here.
+        }
+      };
+      const scheduleActiveImageRefresh = () => {
+        window.cancelAnimationFrame(activeImageFrame);
+        activeImageFrame = window.requestAnimationFrame(refreshActiveImageFromSelection);
+      };
       const handleKeyDown = (event: KeyboardEvent) => {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        const codeBlock = target?.closest<HTMLElement>(".milkdown-code-block") ?? null;
+        const isCodeMirrorTarget = Boolean(codeBlock && target?.closest(".cm-editor"));
+        const languageButton = target?.closest<HTMLButtonElement>(".language-button") ?? null;
+        const isPlainArrowDown = event.key === "ArrowDown" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+
         if (wikiSuggestRef.current && !event.ctrlKey && !event.metaKey && !event.altKey) {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
@@ -896,6 +1249,34 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
             closeWikiSuggest();
             return;
           }
+        }
+
+        if (isCodeMirrorTarget && codeBlock) {
+          if (isPlainArrowDown) {
+            const { isLastLine } = activeCodeMirrorLine(codeBlock);
+            if (!isLastLine) return;
+
+            const languageControl = codeBlock.querySelector<HTMLButtonElement>(".language-button");
+            if (!languageControl) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+            beginLanguageEdit(languageControl);
+            languageControl.focus();
+            return;
+          }
+
+          if (event.key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+            const { isLastLine, isBlank } = activeCodeMirrorLine(codeBlock);
+            if (!isLastLine || !isBlank) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+            exitCodeBlockAfter(view, codeBlock);
+            return;
+          }
+
+          return;
         }
 
         if (!selectionInsideExpandedLink()) maybeConvertBeforeCursorMove(event);
@@ -951,11 +1332,6 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
             convertExpandedLink();
           }
         }
-
-        const target = event.target instanceof HTMLElement ? event.target : null;
-        const codeBlock = target?.closest<HTMLElement>(".milkdown-code-block") ?? null;
-        const languageButton = target?.closest<HTMLButtonElement>(".language-button") ?? null;
-        const isPlainArrowDown = event.key === "ArrowDown" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
 
         if (codeBlock && languageButton) {
           if (!languageButton.hasAttribute("data-language-draft")) beginLanguageEdit(languageButton);
@@ -1051,34 +1427,30 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
           }
         }
 
-        if (event.key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && convertTypedMarkdownLink(view)) {
-          event.preventDefault();
-          event.stopPropagation();
-          return;
+        if (isPlainArrowDown) {
+          const cell = activeTableCell(target);
+          const tableBlock = target?.closest<HTMLElement>(".milkdown-table-block")
+            ?? cell?.closest<HTMLElement>(".milkdown-table-block")
+            ?? null;
+          if (tableBlock && cell && isLastTableRowCell(cell)) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (exitTableAfter(view, tableBlock)) return;
+          }
+          if (isTrailingParagraphAfterTable(view)) {
+            event.preventDefault();
+            event.stopPropagation();
+            view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, view.state.selection.from)).scrollIntoView());
+            return;
+          }
         }
 
-        if (codeBlock && isPlainArrowDown && target?.closest(".cm-editor")) {
-          const { isLastLine } = activeCodeMirrorLine(codeBlock);
-          if (!isLastLine) return;
-
-          const languageButton = codeBlock.querySelector<HTMLButtonElement>(".language-button");
-          if (!languageButton) return;
-
-          event.preventDefault();
-          event.stopPropagation();
-          beginLanguageEdit(languageButton);
-          languageButton.focus();
-          return;
-        }
-
-        if (codeBlock && event.key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && target?.closest(".cm-editor")) {
-          const { isLastLine, isBlank } = activeCodeMirrorLine(codeBlock);
-          if (!isLastLine || !isBlank) return;
-
-          event.preventDefault();
-          event.stopPropagation();
-          exitCodeBlockAfter(view, codeBlock);
-          return;
+        if (event.key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+          if (convertTypedPipeTable(view) || convertTypedMarkdownInline(view)) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
         }
 
         const isSelectAll = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "a";
@@ -1090,12 +1462,18 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
         }
       };
       const handleKeyUp = (event: KeyboardEvent) => {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (target?.closest(".milkdown-code-block .cm-editor")) return;
+
+        scheduleActiveTableRefresh();
+        scheduleActiveImageRefresh();
+
         if (!event.ctrlKey && !event.metaKey && !event.altKey) {
           scheduleWikiSuggestUpdate();
         }
 
         if (event.key === ")") {
-          if (convertTypedMarkdownLink(view)) {
+          if (convertTypedMarkdownInline(view)) {
             suppressNextLinkExpand = true;
             refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current);
             return;
@@ -1114,11 +1492,22 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
 
         scheduleLinkExpandRefresh();
       };
-      const handleInput = () => {
+      const handleInput = (event: Event) => {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (target?.closest(".milkdown-code-block .cm-editor")) return;
+
+        scheduleActiveTableRefresh();
+        scheduleActiveImageRefresh();
         scheduleWikiSuggestUpdate();
       };
       const handlePointerDown = (event: PointerEvent) => {
-        const target = event.target instanceof HTMLElement ? event.target : null;
+        const target = event.target instanceof Element ? event.target : null;
+        setActiveTableFromTarget(target);
+        setActiveImageFromTarget(target);
+        if (target?.closest(".milkdown-code-block .cm-editor")) {
+          closeWikiSuggest();
+          return;
+        }
         if (target?.closest(".wiki-suggest-popover")) return;
 
         const anchor = target?.closest<HTMLAnchorElement>("a[href]");
@@ -1147,23 +1536,30 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
           return;
         }
 
-        if (!selectionInsideExpandedLink()) convertTypedMarkdownLink(view);
+        if (!selectionInsideExpandedLink()) convertTypedMarkdownInline(view);
       };
       const handleDocumentPointerDown = (event: PointerEvent) => {
         if (event.target instanceof HTMLElement && event.target.closest(".wiki-suggest-popover")) return;
         if (view.dom.contains(event.target as Node)) return;
+        setActiveTableBlock(null);
+        clearActiveImageSource(view.dom);
         closeWikiSuggest();
-        if (!convertExpandedLink()) convertTypedMarkdownLink(view);
+        if (!convertExpandedLink()) convertTypedMarkdownInline(view);
       };
-      const handleFocusOut = () => {
+      const handleFocusOut = (event: FocusEvent) => {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (target?.closest(".milkdown-code-block .cm-editor")) return;
+
         window.setTimeout(() => {
           if (!document.activeElement?.closest(".wiki-suggest-popover")) closeWikiSuggest();
         }, 0);
-        if (!convertExpandedLink()) convertTypedMarkdownLink(view);
+        if (!convertExpandedLink()) convertTypedMarkdownInline(view);
         refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current);
       };
       const handleClick = (event: MouseEvent) => {
-        const target = event.target instanceof HTMLElement ? event.target : null;
+        const target = event.target instanceof Element ? event.target : null;
+        setActiveTableFromTarget(target);
+        setActiveImageFromTarget(target);
         const languageButton = target?.closest<HTMLButtonElement>(".language-button");
         if (languageButton) {
           finishLanguageEdit(languageButton);
@@ -1189,6 +1585,13 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
         event.stopPropagation();
         scheduleLinkExpandRefresh();
       };
+      const handleSelectionChange = () => {
+        if (document.activeElement?.closest(".milkdown-code-block .cm-editor")) return;
+
+        scheduleLinkExpandRefresh();
+        scheduleActiveTableRefresh();
+        scheduleActiveImageRefresh();
+      };
 
       view.dom.addEventListener("keydown", handleKeyDown, { capture: true });
       view.dom.addEventListener("keyup", handleKeyUp, { capture: true });
@@ -1197,10 +1600,12 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
       view.dom.addEventListener("pointerup", scheduleLinkExpandRefresh, { capture: true });
       view.dom.addEventListener("focusout", handleFocusOut, { capture: true });
       view.dom.addEventListener("click", handleClick, { capture: true });
-      document.addEventListener("selectionchange", scheduleLinkExpandRefresh);
+      document.addEventListener("selectionchange", handleSelectionChange);
       document.addEventListener("pointerdown", handleDocumentPointerDown, { capture: true });
       return () => {
         window.cancelAnimationFrame(linkExpandFrame);
+        window.cancelAnimationFrame(activeTableFrame);
+        window.cancelAnimationFrame(activeImageFrame);
         window.cancelAnimationFrame(wikiSuggestFrame);
         view.dom.removeEventListener("keydown", handleKeyDown, { capture: true });
         view.dom.removeEventListener("keyup", handleKeyUp, { capture: true });
@@ -1209,8 +1614,10 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
         view.dom.removeEventListener("pointerup", scheduleLinkExpandRefresh, { capture: true });
         view.dom.removeEventListener("focusout", handleFocusOut, { capture: true });
         view.dom.removeEventListener("click", handleClick, { capture: true });
-        document.removeEventListener("selectionchange", scheduleLinkExpandRefresh);
+        document.removeEventListener("selectionchange", handleSelectionChange);
         document.removeEventListener("pointerdown", handleDocumentPointerDown, { capture: true });
+        setActiveTableBlock(null);
+        clearActiveImageSource(view.dom);
         if (editorViewRef.current === view) editorViewRef.current = null;
       };
     });
@@ -1225,7 +1632,6 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
           ...defaultConfig,
           extensions: [
             syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-            CodeMirrorView.lineWrapping,
           ],
           languages: codeBlockLanguages,
           expandIcon: "",
@@ -1253,6 +1659,10 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
               .filter((node): node is NonNullable<typeof node> => Boolean(node));
           },
         }));
+        ctx.update(tableBlockConfig.key, (defaultConfig) => ({
+          ...defaultConfig,
+          renderButton: renderTableButtonIcon,
+        }));
         ctx.get(listenerCtx).markdownUpdated((_, nextMarkdown) => {
           onChangeRef.current(nextMarkdown);
           if (editorViewRef.current) {
@@ -1262,7 +1672,7 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
       })
       .use(commonmark)
       .use(gfm)
-      .use(codeBlockComponent)
+      .use([codeBlockConfig, sereinCodeBlockView])
       .use(imageInlineComponent)
       .use(tableBlock)
       .use(upload)
@@ -1332,18 +1742,33 @@ function EditorSurface({ markdown, onChange, command, onOpenLink, wikiLinkSugges
   );
 }
 
-export function MilkdownEditor({ markdown, onChange, command, onOpenLink, wikiLinkSuggestions, onCreateWikiLink, onImportImages, imagePreviewMap }: MilkdownEditorProps) {
+export function MilkdownEditor({
+  markdown,
+  onChange,
+  onRichMarkdownBaseline,
+  command,
+  onOpenLink,
+  wikiLinkSuggestions,
+  onCreateWikiLink,
+  onImportImages,
+  imagePreviewMap,
+  showImageSourceOnFocus,
+  normalizeWindowsImagePaths,
+}: MilkdownEditorProps) {
   return (
     <MilkdownProvider>
       <EditorSurface
         markdown={markdown}
         onChange={onChange}
+        onRichMarkdownBaseline={onRichMarkdownBaseline}
         command={command}
         onOpenLink={onOpenLink}
         wikiLinkSuggestions={wikiLinkSuggestions}
         onCreateWikiLink={onCreateWikiLink}
         onImportImages={onImportImages}
         imagePreviewMap={imagePreviewMap}
+        showImageSourceOnFocus={showImageSourceOnFocus}
+        normalizeWindowsImagePaths={normalizeWindowsImagePaths}
       />
     </MilkdownProvider>
   );

@@ -1,103 +1,75 @@
 # HANDOFF.md
 
-最后更新：2026-05-26 10:15
+最后更新：2026-05-29 15:11
 当前分支：serein-vault
-当前任务：Serein/Typora 桌面版进入内测，等待反馈后修 bug 和提升用户体验
+当前任务：Serein/Typora Rich Edit 代码块光标/选区偏移已修复，正在做交接沉淀
 
 ## 当前在做什么
 
-当前阶段已经从“能不能发”切换到“可以内测，等反馈后闭环修补”。
+用户在 Windows release `.exe` 中复现的核心问题已经修好：打开 `Sipeed\docs\Project_00_Serein.txt` 后，Rich Edit 代码块内删除、空格、回车、`Ctrl+X`、跨行选择都会出现像光标向前偏移一样的错误。最终根因不是剪贴板，也不是单个快捷键，而是该文件使用 CRLF 行尾；CodeMirror 代码块内部按 LF 计位，ProseMirror 文档保留 `\r\n` 时，第二行开始每行多出的 `\r` 会让 CodeMirror -> ProseMirror 的位置映射偏移。
 
-发布判定：
+当前修复策略：打开文件进入编辑器状态时统一把行尾规范成 LF；记录原文件行尾类型；保存时按原行尾写回。这样既消除编辑器坐标偏移，又不把用户原 CRLF 文件静默改成 LF。
 
-- 允许内测，不建议正式公开发布。
-- Typora 写作体验优先级最高，Obsidian/Vault 功能第二优先但仍重要。
-- 用户明确不能接受数据/链接问题，所以内测必须建议使用复制出来的 Vault，不要直接用唯一的重要文档。
-- 用户有干净 Windows 机器，可做安装和 release `.exe` 回归。
-
-当前可发内测包路径：
-
-```text
-D_deliverables\ys-writer-desktop\src-tauri\target\release\bundle\nsis\Serein_0.0.1_x64-setup.exe
-```
-
-推荐重新打包命令：
-
-```powershell
-.\T_tools\build_windows.ps1
-```
-
-说明：不加 `-SkipInstall` 是更稳的发包方式；`-SkipInstall` 只是依赖已经正确时的快速路径。
-
-本轮新增复杂测试 Vault：
-
-```text
-D_deliverables/serein-complex-vault/
-```
-
-用户已用该复杂 Vault 测试全部通过。覆盖了写作、保存、wiki link、标题跳转、创建未解析目标、重复文件名歧义、图片 PDF 导出、中文路径、空格路径、目录链接等。
+用户已确认 Windows 新包复测通过：“可以了！！”
 
 ## 已经试过的方案和结果（含失败的）
 
-- 已按项目规则运行 preflight；脚本仍硬编码 `/home/rv_nano/Sipeed`，在当前 `/home/slam/...` 环境会报告路径 missing，但命令退出成功。
-- 已多次验证：`npm run test`、`npm run typecheck`、`npm run build`、`cargo check`、`git diff --check`。
-- 既有 warning：`MilkdownEditor` chunk 超过 500 kB；`git diff --check` 会提示未改动 `LICENSE` CRLF。
-- 用户此前反馈 PDF 导出失败、图片不导出、文字间距异常、图谱关不掉等问题；已经修完并由用户确认。
-- 用户反馈 wiki link `[[A]]` 原来只是文本，不能跳转；已补 Rich Edit decoration、单击内部跳转、标题跳转。
-- 用户反馈 `[[C# test|显示文字]]` 打开文件但不跳标题；已补 `# test|显示文字` 与 `test` 的锚点匹配。
-- 用户反馈 `[[` 候选有时不显示或位置远；已改为 input 事件驱动、视口夹紧、portal 到 `document.body`。
-- 用户反馈右侧搜索、左侧搜索、目录搜索重复；已删除右侧知识面板 Search tab，保留左侧搜索入口。
-- 用户反馈右侧知识面板需要像图谱一样可开关；已加 ribbon 开关。
-- 用户反馈窗口最大化/关闭迟钝；已修 Tauri capability 路径、close-request 自拦截、SVG 图标点击冒泡到标题栏拖拽的问题。
-- 用户反馈窗口按钮仍有 0.5s 转圈；已去掉非必要 disabled/wait 光标，只保留内部 ref 防重复。
-- 用户确认复杂 Vault 测试全部通过，当前进入等待内测反馈阶段。
+- 已按项目规则读取 `AGENTS.md`、`HANDOFF.md`、`/home/slam/Sipeed/C_context/KNOWN_FAILURES.md`，运行 `python3 /home/slam/Sipeed/T_tools/agent_preflight.py --project typora`。脚本能跑，但内部硬编码 `/home/rv_nano/Sipeed`，路径检查不可直接采信。
+- 项目内未找到 `CLAUDE.md` 和 `C_context/KNOWN_FAILURES.md`；实际 known failures 在 `/home/slam/Sipeed/C_context/KNOWN_FAILURES.md`。
+- 第一轮误判偏向 Windows WebView2 / DOM selection 和 CodeMirror selection 不同步，于是在 `sereinCodeBlockView.ts` 中拦截 `copy/cut`、增加 `Mod-c/Mod-x`，让剪切复制走 CodeMirror 内部 selection。该方案只能覆盖剪切表象，用户反馈 Windows 仍然不行。
+- 后续重新分析“空格、回车、删除、剪切、跨行选择全部错”这一共同特征，判断是底层位置坐标系不一致，而不是剪贴板单点问题。
+- 用 `file /home/slam/Sipeed/docs/Project_00_Serein.txt` 和字节统计确认目标文件是 CRLF：`crlf 9 lf 9 cr 9`。
+- Vite dev server 上用 Playwright 探针验证 LF 路径正常：`ode` 剪切得到 `cx`，`c` 后空格得到 `c odex`，`c` 后回车得到 `c`/`odex` 两行。注意：浏览器 textarea 会规范 CRLF，所以旧探针不能完整复现 Windows 打开真实 CRLF 文件的偏移。
+- 最终改动：
+  - `src/vault/workspace.ts`：新增 `normalizeEditorLineEndings`、`detectLineEnding`、`applyLineEnding`；`createFileNote` 内部统一 LF，并记录原行尾。
+  - `src/domain/model.ts`：`Note` 增加 `lineEnding?: "lf" | "crlf"`。
+  - `src/App.tsx`：保存时按 `note.lineEnding` 写回；磁盘同步比较时先规范化行尾。
+  - `tests/vault.test.mjs`：新增 CRLF 文件进入编辑器后 LF、保存时仍写回 CRLF 的单测。
+- 已运行 `npm run test`：通过。
+- 已运行 `node node_modules/typescript/lib/tsc.js --noEmit`：通过。
+- 已运行 `npm run build`：通过；仍有既有 chunk > 500 kB warning。
+- 已运行代码块交互探针：LF 路径通过。
+- 用户 Windows `.exe` 新包复测通过。
 
 ## 下一步计划（3-5条actionable)
 
-1. 用户用 `.\T_tools\build_windows.ps1` 重新打包最新版，发 1-3 个可信内测用户。
-2. 内测用户必须先用复制出来的 Vault 测试，重点记录保存、导出、链接跳转、重命名、窗口关闭、安装卸载问题。
-3. 收到反馈后按“目标→状态→误差→控制动作→反馈→修正→验证→沉淀”闭环处理，先复现，再做最小修复。
-4. 下一阶段主线：继续保护 Typora 写作体验；Obsidian 方向优先补移动文件/目录后的链接同步、图谱聚焦、索引增量化。
-5. 正式发布前必须补：干净机安装矩阵、版本号递增、已知问题清单、数据备份/回滚策略、性能压力测试。
+1. 保留本次 CRLF 修复，不要回退到只修 `Ctrl+X` / DOM selection 的思路；如果以后代码块再偏移，先检查输入文件行尾、不可见字符和 CodeMirror/ProseMirror 坐标映射。
+2. 下次发 Windows 包前确认 Windows 源码已包含 `normalizeEditorLineEndings`，再执行 `.\T_tools\build_windows.ps1` 或 `.\T_tools\build_windows.ps1 -SkipInstall`。
+3. 对真实 Windows `.txt/.md` 文件继续补一轮手测：CRLF 文件、LF 文件、含多行代码块、跨行选择、保存后重新打开。
+4. 如果后续保存行为出现“整份文件变脏”或外部 diff 很大，优先检查行尾写回是否按原格式保持。
+5. 若要进一步工程化，可把“打开真实 CRLF 文件 -> Rich Edit 代码块操作 -> 保存仍 CRLF”做成 Tauri/Windows 专项回归测试。
 
 ## 关键文件路径（相对路径，一行一个）
 
+D_deliverables/ys-writer-desktop/src/vault/workspace.ts
+D_deliverables/ys-writer-desktop/src/domain/model.ts
 D_deliverables/ys-writer-desktop/src/App.tsx
+D_deliverables/ys-writer-desktop/tests/vault.test.mjs
+D_deliverables/ys-writer-desktop/src/components/sereinCodeBlockView.ts
 D_deliverables/ys-writer-desktop/src/components/MilkdownEditor.tsx
-D_deliverables/ys-writer-desktop/src/features/window-chrome/WindowChrome.tsx
-D_deliverables/ys-writer-desktop/src/features/knowledge-rail/KnowledgeRail.tsx
-D_deliverables/ys-writer-desktop/src/features/vault-sidebar/VaultSidebar.tsx
-D_deliverables/ys-writer-desktop/src/shared/markdown.ts
-D_deliverables/ys-writer-desktop/src/vault/index.ts
-D_deliverables/ys-writer-desktop/src-tauri/src/commands.rs
-D_deliverables/ys-writer-desktop/src-tauri/src/fs_ops.rs
-D_deliverables/ys-writer-desktop/src-tauri/src/vault.rs
-D_deliverables/serein-complex-vault/README.md
+D_deliverables/ys-writer-desktop/package.json
 C_context/PROJECT_MEMORY.md
 C_context/skills/serein-release-control/SKILL.md
-T_tools/build_windows.ps1
+HANDOFF.md
 
 ## 当前验证状态
 
+- 已运行：`python3 /home/slam/Sipeed/T_tools/agent_preflight.py --project typora`
+- 结果：脚本执行成功，但路径硬编码旧根，路径检查不可直接采信。
+- 已运行：`file /home/slam/Sipeed/docs/Project_00_Serein.txt`
+- 结果：确认目标文件是 UTF-8 + CRLF。
 - 已运行：`npm run test`
-- 结果：通过。
-- 已运行：`npm run typecheck`
+- 结果：通过，包含新增 CRLF 行尾单测。
+- 已运行：`node node_modules/typescript/lib/tsc.js --noEmit`
 - 结果：通过。
 - 已运行：`npm run build`
-- 结果：通过；仍有既有 `MilkdownEditor` chunk 超过 500 kB 的 Vite warning。
-- 已运行：`env CARGO_TARGET_DIR=/tmp/ys-writer-tauri-target /home/slam/.cargo/bin/cargo check`
-- 结果：通过。
-- 已运行：`git diff --check`
-- 结果：通过；仍有未改动 `LICENSE` 的 CRLF warning。
-- 已运行：Playwright/Vite UI smoke，路径 `/?demoVault=obsidian`
-- 结果：通过；确认 wiki 单击跳转、`[[` 候选浮层贴近光标、右侧面板/搜索收敛路径可用。
-- 用户已手测：复杂 Vault 全部通过。
-- 未验证：最新 commit 后的干净 Windows 机器安装；需要用户用 `.\T_tools\build_windows.ps1` 打包后验证。
+- 结果：通过，存在既有 chunk size warning。
+- 已运行：Vite dev server Playwright 代码块交互探针
+- 结果：通过，覆盖 `Ctrl+X`、右键剪切、空格、回车的 LF 路径。
+- 已验证：用户 Windows release `.exe` 复测通过。
 
 ## 还没搞清楚的问题
 
-- 真实内测用户的大 Vault 下，全量索引、反链、未链接提及和图谱是否会慢。
-- 移动文件/目录、外部文件系统改名后的链接同步还没完整闭环。
-- 重命名链接同步目前是确认式批量更新，还没有 diff 预览和一键回滚。
-- Rich Edit wiki link 使用 ProseMirror decoration，不是完整 Milkdown schema 节点；更深的标题候选、block reference 还没做。
-- Windows SmartScreen 未签名提示仍存在，正式发布前需要代码签名。
+- 当前没有自动化覆盖 Windows Tauri 直接打开真实 CRLF 文件的完整链路；这次依赖用户 release 实测闭环确认。
+- 工作区仍有大量既有未提交改动，后续提交时必须只纳入本次相关文件，不能混入无关功能和旧改动。
+- `src/components/sereinCodeBlockView.ts` 当前是未跟踪文件但已被 `MilkdownEditor.tsx` 引用；提交/打包前要确认它确实进入版本控制或进入 Windows 源码目录。

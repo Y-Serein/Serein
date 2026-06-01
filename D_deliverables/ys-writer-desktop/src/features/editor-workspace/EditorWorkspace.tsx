@@ -19,12 +19,15 @@ type EditorWorkspaceProps = {
   editorSurfaceRef: RefObject<HTMLElement>;
   plainEditorRef: RefObject<HTMLTextAreaElement>;
   onMarkdownChange: (markdown: string) => void;
+  onRichMarkdownBaseline: (markdown: string) => void;
   onOpenLink: (href: string) => boolean;
   wikiLinkSuggestions: WikiLinkSuggestion[];
   onCreateWikiLink: (target: string) => Promise<string | null>;
   onImportImages: (files: File[]) => Promise<Array<{ src: string; alt: string }>>;
   onPlainImageFiles: (files: File[]) => Promise<boolean>;
   imagePreviewMap: Record<string, string>;
+  showImageSourceOnFocus: boolean;
+  normalizeWindowsImagePaths: boolean;
 };
 
 export function EditorWorkspace({
@@ -36,12 +39,15 @@ export function EditorWorkspace({
   editorSurfaceRef,
   plainEditorRef,
   onMarkdownChange,
+  onRichMarkdownBaseline,
   onOpenLink,
   wikiLinkSuggestions,
   onCreateWikiLink,
   onImportImages,
   onPlainImageFiles,
   imagePreviewMap,
+  showImageSourceOnFocus,
+  normalizeWindowsImagePaths,
 }: EditorWorkspaceProps) {
   return (
     <main className="editor-column">
@@ -77,12 +83,15 @@ export function EditorWorkspace({
               key={activeNote.id}
               markdown={activeNote.markdown}
               onChange={onMarkdownChange}
+              onRichMarkdownBaseline={onRichMarkdownBaseline}
               command={richCommand}
               onOpenLink={onOpenLink}
               wikiLinkSuggestions={wikiLinkSuggestions}
               onCreateWikiLink={onCreateWikiLink}
               onImportImages={onImportImages}
               imagePreviewMap={imagePreviewMap}
+              showImageSourceOnFocus={showImageSourceOnFocus}
+              normalizeWindowsImagePaths={normalizeWindowsImagePaths}
             />
           </Suspense>
         )}

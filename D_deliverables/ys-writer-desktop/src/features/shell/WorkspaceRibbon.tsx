@@ -7,6 +7,7 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Plus,
   Search,
   Settings,
 } from "lucide-react";
@@ -17,8 +18,10 @@ type WorkspaceRibbonProps = {
   rightPanelVisible: boolean;
   vaultMode: boolean;
   graphOpen: boolean;
+  newNoteLabel: string;
   onToggleSidebar: () => void;
   onToggleRightPanel: () => void;
+  onCreateNote: () => void;
   onOpenVault: () => void;
   onOpenQuickOpen: () => void;
   onOpenCommandPalette: () => void;
@@ -32,8 +35,10 @@ export function WorkspaceRibbon({
   rightPanelVisible,
   vaultMode,
   graphOpen,
+  newNoteLabel,
   onToggleSidebar,
   onToggleRightPanel,
+  onCreateNote,
   onOpenVault,
   onOpenQuickOpen,
   onOpenCommandPalette,
@@ -83,6 +88,12 @@ export function WorkspaceRibbon({
       </div>
 
       <div className="ribbon-group bottom">
+        <IconButton
+          className="ribbon-button new-note-fab"
+          icon={<Plus size={18} />}
+          label={newNoteLabel}
+          onClick={onCreateNote}
+        />
         <IconButton
           className="ribbon-button"
           icon={<Command size={18} />}

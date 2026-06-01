@@ -75,7 +75,7 @@ pub fn resolve_vault_path(root: &str, relative_path: &str, must_exist: bool) -> 
         match component {
             Component::Normal(part) => {
                 if clean_relative.as_os_str().is_empty() && part == ".serein" {
-                    return Err("The .serein metadata directory is managed by Serein.".to_string());
+                    return Err("The legacy .serein metadata directory is reserved.".to_string());
                 }
                 clean_relative.push(part);
             }

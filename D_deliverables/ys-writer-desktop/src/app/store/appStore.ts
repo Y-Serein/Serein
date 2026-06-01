@@ -83,6 +83,10 @@ type AppStoreState = {
   zoomWithWheel: boolean;
   defaultSaveExt: SaveFileExt;
   defaultNewNoteName: string;
+  imageAttachmentFolder: string;
+  imagePathStyle: AppSettings["imagePathStyle"];
+  showImageSourceOnFocus: boolean;
+  normalizeWindowsImagePaths: boolean;
 
   settingsOpen: boolean;
   settingsSection: SettingsSection;
@@ -134,6 +138,10 @@ type AppStoreActions = {
   setZoomWithWheel: (value: boolean) => void;
   setDefaultSaveExt: (value: SaveFileExt) => void;
   setDefaultNewNoteName: (value: Updater<string>) => void;
+  setImageAttachmentFolder: (value: Updater<string>) => void;
+  setImagePathStyle: (value: AppSettings["imagePathStyle"]) => void;
+  setShowImageSourceOnFocus: (value: boolean) => void;
+  setNormalizeWindowsImagePaths: (value: boolean) => void;
   setSettingsOpen: (value: boolean) => void;
   setSettingsSection: (value: SettingsSection) => void;
   setAppDialog: (value: AppDialog | null) => void;
@@ -201,6 +209,10 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   zoomWithWheel: initialSettings.zoomWithWheel,
   defaultSaveExt: initialSettings.defaultSaveExt,
   defaultNewNoteName: initialSettings.defaultNewNoteName,
+  imageAttachmentFolder: initialSettings.imageAttachmentFolder,
+  imagePathStyle: initialSettings.imagePathStyle,
+  showImageSourceOnFocus: initialSettings.showImageSourceOnFocus,
+  normalizeWindowsImagePaths: initialSettings.normalizeWindowsImagePaths,
   settingsOpen: false,
   settingsSection: "general",
   appDialog: null,
@@ -249,6 +261,10 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   setZoomWithWheel: (value) => set({ zoomWithWheel: value }),
   setDefaultSaveExt: (value) => set({ defaultSaveExt: value }),
   setDefaultNewNoteName: (value) => set((state) => ({ defaultNewNoteName: resolveUpdater(state.defaultNewNoteName, value) })),
+  setImageAttachmentFolder: (value) => set((state) => ({ imageAttachmentFolder: resolveUpdater(state.imageAttachmentFolder, value) })),
+  setImagePathStyle: (value: AppSettings["imagePathStyle"]) => set({ imagePathStyle: value }),
+  setShowImageSourceOnFocus: (value: boolean) => set({ showImageSourceOnFocus: value }),
+  setNormalizeWindowsImagePaths: (value: boolean) => set({ normalizeWindowsImagePaths: value }),
   setSettingsOpen: (value) => set({ settingsOpen: value }),
   setSettingsSection: (value) => set({ settingsSection: value }),
   setAppDialog: (value) => set({ appDialog: value }),
