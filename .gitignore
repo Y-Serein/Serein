@@ -4,6 +4,9 @@ HANDOFF.md
 C_context/
 R_raw/
 
+# Local vault scratch notes
+D_deliverables/serein-complex-vault/References/mission.md
+
 # Dependencies
 node_modules/
 **/node_modules/
