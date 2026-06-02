@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.4 - 2026-06-02
+
+- Confirm the tracked product, release, and example files use the Serein project identity.
+- Stop tracking local context and handoff artifacts so release commits only carry source, product, and deliverable files.
+- Align desktop release metadata and expected Windows installer paths for the Serein 0.0.4 release.
+
 ## 0.0.2 - 2026-06-01
 
 - Harden Rich Edit file handling around CRLF line endings while preserving the original file line ending on save.
