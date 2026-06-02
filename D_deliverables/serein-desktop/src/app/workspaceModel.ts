@@ -70,7 +70,7 @@ export type SidebarTabGroup<TTab extends string> = {
   width: number;
 };
 
-export type ObsidianLikeWorkspaceState = {
+export type SereinWorkspaceState = {
   version: 1;
   ribbonVisible: boolean;
   leftSidebar: SidebarTabGroup<LeftSidebarTabId>;
@@ -97,7 +97,7 @@ export const defaultRightSidebarTabs: RightSidebarTabId[] = [
   "local-graph",
 ];
 
-export function createDefaultObsidianLikeWorkspace(): ObsidianLikeWorkspaceState {
+export function createDefaultSereinWorkspace(): SereinWorkspaceState {
   return {
     version: 1,
     ribbonVisible: true,

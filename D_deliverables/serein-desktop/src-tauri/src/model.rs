@@ -132,12 +132,4 @@ pub struct VaultInitResponse {
     pub root: String,
     pub config: VaultConfig,
     pub workspace: VaultWorkspaceState,
-    pub obsidian: VaultObsidianSettings,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VaultObsidianSettings {
-    pub detected: bool,
-    pub attachment_folder_path: Option<String>,
 }

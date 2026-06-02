@@ -1,9 +1,9 @@
 ---
 aliases: [Vault Model, Knowledge Model]
-tags: [obsidian, graph, test]
+tags: [serein, graph, test]
 ---
 
-# Obsidian Vault Model
+# Serein Vault Model
 
 This note is for Vault behavior.
 
@@ -17,7 +17,7 @@ Many notes link here:
 
 ## Outgoing Links
 
-- [[Ideas/Typora Writing Flow|Typora writing]]
+- [[Ideas/Serein Writing Flow|Serein writing]]
 - [[Ideas/C#test|Heading without display alias]]
 - [[D#User reported heading jump|Regression note]]
 - [[Missing Future Note]]
@@ -29,4 +29,4 @@ The words Writing Flow and Launch plan appear as plain text to test unlinked men
 
 ## Tags
 
-#obsidian #graph #links
+#serein #graph #links

@@ -7,7 +7,7 @@ use std::{
 use crate::{
     model::{
         VaultConfig, VaultDirectory, VaultIndexFile, VaultIndexResponse, VaultInitResponse,
-        VaultLayoutState, VaultObsidianSettings, VaultTreeEntry, VaultWorkspaceState,
+        VaultLayoutState, VaultTreeEntry, VaultWorkspaceState,
     },
     path_security::{
         ensure_path_inside_root, ensure_supported_text_path, is_supported_text_path,
@@ -46,7 +46,6 @@ pub fn init_vault(root: String, app_data_root: PathBuf) -> Result<VaultInitRespo
         root: root_path.to_string_lossy().to_string(),
         config,
         workspace,
-        obsidian: read_obsidian_settings(&root_path),
     })
 }
 
@@ -595,28 +594,6 @@ fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String>
     let serialized = serde_json::to_string_pretty(value)
         .map_err(|error| format!("Failed to serialize vault metadata: {error}"))?;
     atomic_write(path, serialized.as_bytes())
-}
-
-fn read_obsidian_settings(root: &Path) -> VaultObsidianSettings {
-    let obsidian_dir = root.join(".obsidian");
-    if !obsidian_dir.is_dir() {
-        return VaultObsidianSettings {
-            detected: false,
-            attachment_folder_path: None,
-        };
-    }
-
-    let app_json = obsidian_dir.join("app.json");
-    let attachment_folder_path = fs::read_to_string(app_json)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|value| value.get("attachmentFolderPath").and_then(|item| item.as_str()).map(str::to_string))
-        .filter(|value| !value.trim().is_empty());
-
-    VaultObsidianSettings {
-        detected: true,
-        attachment_folder_path,
-    }
 }
 
 fn unique_trash_path(trash_dir: &Path, target: &Path) -> Result<PathBuf, String> {

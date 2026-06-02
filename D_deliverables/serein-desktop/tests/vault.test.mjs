@@ -309,7 +309,7 @@ test("normalizes escaped wiki links emitted by rich edit serialization", () => {
   assert.equal(normalizeWikiLinkEscapes("```\n\\[\\[A]]\n```"), "```\n\\[\\[A]]\n```");
 });
 
-test("matches Obsidian-style heading aliases when jumping to a heading", () => {
+test("matches wiki-style heading aliases when jumping to a heading", () => {
   const markdown = [
     "# start",
     "",

@@ -1,75 +1,62 @@
 # HANDOFF.md
 
-最后更新：2026-05-29 15:11
+最后更新：2026-06-02 10:32
 当前分支：serein-vault
-当前任务：Serein/Typora Rich Edit 代码块光标/选区偏移已修复，正在做交接沉淀
+当前任务：项目已重命名为 Serein，准备提交并推送到新仓库
 
 ## 当前在做什么
 
-用户在 Windows release `.exe` 中复现的核心问题已经修好：打开 `Sipeed\docs\Project_00_Serein.txt` 后，Rich Edit 代码块内删除、空格、回车、`Ctrl+X`、跨行选择都会出现像光标向前偏移一样的错误。最终根因不是剪贴板，也不是单个快捷键，而是该文件使用 CRLF 行尾；CodeMirror 代码块内部按 LF 计位，ProseMirror 文档保留 `\r\n` 时，第二行开始每行多出的 `\r` 会让 CodeMirror -> ProseMirror 的位置映射偏移。
+本轮目标是把当前仓库面向用户和发布的项目命名收敛为 Serein，并把完整 Git 历史推送到 `https://github.com/Y-Serein/Serein`。
 
-当前修复策略：打开文件进入编辑器状态时统一把行尾规范成 LF；记录原文件行尾类型；保存时按原行尾写回。这样既消除编辑器坐标偏移，又不把用户原 CRLF 文件静默改成 LF。
+已完成的主要改动：
 
-用户已确认 Windows 新包复测通过：“可以了！！”
+- 正式桌面应用目录已调整为 `D_deliverables/serein-desktop/`。
+- 旧 HTML 原型目录已调整为 `D_deliverables/serein-prototype/`。
+- 构建脚本、README、用户手册、release skill、project memory 的路径和产品定位已同步到 Serein。
+- 源码里的开发演示入口改为 `demoVault=serein`，内部 workspace 类型改为 Serein 命名。
+- 删除未使用的旧竞品配置响应字段，避免 API 继续暴露旧品牌词。
+- 示例 Vault 中旧参考笔记已改为 `Serein Writing Flow` 和 `Serein Vault Model`，相关 wiki 链接和标签已同步。
 
 ## 已经试过的方案和结果（含失败的）
 
-- 已按项目规则读取 `AGENTS.md`、`HANDOFF.md`、`/home/slam/Sipeed/C_context/KNOWN_FAILURES.md`，运行 `python3 /home/slam/Sipeed/T_tools/agent_preflight.py --project typora`。脚本能跑，但内部硬编码 `/home/rv_nano/Sipeed`，路径检查不可直接采信。
-- 项目内未找到 `CLAUDE.md` 和 `C_context/KNOWN_FAILURES.md`；实际 known failures 在 `/home/slam/Sipeed/C_context/KNOWN_FAILURES.md`。
-- 第一轮误判偏向 Windows WebView2 / DOM selection 和 CodeMirror selection 不同步，于是在 `sereinCodeBlockView.ts` 中拦截 `copy/cut`、增加 `Mod-c/Mod-x`，让剪切复制走 CodeMirror 内部 selection。该方案只能覆盖剪切表象，用户反馈 Windows 仍然不行。
-- 后续重新分析“空格、回车、删除、剪切、跨行选择全部错”这一共同特征，判断是底层位置坐标系不一致，而不是剪贴板单点问题。
-- 用 `file /home/slam/Sipeed/docs/Project_00_Serein.txt` 和字节统计确认目标文件是 CRLF：`crlf 9 lf 9 cr 9`。
-- Vite dev server 上用 Playwright 探针验证 LF 路径正常：`ode` 剪切得到 `cx`，`c` 后空格得到 `c odex`，`c` 后回车得到 `c`/`odex` 两行。注意：浏览器 textarea 会规范 CRLF，所以旧探针不能完整复现 Windows 打开真实 CRLF 文件的偏移。
-- 最终改动：
-  - `src/vault/workspace.ts`：新增 `normalizeEditorLineEndings`、`detectLineEnding`、`applyLineEnding`；`createFileNote` 内部统一 LF，并记录原行尾。
-  - `src/domain/model.ts`：`Note` 增加 `lineEnding?: "lf" | "crlf"`。
-  - `src/App.tsx`：保存时按 `note.lineEnding` 写回；磁盘同步比较时先规范化行尾。
-  - `tests/vault.test.mjs`：新增 CRLF 文件进入编辑器后 LF、保存时仍写回 CRLF 的单测。
-- 已运行 `npm run test`：通过。
-- 已运行 `node node_modules/typescript/lib/tsc.js --noEmit`：通过。
-- 已运行 `npm run build`：通过；仍有既有 chunk > 500 kB warning。
-- 已运行代码块交互探针：LF 路径通过。
-- 用户 Windows `.exe` 新包复测通过。
+- 已运行项目 preflight；脚本可执行，但内部仍硬编码 `/home/rv_nano/Sipeed`，路径检查不可直接采信。
+- `git mv` 因沙箱不能写 `.git/index.lock` 失败；改用普通 `mv` 移动文件，后续由 `git add -A` 识别重命名。
+- 整目录移动正式应用时被忽略的构建缓存阻塞；已只移动 Git 跟踪文件，并把 `node_modules/dist/.test-dist/test-results` 迁到新目录用于本地验证。
+- 旧路径下的 Rust `target/` 缓存未移动成功，但它是忽略的生成物，不会进入提交。
+- 仓库里有一个既有未跟踪文件 `D_deliverables/serein-complex-vault/References/mission.md`，本轮未纳入提交。
 
 ## 下一步计划（3-5条actionable)
 
-1. 保留本次 CRLF 修复，不要回退到只修 `Ctrl+X` / DOM selection 的思路；如果以后代码块再偏移，先检查输入文件行尾、不可见字符和 CodeMirror/ProseMirror 坐标映射。
-2. 下次发 Windows 包前确认 Windows 源码已包含 `normalizeEditorLineEndings`，再执行 `.\T_tools\build_windows.ps1` 或 `.\T_tools\build_windows.ps1 -SkipInstall`。
-3. 对真实 Windows `.txt/.md` 文件继续补一轮手测：CRLF 文件、LF 文件、含多行代码块、跨行选择、保存后重新打开。
-4. 如果后续保存行为出现“整份文件变脏”或外部 diff 很大，优先检查行尾写回是否按原格式保持。
-5. 若要进一步工程化，可把“打开真实 CRLF 文件 -> Rich Edit 代码块操作 -> 保存仍 CRLF”做成 Tauri/Windows 专项回归测试。
+1. 执行 `git add -A`，确认暂存区只包含本次重命名和命名清理。
+2. 提交 commit，建议信息：`Rename project to Serein`。
+3. 将 `origin` 从旧仓库地址切换到 `https://github.com/Y-Serein/Serein.git`。
+4. 推送当前 `serein-vault` 分支到新仓库，并保留完整历史。
+5. 如需要默认分支为 `main`，推送后再按用户要求处理分支命名或 GitHub 默认分支设置。
 
 ## 关键文件路径（相对路径，一行一个）
 
-D_deliverables/ys-writer-desktop/src/vault/workspace.ts
-D_deliverables/ys-writer-desktop/src/domain/model.ts
-D_deliverables/ys-writer-desktop/src/App.tsx
-D_deliverables/ys-writer-desktop/tests/vault.test.mjs
-D_deliverables/ys-writer-desktop/src/components/sereinCodeBlockView.ts
-D_deliverables/ys-writer-desktop/src/components/MilkdownEditor.tsx
-D_deliverables/ys-writer-desktop/package.json
+D_deliverables/serein-desktop/
+D_deliverables/serein-prototype/
+D_deliverables/serein-complex-vault/
+T_tools/build_windows.ps1
+README.md
 C_context/PROJECT_MEMORY.md
 C_context/skills/serein-release-control/SKILL.md
 HANDOFF.md
 
 ## 当前验证状态
 
-- 已运行：`python3 /home/slam/Sipeed/T_tools/agent_preflight.py --project typora`
-- 结果：脚本执行成功，但路径硬编码旧根，路径检查不可直接采信。
-- 已运行：`file /home/slam/Sipeed/docs/Project_00_Serein.txt`
-- 结果：确认目标文件是 UTF-8 + CRLF。
 - 已运行：`npm run test`
-- 结果：通过，包含新增 CRLF 行尾单测。
-- 已运行：`node node_modules/typescript/lib/tsc.js --noEmit`
 - 结果：通过。
 - 已运行：`npm run build`
-- 结果：通过，存在既有 chunk size warning。
-- 已运行：Vite dev server Playwright 代码块交互探针
-- 结果：通过，覆盖 `Ctrl+X`、右键剪切、空格、回车的 LF 路径。
-- 已验证：用户 Windows release `.exe` 复测通过。
+- 结果：通过。
+- 已运行：`CARGO_TARGET_DIR=/tmp/serein-tauri-target /home/slam/.cargo/bin/cargo check`
+- 结果：通过。
+- 已运行：应用/脚本/README/示例 Vault/tracked memory 的旧品牌词扫描。
+- 结果：可提交范围未发现旧品牌词命中。
 
 ## 还没搞清楚的问题
 
-- 当前没有自动化覆盖 Windows Tauri 直接打开真实 CRLF 文件的完整链路；这次依赖用户 release 实测闭环确认。
-- 工作区仍有大量既有未提交改动，后续提交时必须只纳入本次相关文件，不能混入无关功能和旧改动。
-- `src/components/sereinCodeBlockView.ts` 当前是未跟踪文件但已被 `MilkdownEditor.tsx` 引用；提交/打包前要确认它确实进入版本控制或进入 Windows 源码目录。
+- 尚未推送到新远程；推送需要网络和 GitHub 权限。
+- 本地被忽略的历史草稿、日志、AGENTS 本地规则里仍可能包含旧项目资料；这些不会进入新仓库提交。
+- 本地 checkout 根目录名仍是历史名称，这是工作区文件夹名，不属于 Git 提交内容。

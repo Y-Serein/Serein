@@ -1,6 +1,6 @@
 # Serein Desktop Quick Start
 
-Serein is a local Markdown desktop writer with a Vault workflow similar to Obsidian. Files stay on disk; opening, saving, renaming, and deleting operate on real local files.
+Serein is a local Markdown desktop writer with a linked Vault workflow. Files stay on disk; opening, saving, renaming, and deleting operate on real local files.
 
 ## Start
 

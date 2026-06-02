@@ -16,5 +16,5 @@ This note tests image preview and PDF export.
 
 ## Links
 
-- [[Ideas/Typora Writing Flow#Image]]
+- [[Ideas/Serein Writing Flow#Image]]
 - [[Projects/Serein Launch]]

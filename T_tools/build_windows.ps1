@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$appDir = Join-Path $repoRoot "D_deliverables\ys-writer-desktop"
+$appDir = Join-Path $repoRoot "D_deliverables\serein-desktop"
 $tauriCli = Join-Path $appDir "node_modules\@tauri-apps\cli\tauri.js"
 $tauriWinCliPackage = Join-Path $appDir "node_modules\@tauri-apps\cli-win32-x64-msvc"
 $targetDir = Join-Path $appDir "src-tauri\target"

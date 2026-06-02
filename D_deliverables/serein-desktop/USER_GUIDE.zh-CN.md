@@ -1,6 +1,6 @@
 # Serein 桌面版用户指南
 
-Serein 是一个本地 Markdown 桌面写作工具，目标体验接近 Typora，并提供类似 Obsidian 的 Vault 工作流。文件保存在本机磁盘上，打开、保存、重命名、删除等操作都会作用到真实本地文件。
+Serein 是一个本地 Markdown 桌面写作工具，提供沉浸式编辑和链接化 Vault 工作流。文件保存在本机磁盘上，打开、保存、重命名、删除等操作都会作用到真实本地文件。
 
 ## 快速开始
 
@@ -197,6 +197,6 @@ Vault 索引当前识别这些格式：
 预期产物：
 
 ```text
-D_deliverables\ys-writer-desktop\src-tauri\target\release\bundle\nsis\Serein_0.0.1_x64-setup.exe
-D_deliverables\ys-writer-desktop\src-tauri\target\release\serein-desktop.exe
+D_deliverables\serein-desktop\src-tauri\target\release\bundle\nsis\Serein_0.0.1_x64-setup.exe
+D_deliverables\serein-desktop\src-tauri\target\release\serein-desktop.exe
 ```

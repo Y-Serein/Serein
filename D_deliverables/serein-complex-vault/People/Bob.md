@@ -6,8 +6,8 @@ role: tester
 
 # Bob
 
-Bob tests Obsidian-like workflows:
+Bob tests linked knowledge workflows:
 
-- [[Ideas/Obsidian Vault Model]]
+- [[Ideas/Serein Vault Model]]
 - [[D#User reported heading jump]]
 - [[Missing Future Note]]

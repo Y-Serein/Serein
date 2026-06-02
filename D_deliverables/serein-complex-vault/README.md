@@ -11,8 +11,8 @@ This vault is for release smoke testing. Use a copy of it when testing destructi
 ## Core Paths
 
 - Start from [[00 Inbox/Start Here|Start Here]].
-- Test Typora-style writing in [[Ideas/Typora Writing Flow]].
-- Test Obsidian-style links in [[Ideas/Obsidian Vault Model]].
+- Test Serein writing writing in [[Ideas/Serein Writing Flow]].
+- Test linked vault links in [[Ideas/Serein Vault Model]].
 - Test heading jump with [[D#User reported heading jump]].
 - Test image export with [[References/Attachment Test]].
 - Test duplicate-name ambiguity with [[Note]].

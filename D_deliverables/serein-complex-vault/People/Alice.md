@@ -10,4 +10,4 @@ Alice reviews the [[Projects/Serein Launch|launch plan]] and checks data safety.
 
 ## Notes
 
-Alice cares about Typora-like writing quality.
+Alice cares about Serein writing quality.

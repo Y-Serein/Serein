@@ -9,11 +9,11 @@ This note links to most test areas.
 
 ## Writing
 
-Open [[Ideas/Typora Writing Flow]] and edit paragraphs, lists, tables, quotes, code blocks, and images.
+Open [[Ideas/Serein Writing Flow]] and edit paragraphs, lists, tables, quotes, code blocks, and images.
 
 ## Vault
 
-Open [[Ideas/Obsidian Vault Model|Vault Model]] and inspect backlinks, outgoing links, tags, graph, and unresolved links.
+Open [[Ideas/Serein Vault Model|Vault Model]] and inspect backlinks, outgoing links, tags, graph, and unresolved links.
 
 ## User Report Regression
 

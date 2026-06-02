@@ -1,6 +1,6 @@
 import type { MarkdownFileResponse, VaultIndexFileResponse, VaultIndexResponse, VaultTreeEntry } from "../app/types";
 
-const root = "/demo/Obsidian Workspace";
+const root = "/demo/Serein Workspace";
 
 const files: VaultIndexFileResponse[] = [
   note("Ideas/Writing is telepathy.md", [
@@ -87,7 +87,7 @@ const files: VaultIndexFileResponse[] = [
     "1. Data safety first",
     "2. Fast startup",
     "3. Quiet visual hierarchy",
-    "4. Typora-like writing, Obsidian-like workspace",
+    "4. Focused writing, linked knowledge workspace",
     "",
     "This supports [[Projects/Serein launch]].",
   ].join("\n")),
@@ -166,7 +166,7 @@ function toMarkdownFile(file: VaultIndexFileResponse): MarkdownFileResponse {
 
 function buildTree(indexFiles: VaultIndexFileResponse[]): VaultTreeEntry {
   const rootEntry: VaultTreeEntry = {
-    name: "Obsidian Workspace",
+    name: "Serein Workspace",
     path: root,
     relativePath: "",
     kind: "directory",

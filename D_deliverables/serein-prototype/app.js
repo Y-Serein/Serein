@@ -1,10 +1,10 @@
-const STORAGE_KEY = "ys-writer-documents-v1";
+const STORAGE_KEY = "serein-prototype-documents-v1";
 
-const sampleMarkdown = `# YS Writer 产品笔记
+const sampleMarkdown = `# Serein 产品笔记
 
-YS Writer 的第一目标是把写作区做干净：默认就是一张可编辑的文档纸面，Markdown 源码和分屏预览只作为辅助模式。
+Serein 的第一目标是把写作区做干净：默认就是一张可编辑的文档纸面，Markdown 源码和分屏预览只作为辅助模式。
 
-## 已覆盖的 Typora 核心体验
+## 已覆盖的核心写作体验
 
 - 即时预览与源码编辑
 - 大纲跳转、文件列表、字数统计
@@ -28,7 +28,7 @@ function write() {
 }
 \`\`\`
 
-> 产品方向：保留 Typora 的沉浸式写作优点，但视觉上做成更像独立产品，而不是简单复刻。
+> 产品方向：保留沉浸式写作优点，并形成 Serein 自己的视觉和交互语言。
 `;
 
 const state = {
@@ -79,7 +79,7 @@ function loadState() {
     const id = uid();
     state.docs = [{
       id,
-      title: "YS Writer 产品笔记",
+      title: "Serein 产品笔记",
       body: sampleMarkdown,
       updatedAt: Date.now(),
     }];

@@ -138,16 +138,10 @@ export type VaultConfig = {
   updatedAt: string;
 };
 
-export type VaultObsidianSettings = {
-  detected: boolean;
-  attachmentFolderPath: string | null;
-};
-
 export type VaultInitResponse = {
   root: string;
   config: VaultConfig;
   workspace: VaultWorkspaceState;
-  obsidian: VaultObsidianSettings;
 };
 
 export type ActiveNote = Note;

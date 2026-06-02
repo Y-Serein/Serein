@@ -13,7 +13,7 @@ Serein launch is an internal alpha release, not a public release.
 - [ ] Build Windows installer.
 - [ ] Install on a clean Windows machine.
 - [ ] Open [[../README|Complex Vault Home]].
-- [ ] Edit and save [[../Ideas/Typora Writing Flow]].
+- [ ] Edit and save [[../Ideas/Serein Writing Flow]].
 - [ ] Export [[../References/Attachment Test]] to PDF.
 - [ ] Rename [[../Ideas/C]] and review link rewrite.
 

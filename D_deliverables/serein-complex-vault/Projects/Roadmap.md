@@ -7,7 +7,7 @@ tags: [project, roadmap]
 ## P0
 
 - Save and open without data loss.
-- Typora-like editing path.
+- Serein editing path.
 - PDF export with images.
 - Internal wiki links.
 
@@ -20,5 +20,5 @@ tags: [project, roadmap]
 ## Links
 
 - [[Serein Launch]]
-- [[Ideas/Obsidian Vault Model]]
+- [[Ideas/Serein Vault Model]]
 - [Markdown spec notes](../References/Markdown%20Spec%20Notes.md)

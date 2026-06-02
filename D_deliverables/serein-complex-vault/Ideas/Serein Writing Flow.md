@@ -1,11 +1,11 @@
 ***
 
-aliases: \[Writing Flow, Typora Flow]
-tags: \[writing, typora, test]
+aliases: \[Writing Flow, Serein Flow]
+tags: \[writing, serein, test]
 priority: 1
 -----------
 
-# Typora Writing Flow
+# Serein Writing Flow
 
 This note is for testing the writing experience first. It should feel quiet, direct, and stable.
 

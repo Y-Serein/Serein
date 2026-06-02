@@ -1,4 +1,4 @@
-# Serein Typora Project Memory
+# Serein Project Memory
 
 最后更新：2026-05-29 15:11
 
@@ -11,7 +11,7 @@
 - 用户更喜欢简洁风格，UI 不要堆太多重复入口。搜索入口过多就是用户明确反感的例子。
 - 用户对数据安全极敏感，不能接受真实文档数据或链接被破坏。
 - 用户愿意做 Windows release 实测，也愿意提供干净 Windows 机器。
-- 用户偏好：Typora 写作体验优先级第一，Obsidian/Vault 功能第二优先但仍重要。
+- 用户偏好：沉浸式写作体验优先级第一，Vault/知识工作流第二优先但仍重要。
 - 用户要的是内测可用，不是为了“看起来完成”而隐藏风险。
 - 用户希望 AI 先读项目规则、HANDOFF、KNOWN_FAILURES，运行 preflight，再接手；但不能停在流程表演，必须尽快收敛到可验证结果。
 - 用户能接受“先不改代码、先汇报状态”的对齐阶段，但一旦问题明确，期望 AI 主动推进到修复、验证、沉淀。
@@ -38,8 +38,8 @@
 
 ## 项目关键约束
 
-- 正式交付物在 `D_deliverables/ys-writer-desktop/`。
-- 旧原型 `D_deliverables/ys_typora_app/` 默认不要修改。
+- 正式交付物在 `D_deliverables/serein-desktop/`。
+- 旧原型 `D_deliverables/serein-prototype/` 默认不要修改。
 - 技术栈：Tauri 2 + Rust + React 18 + TypeScript + Vite + Milkdown。
 - Windows `.exe` 推荐打包入口：
 
@@ -51,12 +51,12 @@
 - 当前测试命令：
 
 ```bash
-cd D_deliverables/ys-writer-desktop
+cd D_deliverables/serein-desktop
 npm run test
 npm run typecheck
 npm run build
 cd src-tauri
-env CARGO_TARGET_DIR=/tmp/ys-writer-tauri-target /home/slam/.cargo/bin/cargo check
+env CARGO_TARGET_DIR=/tmp/serein-tauri-target /home/slam/.cargo/bin/cargo check
 ```
 
 - 常见 warning：
@@ -69,10 +69,10 @@ D_deliverables/serein-complex-vault/
 ```
 
 - 代码块编辑器关键路径：
-  - `D_deliverables/ys-writer-desktop/src/components/sereinCodeBlockView.ts`
-  - `D_deliverables/ys-writer-desktop/src/components/MilkdownEditor.tsx`
-  - `D_deliverables/ys-writer-desktop/src/vault/workspace.ts`
-  - `D_deliverables/ys-writer-desktop/src/App.tsx`
+  - `D_deliverables/serein-desktop/src/components/sereinCodeBlockView.ts`
+  - `D_deliverables/serein-desktop/src/components/MilkdownEditor.tsx`
+  - `D_deliverables/serein-desktop/src/vault/workspace.ts`
+  - `D_deliverables/serein-desktop/src/App.tsx`
 - 文本文件打开后，编辑器内部应统一 LF；`Note.lineEnding` 记录原始 `lf/crlf`，保存时用 `applyLineEnding` 写回。
 - Windows `.txt` 文件很可能是 CRLF，尤其是用户在 PowerShell/Windows 工具链里创建或维护的文件。
 
@@ -85,7 +85,7 @@ D_deliverables/serein-complex-vault/
 - `[[A#标题|显示文字]]` 要保留 alias 和 heading；`# test|显示文字` 这种用户写法要能跳到 `test`。
 - 重命名链接同步当前是确认式批量更新，不是完整 diff 预览；正式发布前最好补预览/回滚。
 - 未签名 Windows 包会触发 SmartScreen，内测可以接受，正式发布不能忽略。
-- 版本号仍是 `0.0.1`；频繁内测发包时要提醒测试者卸载旧版或确认安装的是新包。
+- 版本号需随内测发包持续确认；频繁内测发包时要提醒测试者卸载旧版或确认安装的是新包。
 - `Sipeed/docs/Project_00_Serein.txt` 是 CRLF。曾导致 Rich Edit 代码块内 `codex` 选 `ode` 后 `Ctrl+X` 变成 `ex`，以及空格、回车、跨行选择偏移。根因是 CodeMirror/ProseMirror 行尾计位不一致。
 - 浏览器 dev server 探针通过不能证明 Windows release 打开真实文件也通过；如果探针通过但用户 Windows 失败，要检查真实文件字节、行尾和打包源码是否一致。
 - `src/components/sereinCodeBlockView.ts` 曾处于未跟踪状态但被 `MilkdownEditor.tsx` 引用；提交/同步 Windows 源码前必须确认该文件被纳入。
@@ -93,23 +93,23 @@ D_deliverables/serein-complex-vault/
 ## 下次一次性达到类似效果的提示词
 
 ```text
-你是这个项目的发布审核者和工程控制论式接手者。请先阅读 AGENTS.md、HANDOFF.md、C_context/PROJECT_MEMORY.md、C_context/KNOWN_FAILURES.md（如存在），运行项目 preflight。目标是判断 Serein/Typora 是否能发内测，不要急着改代码。
+你是这个项目的发布审核者和工程控制论式接手者。请先阅读 AGENTS.md、HANDOFF.md、C_context/PROJECT_MEMORY.md、C_context/KNOWN_FAILURES.md（如存在），运行项目 preflight。目标是判断 Serein 是否能发内测，不要急着改代码。
 
-我的优先级是：Typora 写作体验第一，Obsidian/Vault 第二；数据安全不能妥协；UI 简洁，不要重复入口；必须以 Windows release .exe 体验为准。
+我的优先级是：沉浸式写作体验第一，Vault/知识工作流第二；数据安全不能妥协；UI 简洁，不要重复入口；必须以 Windows release .exe 体验为准。
 
 请按“目标→状态→误差→控制动作→反馈→修正→验证→沉淀”闭环推进：
 1. 先给发布状态和风险清单。
 2. 如果发现阻断内测的问题，做最小可回滚修复。
 3. 每个修复必须说明验证命令或无法验证原因。
 4. 对 Vault/链接/保存/导出/窗口控制要优先保护真实用户数据。
-5. 不要修改旧原型 ys_typora_app。
+5. 不要修改旧原型 `D_deliverables/serein-prototype/`。
 6. 完成后更新 HANDOFF 和项目 memory，并给我可执行的 Windows 手测清单。
 ```
 
 ### 针对 Rich Edit / 代码块偏移的更强提示词
 
 ```text
-你是 Serein/Typora Rich Edit 编辑器问题排查者。请先读 AGENTS.md、HANDOFF.md、C_context/PROJECT_MEMORY.md，运行 preflight。我的问题发生在 Windows release .exe，不要只用浏览器 dev server 结论替代。
+你是 Serein Rich Edit 编辑器问题排查者。请先读 AGENTS.md、HANDOFF.md、C_context/PROJECT_MEMORY.md，运行 preflight。我的问题发生在 Windows release .exe，不要只用浏览器 dev server 结论替代。
 
 请按闭环定位，不要先猜快捷键：
 目标：代码块内光标、选区、输入、删除、剪切、跨行选择都必须和视觉位置一致。

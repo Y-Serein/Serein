@@ -1,11 +1,11 @@
 ---
 name: serein-release-control
-description: Use this skill whenever working on the Serein/Typora desktop app release, internal beta, Vault/Obsidian-like workflow, Typora-like writing experience, Windows packaging, or post-test bug triage. It enforces the project’s control-loop workflow, data-safety priorities, validation gates, and known pitfalls from the Serein release audit.
+description: Use this skill whenever working on the Serein desktop app release, internal beta, linked Vault workflow, immersive writing experience, Windows packaging, or post-test bug triage. It enforces the project’s control-loop workflow, data-safety priorities, validation gates, and known pitfalls from the Serein release audit.
 ---
 
 # Serein Release Control
 
-Use this skill when the user asks to audit, package, test, release, triage feedback, or improve the Serein/Typora desktop app.
+Use this skill when the user asks to audit, package, test, release, triage feedback, or improve the Serein desktop app.
 
 ## Operating Loop
 
@@ -27,8 +27,8 @@ Keep the loop practical. Do not write theory if the next step is obvious; state 
 Respect this order:
 
 1. Data safety: no silent loss, overwrite, or unsafe link rewrite.
-2. Typora-like writing experience: edit, save, Rich/Plain Edit, links, images, tables, PDF export.
-3. Obsidian/Vault workflow: wiki links, backlinks, outgoing links, graph, unresolved note creation.
+2. Immersive writing experience: edit, save, Rich/Plain Edit, links, images, tables, PDF export.
+3. Linked Vault workflow: wiki links, backlinks, outgoing links, graph, unresolved note creation.
 4. Startup speed and no large-directory freezing.
 5. UI simplicity and polish.
 6. Architecture cleanup only when it reduces real risk or unlocks the next feature.
@@ -79,7 +79,7 @@ Use `-SkipInstall` only when Windows dependencies are known fresh:
 The installer path is:
 
 ```text
-D_deliverables\ys-writer-desktop\src-tauri\target\release\bundle\nsis\Serein_0.0.1_x64-setup.exe
+D_deliverables\serein-desktop\src-tauri\target\release\bundle\nsis\Serein_0.0.1_x64-setup.exe
 ```
 
 Tell users that the installer is directly usable by Windows x64 testers and does not require Node/Rust/source, but unsigned internal builds may trigger SmartScreen.
@@ -89,7 +89,7 @@ Tell users that the installer is directly usable by Windows x64 testers and does
 Prefer the smallest relevant validation:
 
 ```bash
-cd D_deliverables/ys-writer-desktop
+cd D_deliverables/serein-desktop
 npm run test
 npm run typecheck
 npm run build
@@ -98,8 +98,8 @@ npm run build
 Rust/Tauri static check:
 
 ```bash
-cd D_deliverables/ys-writer-desktop/src-tauri
-env CARGO_TARGET_DIR=/tmp/ys-writer-tauri-target /home/slam/.cargo/bin/cargo check
+cd D_deliverables/serein-desktop/src-tauri
+env CARGO_TARGET_DIR=/tmp/serein-tauri-target /home/slam/.cargo/bin/cargo check
 ```
 
 Known non-blocking warnings:
@@ -109,7 +109,7 @@ Known non-blocking warnings:
 
 ## Known Pitfalls
 
-- Do not modify `D_deliverables/ys_typora_app/` unless explicitly requested.
+- Do not modify `D_deliverables/serein-prototype/` unless explicitly requested.
 - Do not recursively scan huge Vault directories.
 - Do not treat browser smoke as proof of Tauri window behavior.
 - Tauri 2 window APIs require matching capabilities; prefer already-authorized APIs.
@@ -143,12 +143,12 @@ When the user reports code-block cursor drift, selection drift, `Ctrl+X` deletin
 Relevant files:
 
 ```text
-D_deliverables/ys-writer-desktop/src/vault/workspace.ts
-D_deliverables/ys-writer-desktop/src/domain/model.ts
-D_deliverables/ys-writer-desktop/src/App.tsx
-D_deliverables/ys-writer-desktop/src/components/sereinCodeBlockView.ts
-D_deliverables/ys-writer-desktop/src/components/MilkdownEditor.tsx
-D_deliverables/ys-writer-desktop/tests/vault.test.mjs
+D_deliverables/serein-desktop/src/vault/workspace.ts
+D_deliverables/serein-desktop/src/domain/model.ts
+D_deliverables/serein-desktop/src/App.tsx
+D_deliverables/serein-desktop/src/components/sereinCodeBlockView.ts
+D_deliverables/serein-desktop/src/components/MilkdownEditor.tsx
+D_deliverables/serein-desktop/tests/vault.test.mjs
 ```
 
 Useful prompt to trigger this triage:

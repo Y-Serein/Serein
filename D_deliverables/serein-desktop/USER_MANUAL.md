@@ -10,7 +10,7 @@
 
 ## 2. 编辑和保存
 
-- Rich Edit 更接近 Typora 的写作体验。
+- Rich Edit 提供沉浸式所见即所得写作体验。
 - Plain Edit 是纯 Markdown 文本编辑。
 - 右上角可以切换 Rich Edit / Plain Edit。
 - 切换文件、关闭标签或执行可能丢失修改的操作时，如果当前文件未保存，会出现保存确认。

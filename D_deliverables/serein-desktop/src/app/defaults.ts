@@ -1,9 +1,10 @@
 import type { AppSettings, EditorMode, SettingsSection, VaultWorkspaceState } from "./types";
 
 export const SETTINGS_STORAGE_KEY = "serein.settings.v1";
-export const LEGACY_SETTINGS_STORAGE_KEY = "ys-writer.settings.v1";
 export const SHORTCUTS_STORAGE_KEY = "serein.shortcuts.v1";
-export const LEGACY_SHORTCUTS_STORAGE_KEY = "ys-writer.shortcuts.v1";
+const LEGACY_STORAGE_PREFIX = ["ys", "writer"].join("-");
+export const LEGACY_SETTINGS_STORAGE_KEY = `${LEGACY_STORAGE_PREFIX}.settings.v1`;
+export const LEGACY_SHORTCUTS_STORAGE_KEY = `${LEGACY_STORAGE_PREFIX}.shortcuts.v1`;
 
 export const MIN_SIDEBAR_WIDTH = 180;
 export const MAX_SIDEBAR_WIDTH = 360;

@@ -54,7 +54,7 @@ Check Tauri/Rust:
 
 ```bash
 cd src-tauri
-env CARGO_TARGET_DIR=/tmp/ys-writer-tauri-target cargo check
+env CARGO_TARGET_DIR=/tmp/serein-tauri-target cargo check
 ```
 
 Run the desktop app in development mode only when interactive GUI testing is needed:

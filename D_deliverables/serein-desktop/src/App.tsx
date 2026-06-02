@@ -1244,7 +1244,7 @@ export default function App() {
 
   useEffect(() => {
     if (!import.meta.env.DEV || loadedDemoVaultRef.current) return;
-    if (new URLSearchParams(window.location.search).get("demoVault") !== "obsidian") return;
+    if (new URLSearchParams(window.location.search).get("demoVault") !== "serein") return;
     loadedDemoVaultRef.current = true;
 
     const demo = createDemoVault();
