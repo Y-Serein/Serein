@@ -1,13 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
-import { Bookmark, FileText, Folder, FolderOpen, RotateCcw, Search, Tag, Trash2, Edit3 } from "lucide-react";
+import { FileText, Folder, FolderOpen, RotateCcw, Search, Trash2, Edit3 } from "lucide-react";
 import type { LeftPanelTab } from "../../app/store/appStore";
 import type { AppLanguage, appText } from "../../app/i18n";
 import type { VaultTreeEntry } from "../../app/types";
 import type { Note } from "../../domain/model";
 import type { OutlineItem } from "../../shared/markdown";
 import type { VaultIndex } from "../../vault";
-import { listVaultTags, searchVaultIndex } from "../../vault";
+import { searchVaultIndex } from "../../vault";
 import { Button, IconButton, SegmentedTabs, cx } from "../../shared/ui";
 
 type TextBundle = (typeof appText)[AppLanguage];
@@ -27,6 +27,7 @@ type VaultSidebarProps = {
   activeNote: Note;
   notes: Note[];
   outline: OutlineItem[];
+  searchFocusSignal: number;
   onTabChange: (tab: LeftPanelTab) => void;
   onDispatchCommand: (commandId: string) => void;
   onOpenMarkdownFile: (path: string) => void;
@@ -67,8 +68,9 @@ function VaultEntry({
   onDeleteVaultEntry: (entry: VaultTreeEntry) => void;
   onEntryContextMenu: (entry: VaultTreeEntry, event: ReactMouseEvent<HTMLElement>) => void;
 }) {
-  const expanded = entry.relativePath === "" || expandedDirs.has(entry.relativePath);
   const isDirectory = entry.kind === "directory";
+  const expanded = entry.relativePath === ""
+    || (expandedDirs.has(entry.relativePath) && (entry.loaded || entry.loading || entry.children.length > 0));
   const showDirectorySelection = !activeFilePath;
 
   return (
@@ -158,6 +160,7 @@ export function VaultSidebar({
   activeNote,
   notes,
   outline,
+  searchFocusSignal,
   onTabChange,
   onDispatchCommand,
   onOpenMarkdownFile,
@@ -171,9 +174,51 @@ export function VaultSidebar({
   onSelectNote,
 }: VaultSidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const searchResults = useMemo(() => searchVaultIndex(vaultIndex, searchQuery, { limit: 60 }), [searchQuery, vaultIndex]);
-  const tags = useMemo(() => listVaultTags(vaultIndex), [vaultIndex]);
-  const hasSidebarSearchIntent = searchQuery.trim().length > 0;
+  const normalizedSearchQuery = searchQuery.trim();
+  const searchPrefix = ["@", "/", "#", ":"].includes(normalizedSearchQuery[0]) ? normalizedSearchQuery[0] : "";
+  const effectiveSearchQuery = searchPrefix ? normalizedSearchQuery.slice(1).trim() : normalizedSearchQuery;
+  const hasSidebarSearchIntent = effectiveSearchQuery.length > 0;
+  const searchScopeLabels = useMemo(() => ({
+    title: t.knowledge.searchTitle,
+    path: t.knowledge.searchPath,
+    tag: t.knowledge.searchTag,
+    content: t.knowledge.searchContent,
+  }), [t.knowledge.searchContent, t.knowledge.searchPath, t.knowledge.searchTag, t.knowledge.searchTitle]);
+  const searchScopes = useMemo(() => [
+    { prefix: "", label: t.knowledge.searchAll, title: t.knowledge.searchPlaceholder },
+    { prefix: "@", label: "@", title: t.knowledge.searchTitle },
+    { prefix: "/", label: "/", title: t.knowledge.searchPath },
+    { prefix: "#", label: "#", title: t.knowledge.searchTag },
+    { prefix: ":", label: ":", title: t.knowledge.searchContent },
+  ], [t.knowledge.searchAll, t.knowledge.searchContent, t.knowledge.searchPath, t.knowledge.searchPlaceholder, t.knowledge.searchTag, t.knowledge.searchTitle]);
+  const activeSearchPrefix = useMemo(() => {
+    return searchPrefix;
+  }, [searchPrefix]);
+  const setSearchScope = (prefix: string) => {
+    setSearchQuery((current) => {
+      const trimmed = current.trimStart();
+      const currentPrefix = ["@", "/", "#", ":"].includes(trimmed[0]) ? trimmed[0] : "";
+      const cleanQuery = currentPrefix ? trimmed.slice(1).trimStart() : current;
+      return prefix ? `${prefix}${cleanQuery}` : cleanQuery;
+    });
+  };
+  const sidebarTabs = useMemo(() => [
+    { id: "files" as const, label: t.sidebar.files },
+    ...(tab === "search" ? [{ id: "search" as const, label: t.sidebar.search }] : []),
+    { id: "outline" as const, label: t.sidebar.outline },
+  ], [t.sidebar.files, t.sidebar.outline, t.sidebar.search, tab]);
+
+  useEffect(() => {
+    if (tab !== "search") return undefined;
+
+    const frame = window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [searchFocusSignal, tab]);
 
   return (
     <aside className="left-rail">
@@ -182,13 +227,7 @@ export function VaultSidebar({
           className="sidebar-tabs"
           label={t.aria.sidebarSections}
           value={tab}
-          items={[
-            { id: "files", label: t.sidebar.files },
-            { id: "search", label: t.sidebar.search },
-            { id: "bookmarks", label: t.sidebar.bookmarks },
-            { id: "tags", label: t.sidebar.tags },
-            { id: "outline", label: t.sidebar.outline },
-          ]}
+          items={sidebarTabs}
           onChange={onTabChange}
         />
 
@@ -254,11 +293,26 @@ export function VaultSidebar({
             <label className="sidebar-search-box">
               <Search size={14} aria-hidden="true" />
               <input
+                ref={searchInputRef}
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder={t.knowledge.searchPlaceholder}
               />
             </label>
+            <div className="sidebar-search-scopes" aria-label={t.knowledge.searchPlaceholder}>
+              {searchScopes.map((scope) => (
+                <button
+                  key={scope.prefix || "all"}
+                  type="button"
+                  className={cx(activeSearchPrefix === scope.prefix && "selected")}
+                  aria-label={scope.title}
+                  data-tooltip={scope.title}
+                  onClick={() => setSearchScope(scope.prefix)}
+                >
+                  {scope.label}
+                </button>
+              ))}
+            </div>
             <div className="link-list sidebar-search-results">
               {searchResults.length ? searchResults.map((result) => (
                 <button
@@ -268,51 +322,17 @@ export function VaultSidebar({
                   onClick={() => onOpenMarkdownFile(result.path)}
                 >
                   <Search size={14} aria-hidden="true" />
-                  <strong>{result.title}</strong>
+                  <strong>
+                    <span>{result.title}</span>
+                    <em className={`search-result-type ${result.matchType}`}>{searchScopeLabels[result.matchType]}</em>
+                  </strong>
                   <span>{result.relativePath}</span>
                   <small>{result.snippet}</small>
                 </button>
-              )) : (
-                <p className="muted">
-                  {!vaultMode
-                    ? t.knowledge.openVaultForGraph
-                    : hasSidebarSearchIntent
-                      ? t.knowledge.noSearchResults
-                      : t.knowledge.searchPlaceholder}
-                </p>
-              )}
-            </div>
-          </div>
-        ) : null}
-
-        {tab === "bookmarks" ? (
-          <div className="sidebar-plugin-panel" role="tabpanel">
-            <div className="empty-plugin-state">
-              <Bookmark size={18} aria-hidden="true" />
-              <p>{t.sidebar.noBookmarks}</p>
-            </div>
-          </div>
-        ) : null}
-
-        {tab === "tags" ? (
-          <div className="sidebar-plugin-panel" role="tabpanel">
-            <div className="tag-list sidebar-tag-list">
-              {tags.length ? tags.map((item) => (
-                <button
-                  key={item.tag}
-                  type="button"
-                  className="tag-filter-button"
-                  onClick={() => {
-                    setSearchQuery(item.tag);
-                    onTabChange("search");
-                  }}
-                >
-                  <Tag size={13} aria-hidden="true" />
-                  <span>#{item.tag}</span>
-                  <small>{item.count}</small>
-                </button>
-              )) : (
-                <p className="muted">{t.knowledge.noTags}</p>
+              )) : !hasSidebarSearchIntent ? (
+                !vaultMode ? <p className="muted">{t.knowledge.openVaultForGraph}</p> : null
+              ) : (
+                <p className="muted">{vaultMode ? t.knowledge.noSearchResults : t.knowledge.openVaultForGraph}</p>
               )}
             </div>
           </div>

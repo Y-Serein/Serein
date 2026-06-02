@@ -48,6 +48,7 @@ export const defaultShortcutRegistry: ShortcutEntry[] = [
   { id: "edit.copy", label: "Copy", category: "Edit", defaultKeys: ["Ctrl+C"], currentKeys: ["Ctrl+C"], commandId: "edit.copy", editable: true, enabled: true },
   { id: "edit.paste", label: "Paste", category: "Edit", defaultKeys: ["Ctrl+V"], currentKeys: ["Ctrl+V"], commandId: "edit.paste", editable: true, enabled: true },
   { id: "edit.selectAll", label: "Select all", category: "Edit", defaultKeys: ["Ctrl+A"], currentKeys: ["Ctrl+A"], commandId: "edit.selectAll", editable: true, enabled: true },
+  { id: "edit.find", label: "Search", category: "Edit", defaultKeys: ["Ctrl+F"], currentKeys: ["Ctrl+F"], commandId: "edit.find", editable: true, enabled: true },
   { id: "edit.undo", label: "Undo", category: "Edit", defaultKeys: ["Ctrl+Z"], currentKeys: ["Ctrl+Z"], commandId: "edit.undo", editable: true, enabled: true },
   { id: "edit.redo", label: "Redo", category: "Edit", defaultKeys: ["Ctrl+Y", "Ctrl+Shift+Z"], currentKeys: ["Ctrl+Y", "Ctrl+Shift+Z"], commandId: "edit.redo", editable: true, enabled: true },
   { id: "view.plain", label: "Plain Edit", category: "View", defaultKeys: ["Ctrl+Alt+P"], currentKeys: ["Ctrl+Alt+P"], commandId: "view.setPlainEdit", editable: true, enabled: true },
@@ -80,7 +81,7 @@ export const menuGroups: MenuGroup[] = [
       { label: "复制", commandId: "edit.copy" },
       { label: "粘贴", commandId: "edit.paste" },
       { label: "全选", commandId: "edit.selectAll" },
-      { label: "查找", commandId: "edit.find" },
+      { label: "搜索", commandId: "edit.find" },
     ],
   },
   {

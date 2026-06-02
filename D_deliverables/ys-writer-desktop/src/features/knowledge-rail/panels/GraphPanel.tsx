@@ -1,8 +1,8 @@
 import { Circle, GitBranch } from "lucide-react";
 import type { GlobalGraph, LocalGraph, VaultTagSummary } from "../../../vault";
-import { normalizeFilePath } from "../../../shared/markdown";
 import type { KnowledgeTextBundle } from "../types";
 import type { VaultIndexStatus } from "../../../app/store/appStore";
+import { InteractiveGraphCanvas } from "../../shell/InteractiveGraphCanvas";
 
 type GraphPanelProps = {
   t: KnowledgeTextBundle;
@@ -37,24 +37,6 @@ export function GraphPanel({
   onGraphShowUnresolvedChange,
   onGraphNodeClick,
 }: GraphPanelProps) {
-  const globalGraphNodeMap = new Map(globalGraph.nodes.map((node) => [normalizeFilePath(node.path), node]));
-  const graphBounds = globalGraph.nodes.reduce(
-    (bounds, node) => ({
-      minX: Math.min(bounds.minX, node.x),
-      minY: Math.min(bounds.minY, node.y),
-      maxX: Math.max(bounds.maxX, node.x),
-      maxY: Math.max(bounds.maxY, node.y),
-    }),
-    { minX: 50, minY: 50, maxX: 50, maxY: 50 },
-  );
-  const viewPadding = 18;
-  const graphViewBox = [
-    graphBounds.minX - viewPadding,
-    graphBounds.minY - viewPadding,
-    Math.max(44, graphBounds.maxX - graphBounds.minX + viewPadding * 2),
-    Math.max(44, graphBounds.maxY - graphBounds.minY + viewPadding * 2),
-  ].join(" ");
-
   return (
     <div className="knowledge-section graph-workbench" role="tabpanel">
       <div className="graph-toolbar">
@@ -73,43 +55,19 @@ export function GraphPanel({
       </div>
       {globalGraph.nodes.length ? (
         <>
-          <svg viewBox={graphViewBox} role="img" aria-label={t.knowledge.globalGraphAria}>
-            {globalGraph.edges.map((edge) => {
-              const source = globalGraphNodeMap.get(normalizeFilePath(edge.sourcePath));
-              const target = globalGraphNodeMap.get(normalizeFilePath(edge.targetPath));
-              if (!source || !target) return null;
-              return (
-                <line
-                  key={edge.id}
-                  x1={source.x}
-                  y1={source.y}
-                  x2={target.x}
-                  y2={target.y}
-                  className="graph-edge"
-                />
-              );
-            })}
-            {globalGraph.nodes.map((node) => (
-              <g
-                key={node.path}
-                className={`graph-node ${node.role}`}
-                transform={`translate(${node.x} ${node.y})`}
-                onClick={() => {
-                  if (node.role !== "unresolved") onGraphNodeClick(node.path);
-                }}
-              >
-                <circle r={node.role === "unresolved" ? 2.2 : 2.6} />
-                <text y={node.role === "unresolved" ? -5.5 : -6}>{node.title}</text>
-              </g>
-            ))}
-          </svg>
-          <p className="graph-note">
-            <GitBranch size={14} aria-hidden="true" />
-            {t.knowledge.globalGraphSummary(globalGraph.visibleNodes, globalGraph.edges.length)}
-          </p>
-          {globalGraph.truncated ? (
-            <p className="graph-note warning">{t.knowledge.graphTruncated(globalGraph.omittedNodes)}</p>
-          ) : null}
+          <InteractiveGraphCanvas
+            graph={globalGraph}
+            activeFilePath={currentPath}
+            ariaLabel={t.knowledge.globalGraphAria}
+            className="compact"
+            onNodeClick={onGraphNodeClick}
+            footer={(
+              <>
+                <span><GitBranch size={14} aria-hidden="true" />{t.knowledge.globalGraphSummary(globalGraph.visibleNodes, globalGraph.edges.length)}</span>
+                {globalGraph.truncated ? <span>{t.knowledge.graphTruncated(globalGraph.omittedNodes)}</span> : null}
+              </>
+            )}
+          />
           {localGraph.nodes.length ? (
             <details className="local-graph-details">
               <summary>{t.knowledge.localGraph}</summary>

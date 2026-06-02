@@ -148,11 +148,29 @@ fn platform_open(target: &str) -> std::io::Result<()> {
 
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+    if is_probable_local_path(target) && Path::new(target).is_dir() {
+        let explorer_target = windows_explorer_path(target);
+        return Command::new("explorer.exe")
+            .arg(explorer_target)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ());
+    }
+
     Command::new("rundll32.exe")
         .args(["url.dll,FileProtocolHandler", target])
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(|_| ())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_explorer_path(target: &str) -> String {
+    if let Some(rest) = target.strip_prefix("//") {
+        return format!("\\\\{}", rest.replace('/', "\\"));
+    }
+
+    target.replace('/', "\\")
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

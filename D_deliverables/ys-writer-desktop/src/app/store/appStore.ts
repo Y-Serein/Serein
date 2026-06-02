@@ -19,7 +19,7 @@ import type { VaultIndex } from "../../vault";
 
 type Updater<T> = T | ((current: T) => T);
 
-export type LeftPanelTab = "files" | "search" | "bookmarks" | "tags" | "outline";
+export type LeftPanelTab = "files" | "search" | "outline";
 export type KnowledgePanelTab = "backlinks" | "outgoing" | "properties" | "graph" | "tags";
 export type VaultIndexStatus = "idle" | "indexing" | "ready" | "error";
 

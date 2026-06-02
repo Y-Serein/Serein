@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { FileText, GitBranch, X } from "lucide-react";
 import { pathFileName } from "../../shared/markdown";
 import { IconButton, cx } from "../../shared/ui";
@@ -9,12 +9,15 @@ type WorkspaceCenterProps = {
   dirty: boolean;
   children: ReactNode;
   graphOpen: boolean;
+  graphWidth: number;
   activeView: "markdown" | "graph";
   graphTitle: string;
   graphChildren: ReactNode;
   onViewChange: (view: "markdown" | "graph") => void;
   onClose: () => void;
   onCloseGraph: () => void;
+  onGraphResizePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onFileContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void;
 };
 
 export function WorkspaceCenter({
@@ -23,22 +26,30 @@ export function WorkspaceCenter({
   dirty,
   children,
   graphOpen,
+  graphWidth,
   activeView,
   graphTitle,
   graphChildren,
   onViewChange,
   onClose,
   onCloseGraph,
+  onGraphResizePointerDown,
+  onFileContextMenu,
 }: WorkspaceCenterProps) {
   if (graphOpen) {
     return (
-      <section className="workspace-center split" aria-label="Workspace editor">
+      <section
+        className="workspace-center split"
+        aria-label="Workspace editor"
+        style={{ "--center-graph-width": `${graphWidth}px` } as CSSProperties}
+      >
         <div className="workspace-pane markdown-pane">
           <header className="workspace-tabbar">
             <div
               className={cx("workspace-tab", activeView === "markdown" && "active")}
               title={filePath ?? title}
               onClick={() => onViewChange("markdown")}
+              onContextMenu={onFileContextMenu}
             >
               <FileText size={14} aria-hidden="true" />
               <span>{filePath ? pathFileName(filePath) : title}</span>
@@ -55,6 +66,13 @@ export function WorkspaceCenter({
           </header>
           <div className="workspace-leaf markdown-leaf">{children}</div>
         </div>
+        <div
+          className="center-graph-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize graph view"
+          onPointerDown={onGraphResizePointerDown}
+        />
         <div className="workspace-pane graph-pane">
           <header className="workspace-tabbar">
             <div
@@ -87,6 +105,7 @@ export function WorkspaceCenter({
           className={cx("workspace-tab", activeView === "markdown" && "active")}
           title={filePath ?? title}
           onClick={() => onViewChange("markdown")}
+          onContextMenu={onFileContextMenu}
         >
           <FileText size={14} aria-hidden="true" />
           <span>{filePath ? pathFileName(filePath) : title}</span>

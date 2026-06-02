@@ -159,6 +159,15 @@ test("builds searchable tags and limited global graph with unresolved links", ()
     { tag: "misc", count: 1 },
   ]);
   assert.equal(searchVaultIndex(index, "body")[0].relativePath, "b.md");
+  assert.equal(searchVaultIndex(index, "@beta")[0].relativePath, "b.md");
+  assert.equal(searchVaultIndex(index, "/extra-2")[0].relativePath, "extra-2.md");
+  assert.equal(searchVaultIndex(index, "#misc")[0].relativePath, "c.md");
+  assert.equal(searchVaultIndex(index, ":body")[0].relativePath, "b.md");
+  assert.equal(searchVaultIndex(index, "@body").length, 0);
+  assert.equal(searchVaultIndex(index, "@").length, 0);
+  assert.equal(searchVaultIndex(index, "/").length, 0);
+  assert.equal(searchVaultIndex(index, "#").length, 0);
+  assert.equal(searchVaultIndex(index, ":").length, 0);
 
   const graph = createGlobalGraph(index, { tag: "work", showUnresolved: true, maxNodes: 20 });
   assert.equal(graph.visibleNodes, 20);

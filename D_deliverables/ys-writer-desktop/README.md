@@ -12,6 +12,10 @@ Serein is a local-first Markdown writing desktop app.
 - Configurable editor font, font size, theme, and layout.
 - Markdown/Text file association for `.md`, `.markdown`, and `.txt`.
 
+## User Manual
+
+See [USER_MANUAL.md](./USER_MANUAL.md) for file operations, search prefixes, tags, bookmarks, and knowledge-panel usage.
+
 ## Screenshot
 
 Screenshot placeholder: add a release screenshot after Windows GUI verification.

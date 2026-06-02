@@ -1,6 +1,7 @@
 import type { MouseEvent as ReactMouseEvent, RefObject } from "react";
 import { Maximize2, Minus, PanelLeft, PanelRight, Search, X } from "lucide-react";
 import type { CommandDefinition, EditorMode, SaveStatus } from "../../app/types";
+import { APP_NAME } from "../../app/metadata";
 import { getShortcutForCommand, menuGroups } from "../../command/shortcuts";
 import type { ShortcutEntry } from "../../command/shortcuts";
 import { formatTime } from "../../shared/markdown";
@@ -11,7 +12,6 @@ type TextBundle = (typeof appText)[AppLanguage];
 
 type WindowChromeProps = {
   t: TextBundle;
-  windowTitle: string;
   menuBarRef: RefObject<HTMLElement>;
   openMenuId: string | null;
   commands: Record<string, CommandDefinition>;
@@ -32,7 +32,6 @@ type WindowChromeProps = {
 
 export function WindowChrome({
   t,
-  windowTitle,
   menuBarRef,
   openMenuId,
   commands,
@@ -58,7 +57,10 @@ export function WindowChrome({
         onMouseDown={onChromeMouseDown}
         onDoubleClick={onChromeDoubleClick}
       >
-        <strong className="window-title" title={windowTitle} data-tauri-drag-region>{windowTitle}</strong>
+        <div className="window-brand" title={APP_NAME} data-tauri-drag-region>
+          <span className="serein-brand-mark" aria-hidden="true">Sy</span>
+          <strong className="window-title">{APP_NAME}</strong>
+        </div>
         <div className="titlebar-drag-region" data-tauri-drag-region />
         <div
           className="window-controls"

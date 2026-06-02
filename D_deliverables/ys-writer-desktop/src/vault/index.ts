@@ -124,6 +124,8 @@ export type VaultSearchResult = {
   snippet: string;
 };
 
+type VaultSearchMode = VaultSearchResult["matchType"] | "all";
+
 export type VaultLinkRewriteReplacement = {
   kind: "wiki" | "markdown";
   oldTarget: string;
@@ -455,7 +457,8 @@ export function searchVaultIndex(
   options: { tag?: string | null; limit?: number } = {},
 ): VaultSearchResult[] {
   if (!index) return [];
-  const cleanQuery = query.trim().toLowerCase();
+  const search = parseVaultSearchQuery(query);
+  const cleanQuery = search.query.toLowerCase();
   const tag = options.tag?.trim();
   const limit = Math.max(1, Math.min(options.limit ?? SEARCH_RESULT_LIMIT, 200));
 
@@ -469,13 +472,13 @@ export function searchVaultIndex(
     const tags = file.tags.map((item) => item.toLowerCase());
     const content = file.content.toLowerCase();
     const matchType: VaultSearchResult["matchType"] | null = cleanQuery
-      ? title.includes(cleanQuery)
+      ? matchesSearchMode(search.mode, "title") && title.includes(cleanQuery)
         ? "title"
-        : relativePath.includes(cleanQuery)
+        : matchesSearchMode(search.mode, "path") && relativePath.includes(cleanQuery)
           ? "path"
-          : tags.some((item) => item.includes(cleanQuery))
+          : matchesSearchMode(search.mode, "tag") && tags.some((item) => item.includes(cleanQuery))
             ? "tag"
-            : content.includes(cleanQuery)
+            : matchesSearchMode(search.mode, "content") && content.includes(cleanQuery)
               ? "content"
               : null
       : "tag";
@@ -492,6 +495,22 @@ export function searchVaultIndex(
   }
 
   return results;
+}
+
+function parseVaultSearchQuery(query: string): { mode: VaultSearchMode; query: string } {
+  const trimmed = query.trim();
+  const prefix = trimmed[0];
+  if (!prefix) return { mode: "all", query: trimmed };
+
+  if (prefix === "@") return { mode: "title", query: trimmed.slice(1).trim() };
+  if (prefix === "/") return { mode: "path", query: trimmed.slice(1).trim() };
+  if (prefix === "#") return { mode: "tag", query: trimmed.slice(1).trim() };
+  if (prefix === ":") return { mode: "content", query: trimmed.slice(1).trim() };
+  return { mode: "all", query: trimmed };
+}
+
+function matchesSearchMode(mode: VaultSearchMode, target: VaultSearchResult["matchType"]) {
+  return mode === "all" || mode === target;
 }
 
 export function resolveVaultLinkTarget(
