@@ -92,6 +92,7 @@ button:active:not(:disabled) {
   overflow: hidden;
   background: var(--bg);
   font-size: calc(13px * var(--ui-scale, 1));
+  animation: shell-enter 180ms var(--ease-out) both;
   transition: grid-template-columns var(--motion-layout) var(--ease-smooth);
 }
 
@@ -3720,6 +3721,17 @@ button:disabled {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes shell-enter {
+  from {
+    opacity: .98;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
