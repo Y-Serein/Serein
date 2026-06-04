@@ -130,6 +130,15 @@ import "./styles.css";
 const DIRECTORY_INDEX_FILE_NAMES = ["index.md", "index.markdown", "index.txt", "readme.md", "readme.markdown", "readme.txt"];
 const WINDOW_ACTION_TIMEOUT_MS = 1500;
 const WINDOW_STATE_SAVE_DELAY_MS = 400;
+const DEFAULT_STARTUP_BACKGROUND = "#111113";
+const STARTUP_BACKGROUND_BY_THEME: Record<ThemeStyle, string> = {
+  daily: "#111113",
+  eye: "#f2eee5",
+  ink: "#1d2327",
+  mint: "#cfe7dd",
+  v5: "#f0eadf",
+  v6: "#b9dcd1",
+};
 const MIN_EDITOR_FONT_SIZE = 14;
 const MAX_EDITOR_FONT_SIZE = 24;
 const MIN_CENTER_GRAPH_WIDTH = 320;
@@ -201,6 +210,12 @@ function isWindowDragBlockedTarget(target: EventTarget | null) {
 
 function isTauriRuntime() {
   return Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+}
+
+function applyStartupDocumentBackground(background: string) {
+  document.documentElement.style.backgroundColor = background;
+  document.body.style.backgroundColor = background;
+  document.getElementById("root")?.style.setProperty("background-color", background);
 }
 
 function windowStatesEqual(left: WindowState | null, right: WindowState | null) {
@@ -737,6 +752,7 @@ export default function App() {
   const windowStateSaveTimeoutRef = useRef<number | null>(null);
   const windowStateRef = useRef<WindowState | null>(windowState);
   const restoreWindowStateRef = useRef(restoreWindowState);
+  const startupThemeRef = useRef(theme);
   const windowActionPendingRef = useRef(false);
   const appInitiatedWindowCloseRef = useRef(false);
   const externalConflictKeyRef = useRef<string | null>(null);
@@ -757,6 +773,7 @@ export default function App() {
   const [centerGraphWidth, setCenterGraphWidth] = useState(430);
   const [demoVaultMode, setDemoVaultMode] = useState(false);
   const [initialOpenFileChecked, setInitialOpenFileChecked] = useState(false);
+  const [shellPresented, setShellPresented] = useState(!isTauriRuntime());
   const [sidebarSearchFocusSignal, setSidebarSearchFocusSignal] = useState(0);
   const appShellRef = useRef<HTMLDivElement | null>(null);
 
@@ -1039,11 +1056,26 @@ export default function App() {
 
     const currentWindow = getCurrentWindow();
     let disposed = false;
+    let presentationFrame: number | null = null;
     const savedWindowState = windowStateRef.current;
     const shouldRestoreWindowState = restoreWindowStateRef.current && savedWindowState;
+    const startupBackground = STARTUP_BACKGROUND_BY_THEME[startupThemeRef.current] ?? DEFAULT_STARTUP_BACKGROUND;
+
+    const presentShell = () => {
+      if (disposed) return;
+      presentationFrame = window.requestAnimationFrame(() => {
+        presentationFrame = null;
+        if (!disposed) setShellPresented(true);
+      });
+    };
 
     void (async () => {
       try {
+        applyStartupDocumentBackground(startupBackground);
+        await currentWindow.setBackgroundColor(startupBackground).catch((error) => {
+          console.warn("Failed to set startup window background", error);
+        });
+
         if (shouldRestoreWindowState) {
           await currentWindow.unmaximize().catch(() => undefined);
           await currentWindow.setSize(new PhysicalSize(savedWindowState.width, savedWindowState.height));
@@ -1061,12 +1093,15 @@ export default function App() {
           await currentWindow.show();
         } catch (showError) {
           console.warn("Failed to show main window", showError);
+        } finally {
+          presentShell();
         }
       }
     })();
 
     return () => {
       disposed = true;
+      if (presentationFrame !== null) window.cancelAnimationFrame(presentationFrame);
     };
   }, [scheduleWindowStateCapture]);
 
@@ -3718,6 +3753,7 @@ export default function App() {
       className="desktop-shell"
       data-theme={theme}
       data-density={uiDensity}
+      data-presented={shellPresented ? "true" : "false"}
       data-sidebar={sidebarVisible ? "visible" : "hidden"}
       data-right-panel={rightPanelVisible && !knowledgePanelFloating ? "visible" : "hidden"}
       onContextMenu={handleShellContextMenu}
