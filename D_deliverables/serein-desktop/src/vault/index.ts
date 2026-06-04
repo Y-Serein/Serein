@@ -87,6 +87,7 @@ export type VaultIndex = {
   filesByPath: Map<string, VaultIndexedFile>;
   filesByRelativePath: Map<string, VaultIndexedFile>;
   backlinksByPath: Map<string, VaultBacklink[]>;
+  candidateMap: CandidateMap;
   truncated: boolean;
   skippedFiles: number;
 };
@@ -199,11 +200,12 @@ export function buildVaultIndex(root: string, response: VaultIndexResponse): Vau
     }
   }
 
-  const indexedFiles = parsedFiles.map((file) => ({
+  const indexedFiles = parsedFiles.map(({ rawLinks, ...file }) => ({
     ...file,
-    outgoingLinks: file.rawLinks.map((link) => linkFromResolution(link, resolveLinkTarget(link, candidates))),
+    outgoingLinks: rawLinks.map((link) => linkFromResolution(link, resolveLinkTarget(link, candidates))),
   }));
 
+  const indexedCandidateMap = createCandidateMap(indexedFiles);
   const indexedFilesByPath = new Map(indexedFiles.map((file) => [normalizeFilePath(file.path), file]));
   const indexedFilesByRelativePath = new Map(indexedFiles.map((file) => [normalizeVaultPath(file.relativePath).toLowerCase(), file]));
   const backlinksByPath = new Map<string, VaultBacklink[]>();
@@ -238,6 +240,7 @@ export function buildVaultIndex(root: string, response: VaultIndexResponse): Vau
     filesByPath: indexedFilesByPath,
     filesByRelativePath: indexedFilesByRelativePath,
     backlinksByPath,
+    candidateMap: indexedCandidateMap,
     truncated: response.truncated,
     skippedFiles: response.skippedFiles,
   };
@@ -284,12 +287,11 @@ export function createDraftIndexedFile(index: VaultIndex | null, path: string | 
     fileExt: existing.fileExt,
     content: markdown,
   });
-  const candidates = createCandidateMap(index.files);
   const { rawLinks, ...file } = parsed;
 
   return {
     ...file,
-    outgoingLinks: rawLinks.map((link) => linkFromResolution(link, resolveLinkTarget(link, candidates))),
+    outgoingLinks: rawLinks.map((link) => linkFromResolution(link, resolveLinkTarget(link, index.candidateMap))),
   };
 }
 
@@ -535,7 +537,7 @@ export function resolveVaultLinkTarget(
     sourceLine: 1,
     sourceSnippet: rawTarget,
   };
-  const resolution = index ? resolveLinkTarget(link, createCandidateMap(index.files)) : { file: null, candidates: [], ambiguous: false };
+  const resolution = index ? resolveLinkTarget(link, index.candidateMap) : { file: null, candidates: [], ambiguous: false };
   return linkFromResolution(link, resolution);
 }
 
@@ -602,13 +604,12 @@ export function rewriteVaultLinksInMarkdown(
   const oldFile = findIndexedFile(index, oldPath);
   if (!index || !oldFile) return { content: markdown, replacements: [] };
 
-  const candidates = createCandidateMap(index.files);
   const normalizedOldPath = normalizeFilePath(oldPath);
   const rawLinks = extractRawLinks(markdown, normalizeVaultPath(sourceRelativePath));
   const edits: Array<VaultLinkRewriteReplacement & { start: number; end: number; replacementText: string }> = [];
 
   for (const link of rawLinks) {
-    const resolution = resolveLinkTarget(link, candidates);
+    const resolution = resolveLinkTarget(link, index.candidateMap);
     if (!resolution.file || normalizeFilePath(resolution.file.path) !== normalizedOldPath) continue;
     if (!isDirectFileReference(link, oldFile)) continue;
 

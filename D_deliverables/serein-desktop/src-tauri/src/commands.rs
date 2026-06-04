@@ -1,9 +1,11 @@
 use crate::{
     fs_ops,
+    global_hotkey,
     model::{
         ImportedAsset, LocalAssetData, MarkdownFile, VaultDirectory, VaultIndexResponse,
         VaultInitResponse, VaultWorkspaceState,
     },
+    path_security::{ensure_supported_text_path, is_supported_text_path},
     vault,
 };
 use std::{
@@ -16,6 +18,35 @@ use tauri::{AppHandle, Manager};
 #[tauri::command]
 pub fn read_markdown_file(path: String) -> Result<MarkdownFile, String> {
     fs_ops::read_markdown_file(path)
+}
+
+#[tauri::command]
+pub fn initial_open_file() -> Result<Option<String>, String> {
+    for argument in std::env::args_os().skip(1) {
+        let path = PathBuf::from(argument);
+        if !path.exists() || !path.is_file() || !is_supported_text_path(&path) {
+            continue;
+        }
+
+        let resolved = fs::canonicalize(&path).unwrap_or(path);
+        let Some(path_string) = resolved.to_str() else {
+            return Err("Startup file path is not valid UTF-8.".to_string());
+        };
+        ensure_supported_text_path(path_string)?;
+        return Ok(Some(path_string.to_string()));
+    }
+
+    Ok(None)
+}
+
+#[tauri::command]
+pub fn configure_global_reveal_shortcut(app: AppHandle, shortcut: Option<String>) -> Result<(), String> {
+    global_hotkey::configure_global_reveal_shortcut(app, shortcut)
+}
+
+#[tauri::command]
+pub fn reveal_window(app: AppHandle) -> Result<(), String> {
+    global_hotkey::reveal_window(&app)
 }
 
 #[tauri::command]

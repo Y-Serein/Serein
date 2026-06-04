@@ -27,7 +27,7 @@ Download link placeholder: publish the signed Windows installer after release va
 Expected Windows installer path after packaging:
 
 ```text
-src-tauri\target\release\bundle\nsis\Serein_0.0.4_x64-setup.exe
+src-tauri\target\release\bundle\nsis\Serein_0.0.5_x64-setup.exe
 ```
 
 ## Development

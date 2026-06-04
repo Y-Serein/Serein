@@ -18,7 +18,21 @@ type WorkspaceRibbonProps = {
   rightPanelVisible: boolean;
   vaultMode: boolean;
   graphOpen: boolean;
-  newNoteLabel: string;
+  labels: {
+    aria: string;
+    hideLeftSidebar: string;
+    showLeftSidebar: string;
+    openVault: string;
+    quickOpen: string;
+    search: string;
+    graph: string;
+    closeGraph: string;
+    hideKnowledgePanel: string;
+    showKnowledgePanel: string;
+    newNote: string;
+    commandPalette: string;
+    settings: string;
+  };
   onToggleSidebar: () => void;
   onToggleRightPanel: () => void;
   onCreateNote: () => void;
@@ -35,7 +49,7 @@ export function WorkspaceRibbon({
   rightPanelVisible,
   vaultMode,
   graphOpen,
-  newNoteLabel,
+  labels,
   onToggleSidebar,
   onToggleRightPanel,
   onCreateNote,
@@ -47,42 +61,42 @@ export function WorkspaceRibbon({
   onOpenSearchPanel,
 }: WorkspaceRibbonProps) {
   return (
-    <nav className="workspace-ribbon" aria-label="Workspace ribbon">
+    <nav className="workspace-ribbon" aria-label={labels.aria}>
       <div className="ribbon-group">
         <IconButton
           className={cx("ribbon-button", sidebarVisible && "active")}
           icon={sidebarVisible ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-          label={sidebarVisible ? "Hide left sidebar" : "Show left sidebar"}
+          label={sidebarVisible ? labels.hideLeftSidebar : labels.showLeftSidebar}
           onClick={onToggleSidebar}
         />
         <IconButton
           className={cx("ribbon-button", vaultMode && "active")}
           icon={<FolderTree size={18} />}
-          label="Open Vault"
+          label={labels.openVault}
           onClick={onOpenVault}
         />
         <IconButton
           className="ribbon-button"
           icon={<FileText size={18} />}
-          label="Quick switcher"
+          label={labels.quickOpen}
           onClick={onOpenQuickOpen}
         />
         <IconButton
           className="ribbon-button"
           icon={<Search size={18} />}
-          label="Search"
+          label={labels.search}
           onClick={onOpenSearchPanel}
         />
         <IconButton
           className={cx("ribbon-button", graphOpen && "active")}
           icon={<GitBranch size={18} />}
-          label={graphOpen ? "Close graph" : "Graph"}
+          label={graphOpen ? labels.closeGraph : labels.graph}
           onClick={onOpenGraphPanel}
         />
         <IconButton
           className={cx("ribbon-button", rightPanelVisible && "active")}
           icon={rightPanelVisible ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
-          label={rightPanelVisible ? "Hide knowledge panel" : "Show knowledge panel"}
+          label={rightPanelVisible ? labels.hideKnowledgePanel : labels.showKnowledgePanel}
           onClick={onToggleRightPanel}
         />
       </div>
@@ -91,19 +105,19 @@ export function WorkspaceRibbon({
         <IconButton
           className="ribbon-button new-note-fab"
           icon={<Plus size={18} />}
-          label={newNoteLabel}
+          label={labels.newNote}
           onClick={onCreateNote}
         />
         <IconButton
           className="ribbon-button"
           icon={<Command size={18} />}
-          label="Command palette"
+          label={labels.commandPalette}
           onClick={onOpenCommandPalette}
         />
         <IconButton
           className="ribbon-button"
           icon={<Settings size={18} />}
-          label="Settings"
+          label={labels.settings}
           onClick={onOpenSettings}
         />
       </div>

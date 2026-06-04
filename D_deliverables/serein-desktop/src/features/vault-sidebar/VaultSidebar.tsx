@@ -359,7 +359,6 @@ export function VaultSidebar({
           </>
         ) : null}
       </div>
-
     </aside>
   );
 }

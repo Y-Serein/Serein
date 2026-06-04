@@ -1,7 +1,7 @@
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   VAULT_DIRECTORY_LIMIT,
@@ -14,17 +14,19 @@ import type { AppDialogResult } from "./app/store/appStore";
 import type {
   CommandDefinition,
   EditorMode,
+  AppSettings,
   SaveFileExt,
   ThemeStyle,
   UIDensity,
   VaultTreeEntry,
   VaultWorkspaceState,
+  WindowState,
 } from "./app/types";
 import {
   defaultShortcutRegistry,
   findShortcutConflicts,
   getShortcutForCommand,
-  normalizeShortcutList,
+  normalizeShortcutText,
   shortcutFromEvent,
   writeShortcuts,
 } from "./command/shortcuts";
@@ -44,21 +46,24 @@ import { SettingsDialog, resetEditorLayoutDefaults } from "./features/settings/S
 import { WorkspaceCenter } from "./features/shell/WorkspaceCenter";
 import { WorkspaceGraphLeaf } from "./features/shell/WorkspaceGraphLeaf";
 import { WorkspaceRibbon } from "./features/shell/WorkspaceRibbon";
-import { WorkspaceStatusBar } from "./features/shell/WorkspaceStatusBar";
+import { WorkspaceEditorStatusBar } from "./features/shell/WorkspaceStatusBar";
 import { VaultSidebar } from "./features/vault-sidebar/VaultSidebar";
 import { WindowChrome } from "./features/window-chrome/WindowChrome";
 import {
+  configureGlobalRevealShortcut,
   createVaultEntry,
   deleteVaultEntry,
   importEditorAsset,
   importEditorAssetFromPath,
   initVault,
   openExternalTarget,
+  readInitialOpenFile,
   readLocalAssetDataUrl,
   readMarkdownFile,
   readVaultIndexFiles,
   readVaultDirectory,
   renameVaultEntry,
+  revealWindow,
   writeExportFile,
   writeMarkdownFile,
   writeVaultWorkspaceState,
@@ -105,7 +110,8 @@ import {
   rewriteVaultLinksInMarkdown,
   suggestedVaultLinkPath,
 } from "./vault/index";
-import type { VaultIndexedFile, VaultLink } from "./vault";
+import type { VaultIndexedFile, VaultLink, VaultUnlinkedMention } from "./vault";
+import { buildVaultIndexAsync } from "./vault/buildIndexAsync";
 import {
   applyLineEnding,
   createDraftNote,
@@ -123,6 +129,7 @@ import "./styles.css";
 
 const DIRECTORY_INDEX_FILE_NAMES = ["index.md", "index.markdown", "index.txt", "readme.md", "readme.markdown", "readme.txt"];
 const WINDOW_ACTION_TIMEOUT_MS = 1500;
+const WINDOW_STATE_SAVE_DELAY_MS = 400;
 const MIN_EDITOR_FONT_SIZE = 14;
 const MAX_EDITOR_FONT_SIZE = 24;
 const MIN_CENTER_GRAPH_WIDTH = 320;
@@ -182,9 +189,27 @@ function isFormTarget(target: EventTarget | null) {
     && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
 
+function isRecordingShortcutTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement
+    && Boolean(target.closest(".shortcut-recorder[data-recording='true']"));
+}
+
 function isWindowDragBlockedTarget(target: EventTarget | null) {
   return target instanceof Element
     && Boolean(target.closest("button, input, textarea, select, [role='menu'], .menu-popover, .window-controls"));
+}
+
+function isTauriRuntime() {
+  return Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+}
+
+function windowStatesEqual(left: WindowState | null, right: WindowState | null) {
+  if (!left || !right) return left === right;
+  return left.x === right.x
+    && left.y === right.y
+    && left.width === right.width
+    && left.height === right.height
+    && left.maximized === right.maximized;
 }
 
 function windowActionWithTimeout<T>(action: Promise<T>, label: string) {
@@ -287,35 +312,18 @@ function contextMenuPosition(event: { clientX: number; clientY: number }) {
   };
 }
 
-function fallbackWriteClipboardText(text: string) {
-  const textarea = document.createElement("textarea");
-  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const selection = window.getSelection();
-  const previousRange = selection && selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null;
-
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  textarea.style.top = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  document.body.removeChild(textarea);
-
-  if (previousRange) {
-    selection?.removeAllRanges();
-    selection?.addRange(previousRange);
-  }
-  previousFocus?.focus({ preventScroll: true });
+function writeClipboardText(text: string) {
+  if (!text || !navigator.clipboard?.writeText) return;
+  navigator.clipboard.writeText(text).catch(() => undefined);
 }
 
-function writeClipboardText(text: string) {
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).catch(() => fallbackWriteClipboardText(text));
-    return;
+async function readClipboardText() {
+  if (!navigator.clipboard?.readText) return "";
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    return "";
   }
-  fallbackWriteClipboardText(text);
 }
 
 function codeMirrorSelectedText(view: CodeMirrorView) {
@@ -657,6 +665,10 @@ export default function App() {
     setDefaultEditorModeSetting,
     restoreWorkspace,
     setRestoreWorkspace,
+    restoreWindowState,
+    setRestoreWindowState,
+    windowState,
+    setWindowState,
     editorLatinFont,
     setEditorLatinFont,
     editorCjkFont,
@@ -671,6 +683,8 @@ export default function App() {
     setUiScale,
     zoomWithWheel,
     setZoomWithWheel,
+    showEditorStatusOverlay,
+    setShowEditorStatusOverlay,
     richCommand,
     setRichCommand,
     defaultSaveExt,
@@ -711,17 +725,27 @@ export default function App() {
   const saveBeforeContinueRef = useRef<(() => Promise<boolean>) | null>(null);
   const restoredVaultRef = useRef(false);
   const restoredStandaloneFileRef = useRef(false);
+  const checkedInitialOpenFileRef = useRef(false);
   const loadedDemoVaultRef = useRef(false);
   const pendingHeadingRef = useRef<string | null>(null);
   const sidebarRevealKeyRef = useRef<string | null>(null);
   const richCommandIdRef = useRef(0);
   const vaultIndexRefreshIdRef = useRef(0);
+  const scheduledVaultIndexRefreshRef = useRef<{ idleId: number | null; timeoutId: number | null } | null>(null);
+  const persistedSettingsJsonRef = useRef<string | null>(null);
+  const latestSettingsToPersistRef = useRef<AppSettings | null>(null);
+  const windowStateSaveTimeoutRef = useRef<number | null>(null);
+  const windowStateRef = useRef<WindowState | null>(windowState);
+  const restoreWindowStateRef = useRef(restoreWindowState);
   const windowActionPendingRef = useRef(false);
   const appInitiatedWindowCloseRef = useRef(false);
   const externalConflictKeyRef = useRef<string | null>(null);
+  const imagePreviewCacheRef = useRef<Map<string, string>>(new Map());
+  const imagePreviewSignatureRef = useRef<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [pendingSourceLocation, setPendingSourceLocation] = useState<SourceLocationTarget | null>(null);
   const [imagePreviewMap, setImagePreviewMap] = useState<Record<string, string>>({});
+  const [activeUnlinkedMentions, setActiveUnlinkedMentions] = useState<VaultUnlinkedMention[]>([]);
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [windowActionPending, setWindowActionPending] = useState<"minimize" | "maximize" | "close" | null>(null);
@@ -732,25 +756,23 @@ export default function App() {
   const [centerGraphShowUnresolved, setCenterGraphShowUnresolved] = useState(false);
   const [centerGraphWidth, setCenterGraphWidth] = useState(430);
   const [demoVaultMode, setDemoVaultMode] = useState(false);
+  const [initialOpenFileChecked, setInitialOpenFileChecked] = useState(false);
   const [sidebarSearchFocusSignal, setSidebarSearchFocusSignal] = useState(0);
   const appShellRef = useRef<HTMLDivElement | null>(null);
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0];
+  const deferredActiveMarkdown = useDeferredValue(activeNote.markdown);
   const t = appText[language];
   const hasActiveDocument = !isEmptyPlaceholder(activeNote);
-  const outline = useMemo(() => extractOutline(activeNote.markdown), [activeNote.markdown]);
+  const outline = useMemo(() => extractOutline(deferredActiveMarkdown), [deferredActiveMarkdown]);
   const persistedActiveIndexedFile = useMemo(() => findIndexedFile(vaultIndex, activeNote.filePath), [activeNote.filePath, vaultIndex]);
   const activeIndexedFile = useMemo(() => (
-    createDraftIndexedFile(vaultIndex, activeNote.filePath, activeNote.markdown) ?? persistedActiveIndexedFile
-  ), [activeNote.filePath, activeNote.markdown, persistedActiveIndexedFile, vaultIndex]);
+    createDraftIndexedFile(vaultIndex, activeNote.filePath, deferredActiveMarkdown) ?? persistedActiveIndexedFile
+  ), [activeNote.filePath, deferredActiveMarkdown, persistedActiveIndexedFile, vaultIndex]);
   const activeBacklinks = useMemo(() => getBacklinks(vaultIndex, activeNote.filePath), [activeNote.filePath, vaultIndex]);
   const activeOutgoingLinks = activeIndexedFile?.outgoingLinks ?? [];
   const activeResolvedLinks = activeOutgoingLinks.filter((link) => link.targetPath);
   const activeUnresolvedLinks = activeOutgoingLinks.filter((link) => !link.targetPath);
-  const activeUnlinkedMentions = useMemo(
-    () => getIncomingUnlinkedMentions(vaultIndex, activeNote.filePath, activeIndexedFile),
-    [activeIndexedFile, activeNote.filePath, vaultIndex],
-  );
   const localGraph = useMemo(() => createLocalGraph(vaultIndex, activeNote.filePath, activeIndexedFile), [activeIndexedFile, activeNote.filePath, vaultIndex]);
   const vaultTags = useMemo(() => listVaultTags(vaultIndex), [vaultIndex]);
   const wikiLinkSuggestions = useMemo(() => {
@@ -773,16 +795,56 @@ export default function App() {
       };
     });
   }, [vaultIndex]);
-  const centerGraph = useMemo(() => createGlobalGraph(vaultIndex, {
-    tag: centerGraphTag || null,
-    isolatedOnly: centerGraphIsolatedOnly,
-    showUnresolved: centerGraphShowUnresolved,
-    maxNodes: 180,
-  }), [centerGraphIsolatedOnly, centerGraphShowUnresolved, centerGraphTag, vaultIndex]);
+  const centerGraph = useMemo(() => {
+    if (!centerGraphOpen) return createGlobalGraph(null);
+    return createGlobalGraph(vaultIndex, {
+      tag: centerGraphTag || null,
+      isolatedOnly: centerGraphIsolatedOnly,
+      showUnresolved: centerGraphShowUnresolved,
+      maxNodes: 180,
+    });
+  }, [centerGraphIsolatedOnly, centerGraphOpen, centerGraphShowUnresolved, centerGraphTag, vaultIndex]);
   const shortcutConflicts = useMemo(() => findShortcutConflicts(shortcuts), [shortcuts]);
+  const globalRevealShortcut = useMemo(() => {
+    const shortcut = shortcuts.find((item) => item.id === "app.revealWindow");
+    if (!shortcut?.enabled) return null;
+    return shortcut.currentKeys[0] ?? null;
+  }, [shortcuts]);
   const vaultMode = Boolean(vaultRoot);
-  const textStats = useMemo(() => countDocumentText(activeNote.markdown), [activeNote.markdown]);
-  const lineCount = useMemo(() => activeNote.markdown.split(/\r?\n/).length, [activeNote.markdown]);
+  const textStats = useMemo(() => countDocumentText(deferredActiveMarkdown), [deferredActiveMarkdown]);
+  const lineCount = useMemo(() => deferredActiveMarkdown.split(/\r?\n/).length, [deferredActiveMarkdown]);
+
+  useEffect(() => {
+    if (!vaultIndex || !activeNote.filePath || !activeIndexedFile) {
+      setActiveUnlinkedMentions((current) => (current.length ? [] : current));
+      return undefined;
+    }
+
+    let disposed = false;
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    const run = () => {
+      if (disposed) return;
+      const mentions = getIncomingUnlinkedMentions(vaultIndex, activeNote.filePath, activeIndexedFile);
+      if (!disposed) setActiveUnlinkedMentions(mentions);
+    };
+
+    if (idleWindow.requestIdleCallback) {
+      const idleId = idleWindow.requestIdleCallback(run, { timeout: 3000 });
+      return () => {
+        disposed = true;
+        idleWindow.cancelIdleCallback?.(idleId);
+      };
+    }
+
+    const timeoutId = window.setTimeout(run, 1200);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeIndexedFile, activeNote.filePath, vaultIndex]);
 
   const persistVaultPatch = useCallback((patch: Partial<VaultWorkspaceState>) => {
     setVaultWorkspace((current) => nextWorkspaceState(current, patch));
@@ -795,6 +857,11 @@ export default function App() {
     setAppDialogInput("");
     resolve?.(result);
   }, []);
+
+  const setGlobalEditorMode = useCallback((mode: EditorMode) => {
+    setEditorMode(mode);
+    setDefaultEditorModeSetting(mode);
+  }, [setDefaultEditorModeSetting, setEditorMode]);
 
   const showInputDialog = useCallback((title: string, defaultValue = "", message?: string) => (
     new Promise<string | null>((resolve) => {
@@ -888,14 +955,174 @@ export default function App() {
     t.prompts.unsavedChangesTitle,
   ]);
 
+  useEffect(() => {
+    windowStateRef.current = windowState;
+  }, [windowState]);
+
+  useEffect(() => {
+    restoreWindowStateRef.current = restoreWindowState;
+  }, [restoreWindowState]);
+
+  const captureWindowState = useCallback(async (options: { persistImmediately?: boolean } = {}) => {
+    if (!isTauriRuntime() || !restoreWindowStateRef.current) return null;
+
+    try {
+      const currentWindow = getCurrentWindow();
+      const [position, size, maximized] = await Promise.all([
+        currentWindow.outerPosition(),
+        currentWindow.outerSize(),
+        currentWindow.isMaximized(),
+      ]);
+      const nextWindowState: WindowState = {
+        x: Math.round(position.x),
+        y: Math.round(position.y),
+        width: Math.round(size.width),
+        height: Math.round(size.height),
+        maximized,
+      };
+
+      if (!windowStatesEqual(windowStateRef.current, nextWindowState)) {
+        windowStateRef.current = nextWindowState;
+        setWindowState(nextWindowState);
+      }
+
+      if (options.persistImmediately && latestSettingsToPersistRef.current) {
+        writeSettings({
+          ...latestSettingsToPersistRef.current,
+          restoreWindowState: restoreWindowStateRef.current,
+          windowState: nextWindowState,
+        });
+      }
+
+      return nextWindowState;
+    } catch (error) {
+      console.warn("Failed to capture window state", error);
+      return null;
+    }
+  }, [setWindowState]);
+
+  const scheduleWindowStateCapture = useCallback(() => {
+    if (!isTauriRuntime() || !restoreWindowStateRef.current) return;
+    if (windowStateSaveTimeoutRef.current !== null) {
+      window.clearTimeout(windowStateSaveTimeoutRef.current);
+    }
+
+    windowStateSaveTimeoutRef.current = window.setTimeout(() => {
+      windowStateSaveTimeoutRef.current = null;
+      void captureWindowState();
+    }, WINDOW_STATE_SAVE_DELAY_MS);
+  }, [captureWindowState]);
+
+  const flushWindowStateCapture = useCallback(async () => {
+    if (windowStateSaveTimeoutRef.current !== null) {
+      window.clearTimeout(windowStateSaveTimeoutRef.current);
+      windowStateSaveTimeoutRef.current = null;
+    }
+    if (!restoreWindowStateRef.current) {
+      if (latestSettingsToPersistRef.current) {
+        writeSettings({
+          ...latestSettingsToPersistRef.current,
+          restoreWindowState: false,
+        });
+      }
+      return;
+    }
+
+    const capturedWindowState = await captureWindowState({ persistImmediately: true });
+    if (!capturedWindowState && latestSettingsToPersistRef.current) {
+      writeSettings(latestSettingsToPersistRef.current);
+    }
+  }, [captureWindowState]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return undefined;
+
+    const currentWindow = getCurrentWindow();
+    let disposed = false;
+    const savedWindowState = windowStateRef.current;
+    const shouldRestoreWindowState = restoreWindowStateRef.current && savedWindowState;
+
+    void (async () => {
+      try {
+        if (shouldRestoreWindowState) {
+          await currentWindow.unmaximize().catch(() => undefined);
+          await currentWindow.setSize(new PhysicalSize(savedWindowState.width, savedWindowState.height));
+          await currentWindow.setPosition(new PhysicalPosition(savedWindowState.x, savedWindowState.y));
+          if (savedWindowState.maximized) await currentWindow.maximize();
+        } else {
+          await currentWindow.center();
+        }
+
+        if (!disposed) scheduleWindowStateCapture();
+      } catch (error) {
+        console.warn("Failed to apply window state", error);
+      } finally {
+        try {
+          await currentWindow.show();
+        } catch (showError) {
+          console.warn("Failed to show main window", showError);
+        }
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, [scheduleWindowStateCapture]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return undefined;
+
+    let disposed = false;
+    let unlistenMoved: (() => void) | null = null;
+    let unlistenResized: (() => void) | null = null;
+    const currentWindow = getCurrentWindow();
+
+    currentWindow.onMoved(scheduleWindowStateCapture)
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenMoved = unlisten;
+      })
+      .catch((error) => {
+        console.warn("Window move listener is only available inside Tauri", error);
+      });
+
+    currentWindow.onResized(scheduleWindowStateCapture)
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        unlistenResized = unlisten;
+      })
+      .catch((error) => {
+        console.warn("Window resize listener is only available inside Tauri", error);
+      });
+
+    return () => {
+      disposed = true;
+      unlistenMoved?.();
+      unlistenResized?.();
+      if (windowStateSaveTimeoutRef.current !== null) {
+        window.clearTimeout(windowStateSaveTimeoutRef.current);
+        windowStateSaveTimeoutRef.current = null;
+      }
+    };
+  }, [scheduleWindowStateCapture]);
+
   const destroyCurrentWindow = useCallback(async () => {
     const currentWindow = getCurrentWindow();
     appInitiatedWindowCloseRef.current = true;
     try {
+      await flushWindowStateCapture();
       await windowActionWithTimeout(currentWindow.close(), "window close");
     } catch (closeError) {
       console.warn("Window close failed; falling back to destroy", closeError);
       try {
+        await flushWindowStateCapture();
         await windowActionWithTimeout(currentWindow.destroy(), "window destroy");
       } finally {
         window.setTimeout(() => {
@@ -903,7 +1130,7 @@ export default function App() {
         }, 500);
       }
     }
-  }, []);
+  }, [flushWindowStateCapture]);
 
   const requestCloseWindow = useCallback(async () => {
     if (windowActionPendingRef.current) return;
@@ -1092,7 +1319,9 @@ export default function App() {
     try {
       const response = await readVaultIndexFiles(root);
       if (vaultIndexRefreshIdRef.current !== refreshId) return;
-      setVaultIndex(buildVaultIndex(root, response));
+      const nextIndex = await buildVaultIndexAsync(root, response);
+      if (vaultIndexRefreshIdRef.current !== refreshId) return;
+      setVaultIndex(nextIndex);
       setVaultIndexStatus("ready");
     } catch (error) {
       if (vaultIndexRefreshIdRef.current !== refreshId) return;
@@ -1106,25 +1335,42 @@ export default function App() {
   const scheduleVaultIndexRefresh = useCallback((root: string) => {
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    const scheduled = scheduledVaultIndexRefreshRef.current;
+    if (scheduled?.idleId !== null && scheduled?.idleId !== undefined) {
+      idleWindow.cancelIdleCallback?.(scheduled.idleId);
+    }
+    if (scheduled?.timeoutId !== null && scheduled?.timeoutId !== undefined) {
+      window.clearTimeout(scheduled.timeoutId);
+    }
+
+    const run = () => {
+      scheduledVaultIndexRefreshRef.current = null;
+      void refreshVaultIndex(root);
     };
 
     if (idleWindow.requestIdleCallback) {
-      idleWindow.requestIdleCallback(() => {
-        void refreshVaultIndex(root);
-      }, { timeout: 2500 });
+      const idleId = idleWindow.requestIdleCallback(run, { timeout: 2500 });
+      scheduledVaultIndexRefreshRef.current = { idleId, timeoutId: null };
       return;
     }
 
-    window.setTimeout(() => {
-      void refreshVaultIndex(root);
-    }, 1200);
+    const timeoutId = window.setTimeout(run, 1200);
+    scheduledVaultIndexRefreshRef.current = { idleId: null, timeoutId };
   }, [refreshVaultIndex]);
 
-  const applyOpenedFile = useCallback((file: Awaited<ReturnType<typeof readMarkdownFile>>) => {
+  const applyOpenedFile = useCallback((file: Awaited<ReturnType<typeof readMarkdownFile>>, options: { standalone?: boolean } = {}) => {
     const nextNote = createFileNote(file);
+    const useVaultContext = Boolean(vaultRoot) && !options.standalone;
+
+    window.getSelection()?.removeAllRanges();
+    editorCommandSelectionRef.current = null;
+    editorCommandCodeMirrorSelectionRef.current = null;
 
     setNotes((currentNotes) => {
-      if (vaultRoot) return [nextNote];
+      if (useVaultContext || options.standalone) return [nextNote];
 
       if (activeNote && isEmptyDraft(activeNote)) {
         return currentNotes.map((note) => (note.id === activeNote.id ? nextNote : note));
@@ -1134,16 +1380,19 @@ export default function App() {
     });
     setActiveNoteId(nextNote.id);
     setLastOpenedFile(nextNote.filePath ?? null);
-    persistVaultPatch({
-      lastOpenedFile: nextNote.filePath ?? null,
-      recentFiles: pushRecentFile(vaultWorkspace.recentFiles, nextNote.filePath ?? null),
-    });
+    if (useVaultContext) {
+      persistVaultPatch({
+        lastOpenedFile: nextNote.filePath ?? null,
+        recentFiles: pushRecentFile(vaultWorkspace.recentFiles, nextNote.filePath ?? null),
+      });
+    }
     setSaveError(null);
     setSaveStatus("saved");
   }, [activeNote, persistVaultPatch, vaultRoot, vaultWorkspace.recentFiles]);
 
   const openMarkdownFile = useCallback(async (path: string, options: {
     skipUnsavedCheck?: boolean;
+    standalone?: boolean;
     targetHeading?: string | null;
     targetLine?: number | null;
     targetText?: string | null;
@@ -1151,7 +1400,7 @@ export default function App() {
     const currentPath = activeNote.filePath ? normalizeFilePath(activeNote.filePath) : null;
     if (!options.skipUnsavedCheck && normalizeFilePath(path) !== currentPath && !await confirmDiscardUnsavedChanges()) return;
     const file = demoVaultMode ? readDemoMarkdownFile(path) : await readMarkdownFile(path);
-    applyOpenedFile(file);
+    applyOpenedFile(file, { standalone: options.standalone });
     pendingHeadingRef.current = options.targetHeading?.trim() || null;
     setPendingSourceLocation(options.targetLine
       ? { line: options.targetLine, text: options.targetText?.trim() || null }
@@ -1334,13 +1583,13 @@ export default function App() {
         if (!isExistingFileSave) {
           await loadVaultDirectory(parentVaultDir(savedVaultRelativePath));
         }
-        await refreshVaultIndex(vaultRoot);
+        scheduleVaultIndexRefresh(vaultRoot);
       }
     }
     setSavedAt(new Date());
     setSaveError(null);
     setSaveStatus("saved");
-  }, [defaultSaveExt, editorMode, loadVaultDirectory, persistVaultPatch, refreshVaultIndex, vaultRoot, vaultWorkspace.recentFiles]);
+  }, [defaultSaveExt, editorMode, loadVaultDirectory, persistVaultPatch, scheduleVaultIndexRefresh, vaultRoot, vaultWorkspace.recentFiles]);
 
   const syncActiveNoteFromDisk = useCallback(async () => {
     if (demoVaultMode || !activeNote?.filePath) return;
@@ -1435,6 +1684,12 @@ export default function App() {
 
     try {
       if (activeNote.filePath) {
+        if (!noteDirtyForMarkdown(activeNote, activeNote.markdown, { compareRichBaseline: editorMode === "rich" })) {
+          setSavedAt(new Date());
+          setSaveError(null);
+          setSaveStatus("saved");
+          return true;
+        }
         await saveNoteToPath(activeNote, activeNote.filePath);
         return true;
       } else {
@@ -1446,7 +1701,7 @@ export default function App() {
       setSaveStatus("error");
       return false;
     }
-  }, [activeNote, handleSaveAs, saveNoteToPath, t.errors.saveFailed]);
+  }, [activeNote, editorMode, handleSaveAs, saveNoteToPath, setSaveError, setSaveStatus, t.errors.saveFailed]);
 
   useEffect(() => {
     saveBeforeContinueRef.current = handleSave;
@@ -1481,7 +1736,7 @@ export default function App() {
         const relativeFilePath = relativePathFromRoot(vaultRoot, currentFilePath);
         const currentDir = relativeFilePath ? parentVaultDir(relativeFilePath) : selectedVaultDir;
         await loadVaultDirectory(currentDir);
-        void refreshVaultIndex(vaultRoot);
+        scheduleVaultIndexRefresh(vaultRoot);
       }
 
       return imported;
@@ -1495,7 +1750,7 @@ export default function App() {
   }, [
     activeNote.filePath,
     loadVaultDirectory,
-    refreshVaultIndex,
+    scheduleVaultIndexRefresh,
     setSaveError,
     setSaveStatus,
     t.errors.saveBeforeImageImport,
@@ -1518,7 +1773,7 @@ export default function App() {
         const relativeFilePath = relativePathFromRoot(vaultRoot, currentFilePath);
         const currentDir = relativeFilePath ? parentVaultDir(relativeFilePath) : selectedVaultDir;
         await loadVaultDirectory(currentDir);
-        void refreshVaultIndex(vaultRoot);
+        scheduleVaultIndexRefresh(vaultRoot);
       }
       return {
         src: imagePathStyle === "absolute" ? asset.path : asset.relativeMarkdownPath,
@@ -1534,7 +1789,7 @@ export default function App() {
   }, [
     activeNote.filePath,
     loadVaultDirectory,
-    refreshVaultIndex,
+    scheduleVaultIndexRefresh,
     selectedVaultDir,
     setSaveError,
     setSaveStatus,
@@ -1577,7 +1832,7 @@ export default function App() {
   }, [activeNote, importImagesForEditor, setNotes]);
 
   const buildExportImageMap = useCallback(async () => {
-    const sources = collectLocalImageSources(activeNote.markdown);
+    const sources = collectLocalImageSources(deferredActiveMarkdown);
     if (!sources.length) return {};
     if (!activeNote.filePath) {
       throw new Error(t.errors.saveBeforeExportImages);
@@ -1891,90 +2146,47 @@ export default function App() {
       });
   }, [activeNote.filePath, loadVaultDirectory, persistVaultPatch, refreshVaultIndex, showConfirmDialog, t.errors.deleteFailed, t.prompts, vaultRoot]);
 
-  const focusEditor = useCallback(() => {
-    if (editorMode === "plain") {
-      plainEditorRef.current?.focus();
+  const replacePlainEditorSelection = useCallback((insertText: string) => {
+    const textarea = plainEditorRef.current;
+    if (!textarea || !activeNote) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const value = textarea.value;
+    const nextMarkdown = `${value.slice(0, start)}${insertText}${value.slice(end)}`;
+    const nextCursor = start + insertText.length;
+
+    setNotes((currentNotes) => currentNotes.map((note) => {
+      if (note.id !== activeNote.id) return note;
+      return noteWithMarkdown(note, nextMarkdown);
+    }));
+
+    window.requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(nextCursor, nextCursor);
+    });
+  }, [activeNote, setNotes]);
+
+  const runPlainEditCommand = useCallback((command: "cut" | "copy" | "paste" | "undo" | "redo") => {
+    const textarea = plainEditorRef.current;
+    if (!textarea) return;
+    textarea.focus();
+
+    if (command === "undo" || command === "redo") return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    if (command === "copy" || command === "cut") {
+      if (start === end) return;
+      writeClipboardText(textarea.value.slice(start, end));
+      if (command === "cut") replacePlainEditorSelection("");
       return;
     }
 
-    const proseMirror = editorSurfaceRef.current?.querySelector<HTMLElement>(".ProseMirror");
-    proseMirror?.focus();
-  }, [editorMode]);
-
-  const focusEditorForNativeEditCommand = useCallback((command: "cut" | "copy" | "paste" | "undo" | "redo") => {
-    if (editorMode === "plain") {
-      plainEditorRef.current?.focus();
-      return;
-    }
-
-    const selection = window.getSelection();
-    const anchorElement = elementFromNode(selection?.anchorNode ?? null);
-    const selectionInsideEditor = Boolean(anchorElement && editorSurfaceRef.current?.contains(anchorElement));
-    if ((command === "cut" || command === "copy") && selectionInsideEditor && !selection?.isCollapsed) return;
-
-    const selectedCodeMirror = anchorElement?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
-    const storedCodeMirror = editorCommandFocusRef.current?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
-    if (command === "cut" || command === "copy") {
-      const storedRange = editorCommandSelectionRef.current;
-      const storedRangeElement = elementFromNode(storedRange?.commonAncestorContainer ?? null);
-      if (
-        storedRange
-        && storedRangeElement
-        && document.contains(storedRangeElement)
-        && editorSurfaceRef.current?.contains(storedRangeElement)
-      ) {
-        if (storedCodeMirror && document.contains(storedCodeMirror)) {
-          const codeMirrorView = CodeMirrorView.findFromDOM(storedCodeMirror);
-          codeMirrorView?.focus();
-          return;
-        }
-        const storedFocusTarget = editorSurfaceRef.current?.querySelector<HTMLElement>(".ProseMirror");
-        storedFocusTarget?.focus({ preventScroll: true });
-        const nextSelection = window.getSelection();
-        nextSelection?.removeAllRanges();
-        nextSelection?.addRange(storedRange.cloneRange());
-        return;
-      }
-    }
-
-    const codeMirror = selectedCodeMirror ?? (storedCodeMirror && document.contains(storedCodeMirror) ? storedCodeMirror : null);
-    if (codeMirror && editorSurfaceRef.current?.contains(codeMirror)) {
-      (codeMirror.querySelector<HTMLElement>(".cm-content") ?? codeMirror).focus();
-      return;
-    }
-
-    focusEditor();
-  }, [editorMode, focusEditor]);
-
-  const runNativeEditCommand = useCallback((command: "cut" | "copy" | "paste" | "undo" | "redo") => {
-    if (editorMode === "rich" && (command === "cut" || command === "copy")) {
-      const selection = window.getSelection();
-      const anchorElement = elementFromNode(selection?.anchorNode ?? null);
-      const selectedCodeMirror = anchorElement?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
-      const storedCodeMirror = editorCommandFocusRef.current?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
-      const codeMirror = selectedCodeMirror ?? (storedCodeMirror && document.contains(storedCodeMirror) ? storedCodeMirror : null);
-      if (codeMirror && editorSurfaceRef.current?.contains(codeMirror)) {
-        const handled = runCodeMirrorClipboardCommand(
-          codeMirror,
-          command,
-          editorCommandCodeMirrorSelectionRef.current,
-        );
-        const currentCodeMirrorSelection = CodeMirrorView.findFromDOM(codeMirror)?.state.selection.main;
-        const hasCodeMirrorSelection = Boolean(
-          editorCommandCodeMirrorSelectionRef.current
-          || (currentCodeMirrorSelection && !currentCodeMirrorSelection.empty),
-        );
-        if (handled || hasCodeMirrorSelection) {
-          editorCommandSelectionRef.current = null;
-          editorCommandCodeMirrorSelectionRef.current = null;
-          return;
-        }
-      }
-    }
-
-    focusEditorForNativeEditCommand(command);
-    document.execCommand(command);
-  }, [editorMode, focusEditorForNativeEditCommand]);
+    readClipboardText().then((text) => {
+      if (text) replacePlainEditorSelection(text);
+    });
+  }, [replacePlainEditorSelection]);
 
   const runEditorCommand = useCallback((action: EditorCommandAction, payload?: string, alt?: string) => {
     if (!activeNote) return;
@@ -2007,6 +2219,40 @@ export default function App() {
     richCommandIdRef.current += 1;
     setRichCommand({ id: richCommandIdRef.current, action, payload, alt });
   }, [activeNote, editorMode]);
+
+  const runEditCommand = useCallback((command: "cut" | "copy" | "paste" | "undo" | "redo") => {
+    if (editorMode === "plain") {
+      runPlainEditCommand(command);
+      return;
+    }
+
+    if (command === "cut" || command === "copy") {
+      const selection = window.getSelection();
+      const anchorElement = elementFromNode(selection?.anchorNode ?? null);
+      const selectedCodeMirror = anchorElement?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
+      const storedCodeMirror = editorCommandFocusRef.current?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
+      const codeMirror = selectedCodeMirror ?? (storedCodeMirror && document.contains(storedCodeMirror) ? storedCodeMirror : null);
+      if (codeMirror && editorSurfaceRef.current?.contains(codeMirror)) {
+        const handled = runCodeMirrorClipboardCommand(
+          codeMirror,
+          command,
+          editorCommandCodeMirrorSelectionRef.current,
+        );
+        const currentCodeMirrorSelection = CodeMirrorView.findFromDOM(codeMirror)?.state.selection.main;
+        const hasCodeMirrorSelection = Boolean(
+          editorCommandCodeMirrorSelectionRef.current
+          || (currentCodeMirrorSelection && !currentCodeMirrorSelection.empty),
+        );
+        if (handled || hasCodeMirrorSelection) {
+          editorCommandSelectionRef.current = null;
+          editorCommandCodeMirrorSelectionRef.current = null;
+          return;
+        }
+      }
+    }
+
+    runEditorCommand(command);
+  }, [editorMode, runEditorCommand, runPlainEditCommand]);
 
   const runLinkCommand = useCallback(async () => {
     const href = await showInputDialog(t.prompts.linkUrl, "https://");
@@ -2069,6 +2315,16 @@ export default function App() {
         setSettingsOpen(true);
       },
     },
+    "app.revealWindow": {
+      id: "app.revealWindow",
+      label: t.commandLabels["app.revealWindow"],
+      enabled: true,
+      run: () => {
+        revealWindow().catch((error) => {
+          console.warn("Failed to reveal window", error);
+        });
+      },
+    },
     "app.openShortcuts": {
       id: "app.openShortcuts",
       label: t.commandLabels["app.openShortcuts"],
@@ -2079,11 +2335,11 @@ export default function App() {
       },
     },
     "app.about": { id: "app.about", label: t.commandLabels["app.about"], enabled: true, run: () => showMessageDialog(t.commandLabels["app.about"], t.prompts.about) },
-    "edit.cut": { id: "edit.cut", label: t.commandLabels["edit.cut"], enabled: true, run: () => runNativeEditCommand("cut") },
-    "edit.copy": { id: "edit.copy", label: t.commandLabels["edit.copy"], enabled: true, run: () => runNativeEditCommand("copy") },
-    "edit.paste": { id: "edit.paste", label: t.commandLabels["edit.paste"], enabled: true, run: () => runNativeEditCommand("paste") },
-    "edit.undo": { id: "edit.undo", label: t.commandLabels["edit.undo"], enabled: true, run: () => runNativeEditCommand("undo") },
-    "edit.redo": { id: "edit.redo", label: t.commandLabels["edit.redo"], enabled: true, run: () => runNativeEditCommand("redo") },
+    "edit.cut": { id: "edit.cut", label: t.commandLabels["edit.cut"], enabled: true, run: () => runEditCommand("cut") },
+    "edit.copy": { id: "edit.copy", label: t.commandLabels["edit.copy"], enabled: true, run: () => runEditCommand("copy") },
+    "edit.paste": { id: "edit.paste", label: t.commandLabels["edit.paste"], enabled: true, run: () => runEditCommand("paste") },
+    "edit.undo": { id: "edit.undo", label: t.commandLabels["edit.undo"], enabled: editorMode === "rich" && hasActiveDocument, run: () => runEditCommand("undo") },
+    "edit.redo": { id: "edit.redo", label: t.commandLabels["edit.redo"], enabled: editorMode === "rich" && hasActiveDocument, run: () => runEditCommand("redo") },
     "edit.selectAll": { id: "edit.selectAll", label: t.commandLabels["edit.selectAll"], enabled: true, run: () => runEditorCommand("selectAllSmart") },
     "edit.find": { id: "edit.find", label: t.commandLabels["edit.find"], enabled: true, run: handleFind },
     "paragraph.text": { id: "paragraph.text", label: t.commandLabels["paragraph.text"], enabled: hasActiveDocument, run: () => runEditorCommand("paragraph") },
@@ -2101,8 +2357,8 @@ export default function App() {
     "format.strike": { id: "format.strike", label: t.commandLabels["format.strike"], enabled: hasActiveDocument, run: () => runEditorCommand("strike") },
     "format.link": { id: "format.link", label: t.commandLabels["format.link"], enabled: hasActiveDocument, run: runLinkCommand },
     "format.image": { id: "format.image", label: t.commandLabels["format.image"], enabled: hasActiveDocument, run: runImageCommand },
-    "view.setPlainEdit": { id: "view.setPlainEdit", label: t.commandLabels["view.setPlainEdit"], enabled: editorMode !== "plain", run: () => setEditorMode("plain") },
-    "view.setRichEdit": { id: "view.setRichEdit", label: t.commandLabels["view.setRichEdit"], enabled: editorMode !== "rich", run: () => setEditorMode("rich") },
+    "view.setPlainEdit": { id: "view.setPlainEdit", label: t.commandLabels["view.setPlainEdit"], enabled: editorMode !== "plain", run: () => setGlobalEditorMode("plain") },
+    "view.setRichEdit": { id: "view.setRichEdit", label: t.commandLabels["view.setRichEdit"], enabled: editorMode !== "rich", run: () => setGlobalEditorMode("rich") },
     "view.toggleSidebar": { id: "view.toggleSidebar", label: t.commandLabels["view.toggleSidebar"], enabled: true, run: () => setSidebarVisible((visible) => !visible) },
     "view.toggleRightPanel": { id: "view.toggleRightPanel", label: t.commandLabels["view.toggleRightPanel"], enabled: true, run: () => setRightPanelVisible((visible) => !visible) },
     "theme.daily": { id: "theme.daily", label: t.commandLabels["theme.daily"], enabled: theme !== "daily", run: () => setTheme("daily") },
@@ -2112,7 +2368,6 @@ export default function App() {
   }), [
     activeNote,
     editorMode,
-    focusEditor,
     hasActiveDocument,
     handleCreateVaultFolder,
     handleCreateNote,
@@ -2123,9 +2378,10 @@ export default function App() {
     handleSave,
     handleSaveAs,
     runEditorCommand,
-    runNativeEditCommand,
+    runEditCommand,
     runImageCommand,
     runLinkCommand,
+    setGlobalEditorMode,
     showMessageDialog,
     t,
     theme,
@@ -2232,9 +2488,73 @@ export default function App() {
     });
   }, [activeNote.filePath, setOpenMenuId]);
 
+  useEffect(() => {
+    if (checkedInitialOpenFileRef.current) return;
+    checkedInitialOpenFileRef.current = true;
+
+    const tauriWindow = window as Window & { __TAURI_INTERNALS__?: unknown };
+    if (!tauriWindow.__TAURI_INTERNALS__) {
+      setInitialOpenFileChecked(true);
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const initialFile = await readInitialOpenFile();
+        if (cancelled || !initialFile) return;
+
+        restoredVaultRef.current = true;
+        restoredStandaloneFileRef.current = true;
+        vaultIndexRefreshIdRef.current += 1;
+        setVaultRoot(null);
+        setVaultTree(null);
+        setVaultError(null);
+        setVaultIndex(null);
+        setVaultIndexStatus("idle");
+        setVaultIndexError(null);
+        setVaultRecoveryBlocked(false);
+        setSelectedVaultDir("");
+        setExpandedDirs(new Set([""]));
+        setDemoVaultMode(false);
+        setCenterGraphOpen(false);
+        setCenterView("markdown");
+
+        await openMarkdownFile(initialFile, { skipUnsavedCheck: true, standalone: true });
+      } catch (error) {
+        console.error("Failed to open startup file", error);
+        if (!cancelled) {
+          setSaveError(t.errors.openFileFailed);
+          setSaveStatus("error");
+        }
+      } finally {
+        if (!cancelled) setInitialOpenFileChecked(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    openMarkdownFile,
+    setExpandedDirs,
+    setSaveError,
+    setSaveStatus,
+    setSelectedVaultDir,
+    setVaultError,
+    setVaultIndex,
+    setVaultIndexError,
+    setVaultIndexStatus,
+    setVaultRecoveryBlocked,
+    setVaultRoot,
+    setVaultTree,
+    t.errors.openFileFailed,
+  ]);
+
 
   useEffect(() => {
-    if (restoredVaultRef.current || !vaultRoot) return;
+    if (!initialOpenFileChecked || restoredVaultRef.current || !vaultRoot) return;
     restoredVaultRef.current = true;
 
     if (vaultRecoveryBlocked) {
@@ -2260,10 +2580,10 @@ export default function App() {
       setVaultError(t.errors.restoreVaultFailed);
       setVaultRecoveryBlocked(true);
     });
-  }, [activateVault, t.errors.recoveryPaused, t.errors.recoveryPausedLabel, t.errors.restoreVaultFailed, vaultRecoveryBlocked, vaultRoot]);
+  }, [activateVault, initialOpenFileChecked, t.errors.recoveryPaused, t.errors.recoveryPausedLabel, t.errors.restoreVaultFailed, vaultRecoveryBlocked, vaultRoot]);
 
   useEffect(() => {
-    if (restoredStandaloneFileRef.current || vaultRoot || !restoreWorkspace || !lastOpenedFile) return;
+    if (!initialOpenFileChecked || restoredStandaloneFileRef.current || vaultRoot || !restoreWorkspace || !lastOpenedFile) return;
     restoredStandaloneFileRef.current = true;
 
     openMarkdownFile(lastOpenedFile, { skipUnsavedCheck: true }).catch((error) => {
@@ -2271,10 +2591,10 @@ export default function App() {
       setSaveError(t.errors.restoreLastFileFailed);
       setSaveStatus("error");
     });
-  }, [lastOpenedFile, openMarkdownFile, restoreWorkspace, t.errors.restoreLastFileFailed, vaultRoot]);
+  }, [initialOpenFileChecked, lastOpenedFile, openMarkdownFile, restoreWorkspace, t.errors.restoreLastFileFailed, vaultRoot]);
 
-  useEffect(() => {
-    writeSettings({
+  const settingsToPersist = useMemo<AppSettings>(() => ({
+      editorModePreferenceVersion: defaultSettings.editorModePreferenceVersion,
       theme,
       language,
       uiDensity,
@@ -2288,6 +2608,8 @@ export default function App() {
       vaultRecoveryBlocked,
       defaultEditorMode: defaultEditorModeSetting,
       restoreWorkspace,
+      restoreWindowState,
+      windowState,
       editorLatinFont: normalizeEditorFontFamily(editorLatinFont, defaultSettings.editorLatinFont),
       editorCjkFont: normalizeEditorFontFamily(editorCjkFont, defaultSettings.editorCjkFont),
       editorFontSize,
@@ -2295,14 +2617,14 @@ export default function App() {
       editorLeftGap,
       uiScale,
       zoomWithWheel,
+      showEditorStatusOverlay,
       defaultSaveExt,
       defaultNewNoteName: normalizeDefaultNewNoteName(defaultNewNoteName),
       imageAttachmentFolder: normalizeImageAttachmentFolder(imageAttachmentFolder),
       imagePathStyle,
       showImageSourceOnFocus,
       normalizeWindowsImagePaths,
-    });
-  }, [
+  }), [
     defaultEditorModeSetting,
     defaultNewNoteName,
     defaultSaveExt,
@@ -2317,10 +2639,12 @@ export default function App() {
     lastOpenedFile,
     normalizeWindowsImagePaths,
     restoreWorkspace,
+    restoreWindowState,
     rightPanelWidth,
     rightPanelVisible,
     selectedVaultDir,
     showImageSourceOnFocus,
+    showEditorStatusOverlay,
     sidebarVisible,
     sidebarWidth,
     theme,
@@ -2328,12 +2652,44 @@ export default function App() {
     uiScale,
     vaultRecoveryBlocked,
     vaultRoot,
+    windowState,
     zoomWithWheel,
   ]);
+
+  latestSettingsToPersistRef.current = settingsToPersist;
+
+  useEffect(() => {
+    const serialized = JSON.stringify(settingsToPersist);
+    if (serialized === persistedSettingsJsonRef.current) return undefined;
+
+    const timeout = window.setTimeout(() => {
+      writeSettings(settingsToPersist);
+      persistedSettingsJsonRef.current = serialized;
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [settingsToPersist]);
 
   useEffect(() => {
     writeShortcuts(shortcuts);
   }, [shortcuts]);
+
+  useEffect(() => {
+    const tauriWindow = window as Window & { __TAURI_INTERNALS__?: unknown };
+    if (!tauriWindow.__TAURI_INTERNALS__) return undefined;
+
+    let disposed = false;
+    configureGlobalRevealShortcut(globalRevealShortcut).catch((error) => {
+      if (!disposed) {
+        console.warn("Failed to configure global reveal shortcut", error);
+        setToastMessage(t.status.globalShortcutFailed);
+      }
+    });
+
+    return () => {
+      disposed = true;
+    };
+  }, [globalRevealShortcut, t.status.globalShortcutFailed]);
 
   useEffect(() => {
     if (!toastMessage) return undefined;
@@ -2407,31 +2763,57 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    const sources = collectLocalImageSources(activeNote.markdown);
+    const sources = collectLocalImageSources(deferredActiveMarkdown);
     if (!activeNote.filePath || !sources.length) {
+      if (imagePreviewSignatureRef.current === null) return undefined;
+      imagePreviewSignatureRef.current = null;
       setImagePreviewMap({});
       return undefined;
     }
 
+    const cacheBase = `${vaultRoot ?? ""}|${activeNote.filePath}`;
+    const previewSignature = `${cacheBase}|${sources.join("\u0000")}`;
+    const cachedEntries = sources
+      .map((source) => [source, imagePreviewCacheRef.current.get(`${cacheBase}|${source}`)] as const)
+      .filter((entry): entry is readonly [string, string] => Boolean(entry[1]));
+    const cachedMap = Object.fromEntries(cachedEntries);
+    const missingSources = sources.filter((source) => !imagePreviewCacheRef.current.has(`${cacheBase}|${source}`));
+
+    if (!missingSources.length) {
+      if (imagePreviewSignatureRef.current === previewSignature) return undefined;
+      imagePreviewSignatureRef.current = previewSignature;
+      setImagePreviewMap(cachedMap);
+      return undefined;
+    }
+
     const timeout = window.setTimeout(() => {
-      Promise.all(sources.map(async (source) => {
-        try {
-          const asset = await readLocalAssetDataUrl(vaultRoot, activeNote.filePath!, source);
-          return [source, asset.dataUrl] as const;
-        } catch {
-          return null;
+      void (async () => {
+        const entries: Array<readonly [string, string] | null> = [];
+        for (const source of missingSources) {
+          if (!active) return;
+          try {
+            const asset = await readLocalAssetDataUrl(vaultRoot, activeNote.filePath!, source);
+            imagePreviewCacheRef.current.set(`${cacheBase}|${source}`, asset.dataUrl);
+            entries.push([source, asset.dataUrl] as const);
+          } catch {
+            entries.push(null);
+          }
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
         }
-      })).then((entries) => {
         if (!active) return;
-        setImagePreviewMap(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))));
-      });
-    }, 150);
+        imagePreviewSignatureRef.current = previewSignature;
+        setImagePreviewMap({
+          ...cachedMap,
+          ...Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry))),
+        });
+      })();
+    }, 900);
 
     return () => {
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [activeNote.filePath, activeNote.markdown, vaultRoot]);
+  }, [activeNote.filePath, deferredActiveMarkdown, vaultRoot]);
 
   useEffect(() => {
     if (!appDialog || appDialog.kind !== "input") return undefined;
@@ -2531,6 +2913,8 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (isRecordingShortcutTarget(event.target)) return;
+
       if (event.key === "Escape") {
         if (contextMenu) {
           closeContextMenu();
@@ -3115,13 +3499,14 @@ export default function App() {
     window.addEventListener("pointerup", handlePointerUp);
   }, [centerGraphWidth]);
 
-  const handleShortcutInputBlur = useCallback((shortcutId: string) => {
-    const nextKeys = normalizeShortcutList(shortcutEdits[shortcutId] ?? "");
+  const handleShortcutRecord = useCallback((shortcutId: string, value: string) => {
+    const normalized = normalizeShortcutText(value);
+    const nextKeys = normalized ? [normalized] : [];
     setShortcuts((current) => current.map((shortcut) => (
       shortcut.id === shortcutId ? { ...shortcut, currentKeys: nextKeys } : shortcut
     )));
     setShortcutEdits((current) => ({ ...current, [shortcutId]: nextKeys.join(", ") }));
-  }, [shortcutEdits]);
+  }, []);
 
   const handleShortcutRestore = useCallback((shortcutId: string) => {
     setShortcuts((current) => current.map((shortcut) => (
@@ -3372,7 +3757,7 @@ export default function App() {
         rightPanelVisible={rightPanelVisible}
         vaultMode={vaultMode}
         graphOpen={centerGraphOpen}
-        newNoteLabel={t.sidebar.newNote}
+        labels={t.ribbon}
         onToggleSidebar={() => setSidebarVisible((visible) => !visible)}
         onToggleRightPanel={() => {
           setKnowledgePanelFloating(false);
@@ -3450,6 +3835,14 @@ export default function App() {
         graphWidth={centerGraphWidth}
         activeView={centerGraphOpen ? centerView : "markdown"}
         graphTitle={t.knowledge.graph}
+        editorStatus={(
+          showEditorStatusOverlay ? (
+            <WorkspaceEditorStatusBar
+              editorMode={editorMode}
+              modeLabel={t.modeNames[editorMode]}
+            />
+          ) : null
+        )}
         graphChildren={(
           <WorkspaceGraphLeaf
             t={t}
@@ -3568,20 +3961,6 @@ export default function App() {
         />
       ) : null}
 
-      <WorkspaceStatusBar
-        filePath={activeNote.filePath ?? null}
-        dirty={Boolean(activeNote.dirty)}
-        editorMode={editorMode}
-        vaultRoot={vaultRoot}
-        vaultIndexStatus={vaultIndexStatus}
-        vaultFileCount={vaultIndex?.files.length ?? 0}
-        lineCount={lineCount}
-        words={textStats.words}
-        characters={textStats.characters}
-        resolvedLinks={activeResolvedLinks.length}
-        unresolvedLinks={activeUnresolvedLinks.length}
-      />
-
       <CommandPalette
         open={paletteMode !== null}
         mode={paletteMode ?? "quickOpen"}
@@ -3619,6 +3998,7 @@ export default function App() {
         section={settingsSection}
         defaultEditorModeSetting={defaultEditorModeSetting}
         restoreWorkspace={restoreWorkspace}
+        restoreWindowState={restoreWindowState}
         sidebarVisible={sidebarVisible}
         rightPanelVisible={rightPanelVisible}
         editorLatinFont={editorLatinFont}
@@ -3627,6 +4007,7 @@ export default function App() {
         editorLineHeight={editorLineHeight}
         uiScale={uiScale}
         zoomWithWheel={zoomWithWheel}
+        showEditorStatusOverlay={showEditorStatusOverlay}
         editorLeftGap={editorLeftGap}
         sidebarWidth={sidebarWidth}
         rightPanelWidth={rightPanelWidth}
@@ -3646,8 +4027,9 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         onSectionChange={setSettingsSection}
         onLanguageChange={setLanguage}
-        onDefaultEditorModeChange={setDefaultEditorModeSetting}
+        onDefaultEditorModeChange={setGlobalEditorMode}
         onRestoreWorkspaceChange={setRestoreWorkspace}
+        onRestoreWindowStateChange={setRestoreWindowState}
         onSidebarVisibleChange={setSidebarVisible}
         onRightPanelVisibleChange={setRightPanelVisible}
         onEditorLatinFontChange={setEditorLatinFont}
@@ -3656,6 +4038,7 @@ export default function App() {
         onEditorLineHeightChange={setEditorLineHeight}
         onUiScaleChange={(value) => setUiScale(clampUiScale(value))}
         onZoomWithWheelChange={setZoomWithWheel}
+        onShowEditorStatusOverlayChange={setShowEditorStatusOverlay}
         onEditorLeftGapChange={(value) => setEditorLeftGap(clampEditorLeftGap(value))}
         onSidebarWidthChange={(value) => setSidebarWidth(clampSidebarWidth(value))}
         onRightPanelWidthChange={(value) => setRightPanelWidth(clampRightPanelWidth(value))}
@@ -3670,8 +4053,7 @@ export default function App() {
           setSidebarWidth(defaults.sidebarWidth);
           setRightPanelWidth(defaults.rightPanelWidth);
         }}
-        onShortcutEditChange={(shortcutId, value) => setShortcutEdits((current) => ({ ...current, [shortcutId]: value }))}
-        onShortcutInputBlur={handleShortcutInputBlur}
+        onShortcutRecord={handleShortcutRecord}
         onShortcutRestore={handleShortcutRestore}
         onShortcutRestoreAll={handleShortcutRestoreAll}
         onShortcutEnabledChange={updateShortcutEnabled}

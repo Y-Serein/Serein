@@ -34,6 +34,8 @@ export type MenuGroup = {
   items: MenuItem[];
 };
 
+let lastShortcutsJson: string | null = null;
+
 export const defaultShortcutRegistry: ShortcutEntry[] = [
   { id: "file.new", label: "New note", category: "File", defaultKeys: ["Ctrl+N"], currentKeys: ["Ctrl+N"], commandId: "file.new", editable: true, enabled: true },
   { id: "file.open", label: "Open file", category: "File", defaultKeys: ["Ctrl+O"], currentKeys: ["Ctrl+O"], commandId: "file.open", editable: true, enabled: true },
@@ -44,6 +46,7 @@ export const defaultShortcutRegistry: ShortcutEntry[] = [
   { id: "app.openQuickOpen", label: "Quick open", category: "App", defaultKeys: ["Ctrl+P"], currentKeys: ["Ctrl+P"], commandId: "app.openQuickOpen", editable: true, enabled: true },
   { id: "app.openCommandPalette", label: "Command palette", category: "App", defaultKeys: ["Ctrl+Shift+P"], currentKeys: ["Ctrl+Shift+P"], commandId: "app.openCommandPalette", editable: true, enabled: true },
   { id: "app.openSettings", label: "Open settings", category: "App", defaultKeys: ["Ctrl+,"], currentKeys: ["Ctrl+,"], commandId: "app.openSettings", editable: true, enabled: true },
+  { id: "app.revealWindow", label: "Show Serein", category: "App", defaultKeys: ["Alt+S"], currentKeys: ["Alt+S"], commandId: "app.revealWindow", editable: true, enabled: true },
   { id: "edit.cut", label: "Cut", category: "Edit", defaultKeys: ["Ctrl+X"], currentKeys: ["Ctrl+X"], commandId: "edit.cut", editable: true, enabled: true },
   { id: "edit.copy", label: "Copy", category: "Edit", defaultKeys: ["Ctrl+C"], currentKeys: ["Ctrl+C"], commandId: "edit.copy", editable: true, enabled: true },
   { id: "edit.paste", label: "Paste", category: "Edit", defaultKeys: ["Ctrl+V"], currentKeys: ["Ctrl+V"], commandId: "edit.paste", editable: true, enabled: true },
@@ -219,7 +222,10 @@ export function writeShortcuts(shortcuts: ShortcutEntry[]) {
     currentKeys,
     enabled,
   }));
-  window.localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(payload));
+  const serialized = JSON.stringify(payload);
+  if (serialized === lastShortcutsJson) return;
+  window.localStorage.setItem(SHORTCUTS_STORAGE_KEY, serialized);
+  lastShortcutsJson = serialized;
 }
 
 export function shortcutFromEvent(event: KeyboardEvent) {

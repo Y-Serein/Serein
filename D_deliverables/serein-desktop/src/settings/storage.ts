@@ -12,11 +12,21 @@ import {
   defaultSettings,
 } from "../app/defaults";
 import { isAppLanguage } from "../app/i18n";
-import type { AppSettings, EditorMode, ImagePathStyle, ThemeStyle, UIDensity } from "../app/types";
+import type { AppSettings, EditorMode, ImagePathStyle, ThemeStyle, UIDensity, WindowState } from "../app/types";
 
 const DEFAULT_NOTE_NAME_MAX_LENGTH = 80;
 const EDITOR_FONT_MAX_LENGTH = 80;
 const IMAGE_ATTACHMENT_FOLDER_MAX_LENGTH = 120;
+const MIN_WINDOW_WIDTH = 320;
+const MIN_WINDOW_HEIGHT = 240;
+const MAX_WINDOW_WIDTH = 10000;
+const MAX_WINDOW_HEIGHT = 10000;
+const MAX_WINDOW_POSITION = 100000;
+let lastSettingsJson: string | null = null;
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
 
 export function clampSidebarWidth(width: number) {
   if (!Number.isFinite(width)) return defaultSettings.sidebarWidth;
@@ -72,6 +82,35 @@ export function normalizeImageAttachmentFolder(value: unknown) {
   return cleaned.slice(0, IMAGE_ATTACHMENT_FOLDER_MAX_LENGTH);
 }
 
+function normalizeWindowState(value: unknown): WindowState | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<WindowState>;
+  const { x, y, width, height } = candidate;
+  if (!isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(width) || !isFiniteNumber(height)) {
+    return null;
+  }
+  if (Math.abs(x) > MAX_WINDOW_POSITION || Math.abs(y) > MAX_WINDOW_POSITION) return null;
+
+  const normalizedWidth = Math.round(width);
+  const normalizedHeight = Math.round(height);
+  if (
+    normalizedWidth < MIN_WINDOW_WIDTH
+    || normalizedHeight < MIN_WINDOW_HEIGHT
+    || normalizedWidth > MAX_WINDOW_WIDTH
+    || normalizedHeight > MAX_WINDOW_HEIGHT
+  ) {
+    return null;
+  }
+
+  return {
+    x: Math.round(Number(x)),
+    y: Math.round(Number(y)),
+    width: normalizedWidth,
+    height: normalizedHeight,
+    maximized: Boolean(candidate.maximized),
+  };
+}
+
 export function readSettings(): AppSettings {
   if (typeof window === "undefined") return defaultSettings;
 
@@ -86,6 +125,7 @@ export function readSettings(): AppSettings {
       selectedWorkspaceDir?: string;
       workspaceRecoveryBlocked?: boolean;
     };
+    const hasEditorStatusOverlaySetting = typeof parsed.showEditorStatusOverlay === "boolean";
     const theme: ThemeStyle = parsed.theme === "ink"
       || parsed.theme === "mint"
       || parsed.theme === "v5"
@@ -109,6 +149,7 @@ export function readSettings(): AppSettings {
       && editorLineHeight === 1.6;
 
     return {
+      editorModePreferenceVersion: defaultSettings.editorModePreferenceVersion,
       theme,
       language: isAppLanguage(parsed.language) ? parsed.language : defaultSettings.language,
       uiDensity,
@@ -138,6 +179,8 @@ export function readSettings(): AppSettings {
           : defaultSettings.vaultRecoveryBlocked,
       defaultEditorMode,
       restoreWorkspace: typeof parsed.restoreWorkspace === "boolean" ? parsed.restoreWorkspace : defaultSettings.restoreWorkspace,
+      restoreWindowState: typeof parsed.restoreWindowState === "boolean" ? parsed.restoreWindowState : defaultSettings.restoreWindowState,
+      windowState: normalizeWindowState(parsed.windowState),
       editorLatinFont: usesLegacyTypographyDefaults || usesTrialTypographyDefaults
         ? defaultSettings.editorLatinFont
         : editorLatinFont,
@@ -151,6 +194,9 @@ export function readSettings(): AppSettings {
       editorLeftGap: typeof parsed.editorLeftGap === "number" ? clampEditorLeftGap(parsed.editorLeftGap) : defaultSettings.editorLeftGap,
       uiScale: typeof parsed.uiScale === "number" ? clampUiScale(parsed.uiScale) : defaultSettings.uiScale,
       zoomWithWheel: typeof parsed.zoomWithWheel === "boolean" ? parsed.zoomWithWheel : defaultSettings.zoomWithWheel,
+      showEditorStatusOverlay: hasEditorStatusOverlaySetting
+        ? Boolean(parsed.showEditorStatusOverlay)
+        : defaultSettings.showEditorStatusOverlay,
       defaultSaveExt: parsed.defaultSaveExt === "txt" ? "txt" : "md",
       defaultNewNoteName: normalizeDefaultNewNoteName(parsed.defaultNewNoteName),
       imageAttachmentFolder: normalizeImageAttachmentFolder(parsed.imageAttachmentFolder),
@@ -169,5 +215,8 @@ export function readSettings(): AppSettings {
 }
 
 export function writeSettings(settings: AppSettings) {
-  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  const serialized = JSON.stringify(settings);
+  if (serialized === lastSettingsJson) return;
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, serialized);
+  lastSettingsJson = serialized;
 }

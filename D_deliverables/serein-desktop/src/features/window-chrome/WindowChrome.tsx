@@ -104,7 +104,10 @@ export function WindowChrome({
                   type="button"
                   aria-expanded={openMenuId === group.id}
                   className={cx("menu-root-button", openMenuId === group.id && "open")}
-                  onMouseDown={(event) => event.stopPropagation()}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
                   onClick={(event) => {
                     event.stopPropagation();
                     onOpenMenu(group.id);
@@ -130,7 +133,10 @@ export function WindowChrome({
                           type="button"
                           role="menuitem"
                           disabled={disabled}
-                          onMouseDown={(event) => event.stopPropagation()}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }}
                           onClick={() => {
                             if (item.commandId) onDispatchCommand(item.commandId);
                           }}
@@ -149,8 +155,13 @@ export function WindowChrome({
 
         <div className="menu-status">
           <span>{hasActiveDocument ? (saveStatus === "saved" ? t.status.saved : saveError ?? (savedAt ? `${t.status.saved} ${formatTime(savedAt)}` : t.status.memoryDraft)) : t.status.noDocument}</span>
-          <Button variant="ghost" icon={editorMode === "plain" ? <PanelLeft size={15} /> : <PanelRight size={15} />} onClick={() => onDispatchCommand(modeCommandId)}>
-            {editorMode === "plain" ? t.modeNames.rich : t.modeNames.plain}
+          <Button
+            variant="ghost"
+            icon={editorMode === "plain" ? <PanelLeft size={15} /> : <PanelRight size={15} />}
+            title={editorMode === "plain" ? t.modeNames.rich : t.modeNames.plain}
+            onClick={() => onDispatchCommand(modeCommandId)}
+          >
+            {t.modeNames[editorMode]}
           </Button>
         </div>
       </header>

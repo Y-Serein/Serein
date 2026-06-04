@@ -36,6 +36,11 @@ export type EditorCommandAction =
   | "inlineCode"
   | "strike"
   | "link"
+  | "cut"
+  | "copy"
+  | "paste"
+  | "undo"
+  | "redo"
   | "selectAllSmart";
 
 export type EditorCommandSignal = {

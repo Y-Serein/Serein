@@ -62,20 +62,8 @@ function computeChange(oldValue: string, newValue: string) {
 }
 
 function clipboardWriteText(text: string) {
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).catch(() => undefined);
-    return;
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  textarea.remove();
+  if (!text || !navigator.clipboard?.writeText) return;
+  navigator.clipboard.writeText(text).catch(() => undefined);
 }
 
 class SereinCodeMirrorBlock implements NodeView {

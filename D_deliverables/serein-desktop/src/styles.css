@@ -17,11 +17,16 @@
   --accent: #a371f7;
   --accent-cool: #8bd5ca;
   --shadow: 0 22px 56px rgb(0 0 0 / 32%);
-  --motion-fast: 120ms;
-  --motion-medium: 180ms;
-  --motion-panel: 220ms;
+  --motion-press: 110ms;
+  --motion-fast: 170ms;
+  --motion-medium: 250ms;
+  --motion-panel: 340ms;
+  --motion-exit: 210ms;
+  --motion-layout: 360ms;
+  --ease-standard: cubic-bezier(.4, 0, .2, 1);
   --ease-out: cubic-bezier(.16, 1, .3, 1);
-  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --ease-in: cubic-bezier(.7, 0, .84, 0);
+  --ease-smooth: cubic-bezier(.33, 1, .68, 1);
   --font-ui: "Avenir Next", "Segoe UI", "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
   --font-doc: var(--editor-font-latin, "Segoe UI"), var(--editor-font-cjk, "Microsoft YaHei"), "Noto Sans CJK SC", "Noto Sans SC", Arial, sans-serif;
   --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "SFMono-Regular", "Noto Sans Mono CJK SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
@@ -64,7 +69,8 @@ button {
     color var(--motion-fast) var(--ease-standard),
     border-color var(--motion-fast) var(--ease-standard),
     box-shadow var(--motion-fast) var(--ease-standard),
-    transform 80ms var(--ease-standard);
+    opacity var(--motion-fast) var(--ease-standard),
+    transform var(--motion-press) var(--ease-standard);
 }
 
 button:focus-visible,
@@ -73,16 +79,20 @@ a:focus-visible {
   outline-offset: 2px;
 }
 
+button:active:not(:disabled) {
+  transform: translateY(1px) scale(.985);
+}
+
 .desktop-shell {
   position: relative;
   display: grid;
   grid-template-columns: var(--ribbon-width) var(--sidebar-width, 240px) minmax(0, 1fr) var(--right-panel-width, 300px);
-  grid-template-rows: var(--chrome-height) minmax(0, 1fr) var(--statusbar-height);
+  grid-template-rows: var(--chrome-height) minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
   background: var(--bg);
   font-size: calc(13px * var(--ui-scale, 1));
-  transition: grid-template-columns var(--motion-panel) var(--ease-out);
+  transition: grid-template-columns var(--motion-layout) var(--ease-smooth);
 }
 
 .desktop-shell[data-sidebar="hidden"] {
@@ -195,7 +205,6 @@ a:focus-visible {
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 88%, transparent);
   backdrop-filter: blur(18px);
-  animation: chrome-enter var(--motion-panel) var(--ease-out) both;
 }
 
 .app-toast {
@@ -509,7 +518,7 @@ a:focus-visible {
     background var(--motion-fast) var(--ease-standard),
     border-color var(--motion-fast) var(--ease-standard),
     color var(--motion-fast) var(--ease-standard),
-    transform 80ms var(--ease-standard);
+    transform var(--motion-press) var(--ease-standard);
 }
 
 .menu-bar button:active:not(:disabled) {
@@ -642,12 +651,21 @@ button:disabled {
   border-radius: 5px;
   background: transparent;
   color: var(--muted);
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-press) var(--ease-standard);
 }
 
 .ribbon-button:hover,
 .ribbon-button.active {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--ink);
+}
+
+.ribbon-button:hover {
+  transform: translateY(-1px);
 }
 
 .ribbon-button.active {
@@ -657,21 +675,43 @@ button:disabled {
 .workspace-statusbar {
   position: relative;
   z-index: 9;
-  display: grid;
-  grid-column: 1 / -1;
-  grid-row: 3;
-  grid-template-columns: minmax(160px, 1fr) minmax(220px, auto);
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   height: var(--statusbar-height);
   min-width: 0;
   overflow: hidden;
-  border-top: 1px solid color-mix(in srgb, var(--line) 42%, transparent);
+  border: 0;
   background: var(--surface-panel);
-  box-shadow: 0 -10px 24px color-mix(in srgb, var(--surface-bg) 10%, transparent);
+  box-shadow: none;
   color: var(--muted);
   font-size: calc(11px * var(--ui-scale, 1));
-  padding: 0 10px 0 calc(var(--ribbon-width) + 10px);
+  padding: 0 10px;
+}
+
+.sidebar-statusbar {
+  justify-content: flex-start;
+  background: var(--surface-panel);
+}
+
+.workspace-editor-status {
+  display: inline-flex;
+  position: absolute;
+  right: clamp(16px, 3vw, 42px);
+  bottom: 8px;
+  z-index: 6;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+  height: 24px;
+  border-radius: 999px;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+  font-size: calc(11px * var(--ui-scale, 1));
+  pointer-events: none;
+  user-select: none;
+  animation: status-overlay-enter var(--motion-medium) var(--ease-out) both;
 }
 
 .statusbar-group {
@@ -700,14 +740,13 @@ button:disabled {
 }
 
 .statusbar-section.primary {
-  max-width: min(320px, 34vw);
+  max-width: 100%;
   color: var(--ink);
   font-weight: 650;
 }
 
 .statusbar-section.primary span:not(.status-dot),
-.statusbar-section.stats span,
-.statusbar-section.vault span {
+.statusbar-section.stats span {
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -740,10 +779,6 @@ button:disabled {
 }
 
 @media (max-width: 1080px) {
-  .workspace-statusbar {
-    grid-template-columns: minmax(140px, 1fr) auto;
-  }
-
   .statusbar-optional.medium {
     display: none;
   }
@@ -751,13 +786,12 @@ button:disabled {
 
 @media (max-width: 920px) {
   .statusbar-optional.narrow,
-  .statusbar-optional.wide,
-  .statusbar-section.mode {
+  .statusbar-optional.wide {
     display: none;
   }
 
-  .workspace-statusbar {
-    grid-template-columns: minmax(120px, 1fr) auto;
+  .workspace-editor-status {
+    gap: 6px;
   }
 }
 
@@ -778,7 +812,6 @@ button:disabled {
   border-right: 1px solid var(--line);
   background: var(--surface-panel);
   font-size: calc(13px * var(--ui-scale, 1));
-  animation: rail-left-enter var(--motion-panel) var(--ease-out) both;
 }
 
 .left-rail-scroll {
@@ -811,12 +844,20 @@ button:disabled {
   white-space: nowrap;
   padding: 0 4px;
   font-size: calc(11px * var(--ui-scale, 1));
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-press) var(--ease-standard);
 }
 
 .sidebar-tabs button.selected,
 .sidebar-tabs button:hover {
   background: var(--paper-soft);
   color: var(--ink);
+}
+
+.sidebar-tabs button:hover {
+  transform: translateY(-1px);
 }
 
 .sidebar-plugin-panel {
@@ -867,6 +908,11 @@ button:disabled {
   color: var(--muted);
   padding: 0 6px;
   font: calc(11px * var(--ui-scale, 1)) / 1 var(--font-ui);
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-press) var(--ease-standard);
 }
 
 .sidebar-search-scopes button::after {
@@ -887,8 +933,8 @@ button:disabled {
   text-overflow: ellipsis;
   transform: translate(-50%, -2px);
   transition:
-    opacity 120ms var(--ease-standard) 500ms,
-    transform 120ms var(--ease-standard) 500ms;
+    opacity var(--motion-fast) var(--ease-standard) 420ms,
+    transform var(--motion-fast) var(--ease-standard) 420ms;
   white-space: nowrap;
   padding: 5px 7px;
   font-size: calc(11px * var(--ui-scale, 1));
@@ -905,6 +951,10 @@ button:disabled {
   border-color: color-mix(in srgb, var(--accent-cool) 48%, var(--line));
   background: color-mix(in srgb, var(--accent-cool) 12%, var(--paper));
   color: var(--ink);
+}
+
+.sidebar-search-scopes button:hover {
+  transform: translateY(-1px);
 }
 
 .sidebar-tag-list {
@@ -930,7 +980,7 @@ button:disabled {
 .sidebar-resizer {
   position: absolute;
   top: var(--chrome-height);
-  bottom: var(--statusbar-height);
+  bottom: 0;
   left: calc(var(--ribbon-width) + var(--sidebar-width, 220px) - 6px);
   z-index: 9;
   width: 12px;
@@ -947,18 +997,23 @@ button:disabled {
   height: 100%;
   background: transparent;
   content: "";
+  opacity: 0;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    opacity var(--motion-fast) var(--ease-standard);
 }
 
 .sidebar-resizer:hover::after,
 .sidebar-resizer:focus-visible::after {
   background: color-mix(in srgb, var(--accent-cool) 62%, transparent);
+  opacity: 1;
 }
 
 .right-panel-resizer {
   position: absolute;
   top: var(--chrome-height);
   right: calc(var(--right-panel-width, 300px) - 6px);
-  bottom: var(--statusbar-height);
+  bottom: 0;
   z-index: 9;
   width: 12px;
   background: transparent;
@@ -974,11 +1029,16 @@ button:disabled {
   height: 100%;
   background: transparent;
   content: "";
+  opacity: 0;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    opacity var(--motion-fast) var(--ease-standard);
 }
 
 .right-panel-resizer:hover::after,
 .right-panel-resizer:focus-visible::after {
   background: color-mix(in srgb, var(--accent-cool) 62%, transparent);
+  opacity: 1;
 }
 
 .panel-heading {
@@ -1017,6 +1077,11 @@ button:disabled {
   background: transparent;
   color: var(--ink);
   text-align: left;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
 }
 
 .card-item {
@@ -1026,6 +1091,12 @@ button:disabled {
 .card-item.active {
   background: var(--paper);
   box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.card-item:hover,
+.card-item:focus-visible {
+  background: color-mix(in srgb, var(--paper-soft) 72%, transparent);
+  transform: translateX(2px);
 }
 
 .card-item strong,
@@ -1110,7 +1181,7 @@ button:disabled {
 }
 
 .workspace-tree {
-  padding: 4px 8px 64px 7px;
+  padding: 4px 8px 12px 7px;
 }
 
 .workspace-row {
@@ -1123,11 +1194,13 @@ button:disabled {
   min-width: 0;
   transition:
     background-color var(--motion-fast) var(--ease-standard),
-    box-shadow var(--motion-fast) var(--ease-standard);
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
 }
 
 .workspace-row:hover {
   background: color-mix(in srgb, var(--paper-soft) 64%, transparent);
+  transform: translateX(1px);
 }
 
 .workspace-row.selected {
@@ -1175,10 +1248,6 @@ button:disabled {
   padding-left: calc(var(--tree-depth, 0) * 13px + 18px);
 }
 
-.workspace-children {
-  animation: content-rise var(--motion-medium) var(--ease-out) both;
-}
-
 .workspace-actions {
   display: flex;
   position: absolute;
@@ -1212,10 +1281,14 @@ button:disabled {
   background: var(--surface-panel);
   color: var(--muted);
   font-size: 11px;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-press) var(--ease-standard);
 }
 
 .sidebar-outline {
-  padding-bottom: 64px;
+  padding-bottom: 12px;
 }
 
 .ribbon-button.new-note-fab {
@@ -1249,6 +1322,9 @@ button:disabled {
   border: 1px solid color-mix(in srgb, var(--line) 38%, transparent);
   border-radius: 0;
   background: var(--paper);
+  transition:
+    background-color var(--motion-medium) var(--ease-standard),
+    box-shadow var(--motion-medium) var(--ease-standard);
 }
 
 .workspace-center.split {
@@ -1326,6 +1402,7 @@ button:disabled {
   display: flex;
   align-items: end;
   gap: 4px;
+  justify-content: space-between;
   min-width: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 38%, transparent);
   background: color-mix(in srgb, var(--surface-panel-muted) 72%, var(--surface-panel));
@@ -1348,6 +1425,12 @@ button:disabled {
   padding: 0 3px 0 9px;
   font-size: calc(12px * var(--ui-scale, 1));
   font-weight: 650;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-press) var(--ease-standard);
 }
 
 .workspace-tab.active {
@@ -1355,6 +1438,10 @@ button:disabled {
   border-bottom-color: var(--paper);
   background: var(--paper);
   color: var(--ink);
+}
+
+.workspace-tab:hover {
+  transform: translateY(-1px);
 }
 
 .workspace-tab span {
@@ -1380,6 +1467,7 @@ button:disabled {
 }
 
 .workspace-leaf {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1587,7 +1675,6 @@ button:disabled {
   border-left: 1px solid color-mix(in srgb, var(--line) 28%, transparent);
   background: var(--surface-panel);
   font-size: calc(13px * var(--ui-scale, 1));
-  animation: rail-right-enter var(--motion-panel) var(--ease-out) both;
 }
 
 .knowledge-panel {
@@ -1682,7 +1769,6 @@ button:disabled {
   color: var(--muted);
   font-size: calc(12px * var(--ui-scale, 1));
   padding: 8px 12px;
-  animation: content-rise var(--motion-medium) var(--ease-out) both;
 }
 
 .knowledge-summary {
@@ -1710,7 +1796,6 @@ button:disabled {
   min-height: 0;
   overflow: auto;
   background: var(--surface-panel);
-  animation: editor-settle var(--motion-panel) var(--ease-out) both;
 }
 
 .markdown-editor,
@@ -2475,7 +2560,6 @@ button:disabled {
   gap: 7px;
   border-bottom: 1px solid var(--line);
   padding: 11px 12px;
-  animation: content-rise var(--motion-medium) var(--ease-out) both;
 }
 
 .knowledge-section h3 {
@@ -2808,7 +2892,6 @@ button:disabled {
   gap: 5px;
   color: var(--muted);
   font-size: calc(12px * var(--ui-scale, 1));
-  animation: content-rise var(--motion-medium) var(--ease-out) both;
 }
 
 .unresolved-links strong {
@@ -3040,7 +3123,7 @@ button:disabled {
   place-items: center;
   background: rgb(0 0 0 / 18%);
   padding: 24px;
-  animation: backdrop-enter var(--motion-medium) var(--ease-standard) both;
+  animation: backdrop-enter var(--motion-medium) var(--ease-smooth) both;
 }
 
 .app-dialog {
@@ -3105,12 +3188,17 @@ button:disabled {
   color: var(--ink);
   padding: 10px 12px;
   text-align: left;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
 }
 
 .app-dialog-choice:hover,
 .app-dialog-choice:focus-visible {
   border-color: color-mix(in srgb, var(--accent-cool) 42%, var(--line));
   background: color-mix(in srgb, var(--accent-cool) 8%, var(--paper));
+  transform: translateY(-1px);
 }
 
 .app-dialog-choice span {
@@ -3163,7 +3251,7 @@ button:disabled {
   justify-items: center;
   background: rgb(0 0 0 / 12%);
   padding: 72px 18px 18px;
-  animation: backdrop-enter var(--motion-medium) var(--ease-standard) both;
+  animation: backdrop-enter var(--motion-medium) var(--ease-smooth) both;
 }
 
 .command-palette {
@@ -3227,6 +3315,11 @@ button:disabled {
   color: var(--ink);
   padding: 9px 10px;
   text-align: left;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
 }
 
 .palette-item.primary,
@@ -3234,6 +3327,7 @@ button:disabled {
 .palette-item:focus-visible {
   border-color: color-mix(in srgb, var(--accent-cool) 42%, var(--line));
   background: var(--paper);
+  transform: translateY(-1px);
 }
 
 .palette-item span {
@@ -3266,11 +3360,11 @@ button:disabled {
   display: flex;
   justify-content: flex-end;
   background: rgb(0 0 0 / 18%);
-  animation: backdrop-enter 140ms var(--ease-standard) both;
+  animation: backdrop-enter var(--motion-medium) var(--ease-smooth) both;
 }
 
 .settings-backdrop[data-state="closing"] {
-  animation: backdrop-exit 150ms var(--ease-standard) both;
+  animation: backdrop-exit var(--motion-exit) var(--ease-in) both;
 }
 
 .settings-panel {
@@ -3281,11 +3375,11 @@ button:disabled {
   background: var(--panel);
   box-shadow: var(--shadow);
   padding: 18px;
-  animation: settings-panel-enter 210ms var(--ease-out) both;
+  animation: settings-panel-enter var(--motion-panel) var(--ease-out) both;
 }
 
 .settings-backdrop[data-state="closing"] .settings-panel {
-  animation: settings-panel-exit 150ms var(--ease-standard) both;
+  animation: settings-panel-exit var(--motion-exit) var(--ease-in) both;
 }
 
 .settings-header {
@@ -3351,7 +3445,7 @@ button:disabled {
 
 .settings-section {
   padding: 18px 0;
-  animation: settings-content-enter 180ms var(--ease-out) both;
+  animation: settings-content-enter var(--motion-medium) var(--ease-out) both;
 }
 
 .settings-section p {
@@ -3565,16 +3659,38 @@ button:disabled {
   font-size: 11px;
 }
 
-.shortcut-row input[type="text"],
-.shortcut-row > input {
-  min-width: 0;
+.shortcut-row button {
   height: 28px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--paper);
   color: var(--ink);
+}
+
+.shortcut-recorder {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  justify-content: flex-start;
   font: 12px/1 var(--font-mono);
   padding: 0 8px;
+  text-align: left;
+  transition:
+    border-color var(--motion-fast) var(--ease-standard),
+    background var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-press) var(--ease-standard);
+}
+
+.shortcut-recorder[data-empty="true"] {
+  color: var(--muted);
+}
+
+.shortcut-recorder[data-recording="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--paper));
+  color: var(--ink);
 }
 
 .shortcut-enabled {
@@ -3585,46 +3701,10 @@ button:disabled {
   font-size: 12px;
 }
 
-.shortcut-row button {
-  height: 28px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--paper);
-  color: var(--ink);
-}
-
-.outline-list,
-.link-list,
-.info-grid.compact {
-  animation: content-rise var(--motion-medium) var(--ease-out) both;
-}
-
-@keyframes chrome-enter {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @keyframes toast-enter {
   from {
     opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes menu-popover-enter {
-  from {
-    opacity: 0;
-    transform: translateY(-4px) scale(.985);
+    transform: translateY(-6px) scale(.985);
   }
   to {
     opacity: 1;
@@ -3632,45 +3712,25 @@ button:disabled {
   }
 }
 
-@keyframes rail-left-enter {
+@keyframes menu-popover-enter {
   from {
     opacity: 0;
-    transform: translateX(-10px);
+    transform: translateY(-6px) scale(.975);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
+    transform: translateY(0) scale(1);
   }
 }
 
-@keyframes rail-right-enter {
+@keyframes status-overlay-enter {
   from {
     opacity: 0;
-    transform: translateX(10px);
+    transform: translateY(6px) scale(.985);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes editor-settle {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes content-rise {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -3713,40 +3773,40 @@ button:disabled {
 @keyframes panel-slide-in {
   from {
     opacity: 0;
-    transform: translateX(18px);
+    transform: translateX(14px) scale(.985);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
+    transform: translateX(0) scale(1);
   }
 }
 
 @keyframes settings-panel-enter {
   from {
     opacity: 0;
-    transform: translateX(24px);
+    transform: translateX(18px) scale(.992);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
+    transform: translateX(0) scale(1);
   }
 }
 
 @keyframes settings-panel-exit {
   from {
     opacity: 1;
-    transform: translateX(0);
+    transform: translateX(0) scale(1);
   }
   to {
     opacity: 0;
-    transform: translateX(18px);
+    transform: translateX(14px) scale(.992);
   }
 }
 
 @keyframes settings-nav-enter {
   from {
     opacity: 0;
-    transform: translateX(10px);
+    transform: translateX(8px);
   }
   to {
     opacity: 1;
@@ -3757,18 +3817,18 @@ button:disabled {
 @keyframes settings-content-enter {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px) scale(.996);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
 @keyframes dialog-enter {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(.985);
+    transform: translateY(10px) scale(.982);
   }
   to {
     opacity: 1;
@@ -4052,6 +4112,12 @@ button:disabled {
   border-radius: var(--radius-control);
   color: var(--text-primary);
   background: transparent;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-press) var(--ease-standard);
 }
 
 .ui-button {
@@ -4118,6 +4184,11 @@ button:disabled {
   border-radius: 6px;
   color: var(--text-secondary);
   background: transparent;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-press) var(--ease-standard);
 }
 
 .ui-segmented-tabs button.selected {
@@ -4277,8 +4348,13 @@ button:disabled {
 
 .workspace-statusbar {
   border-top: 0;
-  background: color-mix(in srgb, var(--surface-panel) 92%, var(--surface-bg));
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--line-subtle) 14%, transparent);
+  background: var(--surface-panel);
+  box-shadow: none;
+}
+
+.workspace-editor-status {
+  background: transparent;
+  box-shadow: none;
 }
 
 .workspace-graph-stage footer {

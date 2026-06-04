@@ -1,5 +1,6 @@
 mod commands;
 mod fs_ops;
+mod global_hotkey;
 mod model;
 mod path_security;
 mod safe_fs;
@@ -12,7 +13,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            commands::configure_global_reveal_shortcut,
+            commands::initial_open_file,
             commands::read_markdown_file,
+            commands::reveal_window,
             commands::write_markdown_file,
             commands::write_export_file,
             commands::import_editor_asset,

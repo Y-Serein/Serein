@@ -13,6 +13,18 @@ export function readMarkdownFile(path: string) {
   return invoke<MarkdownFileResponse>("read_markdown_file", { path });
 }
 
+export function readInitialOpenFile() {
+  return invoke<string | null>("initial_open_file");
+}
+
+export function configureGlobalRevealShortcut(shortcut: string | null) {
+  return invoke<void>("configure_global_reveal_shortcut", { shortcut });
+}
+
+export function revealWindow() {
+  return invoke<void>("reveal_window");
+}
+
 export function writeMarkdownFile(
   path: string,
   content: string,

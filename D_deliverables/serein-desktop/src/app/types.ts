@@ -8,8 +8,16 @@ export type UIDensity = "comfortable" | "compact";
 export type SaveFileExt = "md" | "txt";
 export type ImagePathStyle = "relative" | "absolute";
 export type SettingsSection = "general" | "files" | "editor" | "image" | "markdown" | "appearance" | "shortcuts";
+export type WindowState = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  maximized: boolean;
+};
 
 export type AppSettings = {
+  editorModePreferenceVersion: 4;
   theme: ThemeStyle;
   language: AppLanguage;
   uiDensity: UIDensity;
@@ -23,6 +31,8 @@ export type AppSettings = {
   vaultRecoveryBlocked: boolean;
   defaultEditorMode: EditorMode;
   restoreWorkspace: boolean;
+  restoreWindowState: boolean;
+  windowState: WindowState | null;
   editorLatinFont: string;
   editorCjkFont: string;
   editorFontSize: number;
@@ -30,6 +40,7 @@ export type AppSettings = {
   editorLeftGap: number;
   uiScale: number;
   zoomWithWheel: boolean;
+  showEditorStatusOverlay: boolean;
   defaultSaveExt: SaveFileExt;
   defaultNewNoteName: string;
   imageAttachmentFolder: string;

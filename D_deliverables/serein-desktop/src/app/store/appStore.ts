@@ -13,6 +13,7 @@ import type {
   UIDensity,
   VaultTreeEntry,
   VaultWorkspaceState,
+  WindowState,
 } from "../types";
 import { createEmptyNote, mergeWorkspaceState } from "../../vault/workspace";
 import type { VaultIndex } from "../../vault";
@@ -74,6 +75,8 @@ type AppStoreState = {
 
   defaultEditorModeSetting: EditorMode;
   restoreWorkspace: boolean;
+  restoreWindowState: boolean;
+  windowState: WindowState | null;
   editorLatinFont: string;
   editorCjkFont: string;
   editorFontSize: number;
@@ -81,6 +84,7 @@ type AppStoreState = {
   editorLeftGap: number;
   uiScale: number;
   zoomWithWheel: boolean;
+  showEditorStatusOverlay: boolean;
   defaultSaveExt: SaveFileExt;
   defaultNewNoteName: string;
   imageAttachmentFolder: string;
@@ -129,6 +133,8 @@ type AppStoreActions = {
   setVaultWorkspace: (value: Updater<VaultWorkspaceState>) => void;
   setDefaultEditorModeSetting: (value: EditorMode) => void;
   setRestoreWorkspace: (value: boolean) => void;
+  setRestoreWindowState: (value: boolean) => void;
+  setWindowState: (value: WindowState | null) => void;
   setEditorLatinFont: (value: string) => void;
   setEditorCjkFont: (value: string) => void;
   setEditorFontSize: (value: number) => void;
@@ -136,6 +142,7 @@ type AppStoreActions = {
   setEditorLeftGap: (value: number) => void;
   setUiScale: (value: Updater<number>) => void;
   setZoomWithWheel: (value: boolean) => void;
+  setShowEditorStatusOverlay: (value: boolean) => void;
   setDefaultSaveExt: (value: SaveFileExt) => void;
   setDefaultNewNoteName: (value: Updater<string>) => void;
   setImageAttachmentFolder: (value: Updater<string>) => void;
@@ -200,6 +207,8 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   }),
   defaultEditorModeSetting: initialSettings.defaultEditorMode,
   restoreWorkspace: initialSettings.restoreWorkspace,
+  restoreWindowState: initialSettings.restoreWindowState,
+  windowState: initialSettings.windowState,
   editorLatinFont: initialSettings.editorLatinFont,
   editorCjkFont: initialSettings.editorCjkFont,
   editorFontSize: initialSettings.editorFontSize,
@@ -207,6 +216,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   editorLeftGap: initialSettings.editorLeftGap,
   uiScale: initialSettings.uiScale,
   zoomWithWheel: initialSettings.zoomWithWheel,
+  showEditorStatusOverlay: initialSettings.showEditorStatusOverlay,
   defaultSaveExt: initialSettings.defaultSaveExt,
   defaultNewNoteName: initialSettings.defaultNewNoteName,
   imageAttachmentFolder: initialSettings.imageAttachmentFolder,
@@ -252,6 +262,8 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   setVaultWorkspace: (value) => set((state) => ({ vaultWorkspace: resolveUpdater(state.vaultWorkspace, value) })),
   setDefaultEditorModeSetting: (value) => set({ defaultEditorModeSetting: value }),
   setRestoreWorkspace: (value) => set({ restoreWorkspace: value }),
+  setRestoreWindowState: (value) => set({ restoreWindowState: value }),
+  setWindowState: (value) => set({ windowState: value }),
   setEditorLatinFont: (value) => set({ editorLatinFont: value }),
   setEditorCjkFont: (value) => set({ editorCjkFont: value }),
   setEditorFontSize: (value) => set({ editorFontSize: value }),
@@ -259,6 +271,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   setEditorLeftGap: (value) => set({ editorLeftGap: value }),
   setUiScale: (value) => set((state) => ({ uiScale: resolveUpdater(state.uiScale, value) })),
   setZoomWithWheel: (value) => set({ zoomWithWheel: value }),
+  setShowEditorStatusOverlay: (value) => set({ showEditorStatusOverlay: value }),
   setDefaultSaveExt: (value) => set({ defaultSaveExt: value }),
   setDefaultNewNoteName: (value) => set((state) => ({ defaultNewNoteName: resolveUpdater(state.defaultNewNoteName, value) })),
   setImageAttachmentFolder: (value) => set((state) => ({ imageAttachmentFolder: resolveUpdater(state.imageAttachmentFolder, value) })),

@@ -13,6 +13,7 @@ type WorkspaceCenterProps = {
   activeView: "markdown" | "graph";
   graphTitle: string;
   graphChildren: ReactNode;
+  editorStatus: ReactNode;
   onViewChange: (view: "markdown" | "graph") => void;
   onClose: () => void;
   onCloseGraph: () => void;
@@ -30,6 +31,7 @@ export function WorkspaceCenter({
   activeView,
   graphTitle,
   graphChildren,
+  editorStatus,
   onViewChange,
   onClose,
   onCloseGraph,
@@ -64,7 +66,10 @@ export function WorkspaceCenter({
               />
             </div>
           </header>
-          <div className="workspace-leaf markdown-leaf">{children}</div>
+          <div className="workspace-leaf markdown-leaf">
+            {children}
+            {editorStatus}
+          </div>
         </div>
         <div
           className="center-graph-resizer"
@@ -120,7 +125,10 @@ export function WorkspaceCenter({
           />
         </div>
       </header>
-      <div className="workspace-leaf markdown-leaf">{children}</div>
+      <div className="workspace-leaf markdown-leaf">
+        {children}
+        {editorStatus}
+      </div>
     </section>
   );
 }

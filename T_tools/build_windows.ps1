@@ -141,9 +141,11 @@ Function PageLeaveReinstall
 
   Push-Location $nsisDir
   try {
-    & $makensis (Split-Path -Leaf $nsisScript)
-    if ($LASTEXITCODE -ne 0) {
-      throw "makensis failed with exit code $LASTEXITCODE"
+    $makensisOutput = & $makensis (Split-Path -Leaf $nsisScript) 2>&1
+    $makensisExitCode = $LASTEXITCODE
+    $makensisOutput | Where-Object { $null -ne $_ } | ForEach-Object { Write-Host $_ }
+    if ($makensisExitCode -ne 0) {
+      throw "makensis failed with exit code $makensisExitCode"
     }
   } finally {
     Pop-Location
@@ -165,6 +167,7 @@ Function PageLeaveReinstall
 
   Copy-Item $rebuiltInstaller $setupPath -Force
   Write-Host "Rebuilt NSIS installer with one-step upgrade flow: $setupPath"
+  return $setupPath
 }
 
 if (-not (Test-Path $appDir)) {
@@ -219,7 +222,13 @@ try {
     throw "tauri build failed with exit code $LASTEXITCODE"
   }
 
-  Invoke-SereinNsisInstallerPolish -AppDir $appDir
+  $setupPath = Invoke-SereinNsisInstallerPolish -AppDir $appDir
+  if (-not $setupPath -or -not (Test-Path $setupPath)) {
+    throw "NSIS setup artifact path was not returned correctly: $setupPath"
+  }
+  $rootSetupPath = Join-Path $repoRoot (Split-Path -Leaf $setupPath)
+  Copy-Item $setupPath $rootSetupPath -Force
+  Write-Host "Copied user installer to project root: $rootSetupPath"
 
   Write-Host ""
   Write-Host "Build artifacts:"

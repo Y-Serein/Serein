@@ -19,6 +19,7 @@ export const VAULT_DIRECTORY_LIMIT = 300;
 export const defaultEditorMode: EditorMode = "rich";
 
 export const defaultSettings: AppSettings = {
+  editorModePreferenceVersion: 4,
   theme: "daily",
   language: "zh-CN",
   uiDensity: "comfortable",
@@ -32,6 +33,8 @@ export const defaultSettings: AppSettings = {
   vaultRecoveryBlocked: false,
   defaultEditorMode,
   restoreWorkspace: true,
+  restoreWindowState: true,
+  windowState: null,
   editorLatinFont: "Segoe UI",
   editorCjkFont: "Microsoft YaHei",
   editorFontSize: 16,
@@ -39,6 +42,7 @@ export const defaultSettings: AppSettings = {
   editorLeftGap: 42,
   uiScale: 100,
   zoomWithWheel: true,
+  showEditorStatusOverlay: true,
   defaultSaveExt: "md",
   defaultNewNoteName: "Untitled",
   imageAttachmentFolder: "./image_ys",

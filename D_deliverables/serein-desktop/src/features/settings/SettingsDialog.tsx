@@ -19,11 +19,13 @@ import {
 } from "../../app/i18n";
 import type { AppLanguage, appText } from "../../app/i18n";
 import type { EditorMode, ImagePathStyle, SaveFileExt, SettingsSection, ThemeStyle, UIDensity } from "../../app/types";
-import type { ShortcutEntry } from "../../command/shortcuts";
+import { shortcutFromEvent, type ShortcutEntry } from "../../command/shortcuts";
 import { normalizeDefaultNewNoteName } from "../../services/settings";
 import { Button } from "../../shared/ui";
 
 type TextBundle = (typeof appText)[AppLanguage];
+
+const SETTINGS_PANEL_EXIT_MS = 210;
 
 type SettingsDialogProps = {
   open: boolean;
@@ -32,6 +34,7 @@ type SettingsDialogProps = {
   section: SettingsSection;
   defaultEditorModeSetting: EditorMode;
   restoreWorkspace: boolean;
+  restoreWindowState: boolean;
   sidebarVisible: boolean;
   rightPanelVisible: boolean;
   editorLatinFont: string;
@@ -40,6 +43,7 @@ type SettingsDialogProps = {
   editorLineHeight: number;
   uiScale: number;
   zoomWithWheel: boolean;
+  showEditorStatusOverlay: boolean;
   editorLeftGap: number;
   sidebarWidth: number;
   rightPanelWidth: number;
@@ -61,6 +65,7 @@ type SettingsDialogProps = {
   onLanguageChange: (language: AppLanguage) => void;
   onDefaultEditorModeChange: (mode: EditorMode) => void;
   onRestoreWorkspaceChange: (value: boolean) => void;
+  onRestoreWindowStateChange: (value: boolean) => void;
   onSidebarVisibleChange: (value: boolean) => void;
   onRightPanelVisibleChange: (value: boolean) => void;
   onEditorLatinFontChange: (value: string) => void;
@@ -69,12 +74,12 @@ type SettingsDialogProps = {
   onEditorLineHeightChange: (value: number) => void;
   onUiScaleChange: (value: number) => void;
   onZoomWithWheelChange: (value: boolean) => void;
+  onShowEditorStatusOverlayChange: (value: boolean) => void;
   onEditorLeftGapChange: (value: number) => void;
   onSidebarWidthChange: (value: number) => void;
   onRightPanelWidthChange: (value: number) => void;
   onResetEditorLayout: () => void;
-  onShortcutEditChange: (shortcutId: string, value: string) => void;
-  onShortcutInputBlur: (shortcutId: string) => void;
+  onShortcutRecord: (shortcutId: string, value: string) => void;
   onShortcutRestore: (shortcutId: string) => void;
   onShortcutRestoreAll: () => void;
   onShortcutEnabledChange: (shortcutId: string, enabled: boolean) => void;
@@ -98,6 +103,7 @@ export function SettingsDialog({
   section,
   defaultEditorModeSetting,
   restoreWorkspace,
+  restoreWindowState,
   sidebarVisible,
   rightPanelVisible,
   editorLatinFont,
@@ -106,6 +112,7 @@ export function SettingsDialog({
   editorLineHeight,
   uiScale,
   zoomWithWheel,
+  showEditorStatusOverlay,
   editorLeftGap,
   sidebarWidth,
   rightPanelWidth,
@@ -127,6 +134,7 @@ export function SettingsDialog({
   onLanguageChange,
   onDefaultEditorModeChange,
   onRestoreWorkspaceChange,
+  onRestoreWindowStateChange,
   onSidebarVisibleChange,
   onRightPanelVisibleChange,
   onEditorLatinFontChange,
@@ -135,12 +143,12 @@ export function SettingsDialog({
   onEditorLineHeightChange,
   onUiScaleChange,
   onZoomWithWheelChange,
+  onShowEditorStatusOverlayChange,
   onEditorLeftGapChange,
   onSidebarWidthChange,
   onRightPanelWidthChange,
   onResetEditorLayout,
-  onShortcutEditChange,
-  onShortcutInputBlur,
+  onShortcutRecord,
   onShortcutRestore,
   onShortcutRestoreAll,
   onShortcutEnabledChange,
@@ -158,6 +166,7 @@ export function SettingsDialog({
 }: SettingsDialogProps) {
   const [visible, setVisible] = useState(open);
   const [closing, setClosing] = useState(false);
+  const [recordingShortcutId, setRecordingShortcutId] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -168,9 +177,13 @@ export function SettingsDialog({
 
     if (!visible) return undefined;
     setClosing(true);
-    const timeout = window.setTimeout(() => setVisible(false), 180);
+    const timeout = window.setTimeout(() => setVisible(false), SETTINGS_PANEL_EXIT_MS);
     return () => window.clearTimeout(timeout);
   }, [open, visible]);
+
+  useEffect(() => {
+    if (!open) setRecordingShortcutId(null);
+  }, [open]);
 
   const requestClose = () => {
     if (closing) return;
@@ -178,7 +191,7 @@ export function SettingsDialog({
     window.setTimeout(() => {
       onClose();
       setVisible(false);
-    }, 150);
+    }, SETTINGS_PANEL_EXIT_MS);
   };
 
   if (!visible) return null;
@@ -229,6 +242,10 @@ export function SettingsDialog({
                   {t.settings.restoreLastVault}
                 </label>
                 <label className="settings-check">
+                  <input type="checkbox" checked={restoreWindowState} onChange={(event) => onRestoreWindowStateChange(event.target.checked)} />
+                  {t.settings.restoreWindowState}
+                </label>
+                <label className="settings-check">
                   <input type="checkbox" checked={sidebarVisible} onChange={(event) => onSidebarVisibleChange(event.target.checked)} />
                   {t.settings.showVaultSidebar}
                 </label>
@@ -277,6 +294,10 @@ export function SettingsDialog({
                 <label className="settings-check">
                   <input type="checkbox" checked={zoomWithWheel} onChange={(event) => onZoomWithWheelChange(event.target.checked)} />
                   {t.settings.zoomWithWheel}
+                </label>
+                <label className="settings-check">
+                  <input type="checkbox" checked={showEditorStatusOverlay} onChange={(event) => onShowEditorStatusOverlayChange(event.target.checked)} />
+                  {t.settings.showEditorStatusOverlay}
                 </label>
                 <label className="settings-field">
                   <span>{t.settings.layoutLeftGap}</span>
@@ -362,6 +383,11 @@ export function SettingsDialog({
                 <div className="shortcut-table">
                   {shortcuts.map((shortcut) => {
                     const rowConflicts = shortcut.currentKeys.some((key) => shortcutConflicts.has(key));
+                    const recording = recordingShortcutId === shortcut.id;
+                    const currentShortcutText = shortcutEdits[shortcut.id] ?? shortcut.currentKeys.join(", ");
+                    const recorderLabel = recording
+                      ? t.settings.shortcutRecording
+                      : currentShortcutText || t.settings.none;
 
                     return (
                       <div key={shortcut.id} className={rowConflicts ? "shortcut-row conflict" : "shortcut-row"}>
@@ -369,17 +395,42 @@ export function SettingsDialog({
                           <strong>{t.commandLabels[shortcut.commandId as keyof typeof t.commandLabels] ?? shortcut.label}</strong>
                           <span>{t.shortcutCategories[shortcut.category]} · {shortcut.commandId}</span>
                         </div>
-                        <input
-                          value={shortcutEdits[shortcut.id] ?? ""}
+                        <button
+                          type="button"
+                          className="shortcut-recorder"
                           disabled={!shortcut.editable}
                           aria-label={t.aria.shortcutInput(t.commandLabels[shortcut.commandId as keyof typeof t.commandLabels] ?? shortcut.label)}
-                          onChange={(event) => onShortcutEditChange(shortcut.id, event.target.value)}
+                          data-empty={!currentShortcutText ? "true" : undefined}
+                          data-recording={recording ? "true" : undefined}
+                          onClick={() => setRecordingShortcutId(shortcut.id)}
                           onKeyDown={(event) => {
                             event.stopPropagation();
-                            if (event.key === "Enter") event.currentTarget.blur();
+                            if (!recording) return;
+                            event.preventDefault();
+                            if (event.key === "Escape") {
+                              setRecordingShortcutId(null);
+                              return;
+                            }
+
+                            const hasPrimaryModifier = event.ctrlKey || event.altKey || event.metaKey;
+                            const hasAnyModifier = hasPrimaryModifier || event.shiftKey;
+                            if (!hasAnyModifier && (event.key === "Backspace" || event.key === "Delete")) {
+                              onShortcutRecord(shortcut.id, "");
+                              setRecordingShortcutId(null);
+                              return;
+                            }
+
+                            const nextShortcut = shortcutFromEvent(event.nativeEvent);
+                            if (!hasPrimaryModifier || !nextShortcut.includes("+")) return;
+                            onShortcutRecord(shortcut.id, nextShortcut);
+                            setRecordingShortcutId(null);
                           }}
-                          onBlur={() => onShortcutInputBlur(shortcut.id)}
-                        />
+                          onBlur={() => {
+                            if (recordingShortcutId === shortcut.id) setRecordingShortcutId(null);
+                          }}
+                        >
+                          {recorderLabel}
+                        </button>
                         <label className="shortcut-enabled">
                           <input type="checkbox" checked={shortcut.enabled} onChange={(event) => onShortcutEnabledChange(shortcut.id, event.target.checked)} />
                           {t.settings.enabled}

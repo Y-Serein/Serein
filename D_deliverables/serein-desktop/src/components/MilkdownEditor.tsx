@@ -8,7 +8,7 @@ import { codeBlockConfig } from "@milkdown/kit/component/code-block";
 import { imageInlineComponent } from "@milkdown/kit/component/image-inline";
 import { tableBlock, tableBlockConfig } from "@milkdown/kit/component/table-block";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
-import { history } from "@milkdown/kit/plugin/history";
+import { history, redoCommand, undoCommand } from "@milkdown/kit/plugin/history";
 import { upload, uploadConfig } from "@milkdown/kit/plugin/upload";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import {
@@ -24,14 +24,26 @@ import {
   wrapInHeadingCommand,
   wrapInOrderedListCommand,
 } from "@milkdown/kit/preset/commonmark";
-import { gfm, insertTableCommand, toggleStrikethroughCommand } from "@milkdown/kit/preset/gfm";
-import { lift, selectAll } from "@milkdown/kit/prose/commands";
+import {
+  commands as gfmCommands,
+  inputRules as gfmInputRules,
+  insertTableCommand,
+  keymap as gfmKeymap,
+  pasteRules as gfmPasteRules,
+  plugins as gfmPlugins,
+  remarkGFMPlugin,
+  schema as gfmSchema,
+  strikethroughSchema,
+  toggleStrikethroughCommand,
+} from "@milkdown/kit/preset/gfm";
+import { markRule } from "@milkdown/kit/prose";
+import { lift } from "@milkdown/kit/prose/commands";
 import { liftListItem, splitListItem } from "@milkdown/kit/prose/schema-list";
-import { Plugin, PluginKey, Selection, TextSelection } from "@milkdown/kit/prose/state";
+import { AllSelection, Plugin, PluginKey, Selection, TextSelection } from "@milkdown/kit/prose/state";
 import type { Command } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
-import { $prose, $shortcut } from "@milkdown/kit/utils";
+import { $inputRule, $prose, $shortcut } from "@milkdown/kit/utils";
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from "@milkdown/react";
 import type { EditorCommandSignal } from "../domain/model";
 import { sereinCodeBlockView } from "./sereinCodeBlockView";
@@ -130,6 +142,53 @@ function normalizeWindowsImageMarkdown(markdown: string) {
   return markdown.replace(/!\[([^\]\n]*)]\(((?:[A-Za-z]:\\|\\\\)[^)\n]*)\)/g, (_, alt: string, source: string) => (
     markdownImageText(source.trim(), alt)
   ));
+}
+
+function writeClipboardText(text: string) {
+  if (!text || !navigator.clipboard?.writeText) return;
+  navigator.clipboard.writeText(text).catch(() => undefined);
+}
+
+async function readClipboardText() {
+  if (!navigator.clipboard?.readText) return "";
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    return "";
+  }
+}
+
+function selectedRichText(view: EditorView) {
+  const { from, to, empty } = view.state.selection;
+  if (empty) return "";
+  return view.state.doc.textBetween(from, to, "\n\n", "\n");
+}
+
+function copyRichSelection(view: EditorView) {
+  const text = selectedRichText(view);
+  if (!text) return false;
+  writeClipboardText(text);
+  view.focus();
+  return true;
+}
+
+function cutRichSelection(view: EditorView) {
+  if (!copyRichSelection(view)) return false;
+  view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
+  view.focus();
+  return true;
+}
+
+function pasteRichText(view: EditorView) {
+  readClipboardText().then((text) => {
+    if (!text) {
+      view.focus();
+      return;
+    }
+    const { from, to } = view.state.selection;
+    view.dispatch(view.state.tr.insertText(text, from, to).scrollIntoView());
+    view.focus();
+  });
 }
 
 function refreshLocalImagePreviews(root: HTMLElement, imagePreviewMap: Record<string, string>) {
@@ -239,6 +298,27 @@ const selectCurrentCodeBlock: Command = (state, dispatch) => {
 const smartSelectAllShortcut = $shortcut(() => ({
   "Mod-a": selectCurrentCodeBlock,
 }));
+
+const selectCurrentDocument: Command = (state, dispatch) => {
+  if (dispatch) {
+    dispatch(state.tr.setSelection(new AllSelection(state.doc)).scrollIntoView());
+  }
+  return true;
+};
+
+const doubleTildeStrikethroughInputRule = $inputRule((ctx) => (
+  markRule(/(?<![\w:/])~~(.+?)~~(?!\w|\/)/, strikethroughSchema.type(ctx))
+));
+
+const sereinGfm = [
+  gfmSchema,
+  gfmInputRules,
+  gfmPasteRules,
+  doubleTildeStrikethroughInputRule,
+  gfmKeymap,
+  gfmCommands,
+  gfmPlugins,
+].flat();
 
 function splitPipeTableRow(text: string) {
   const trimmed = text.trim();
@@ -685,6 +765,26 @@ function commitLanguageDraft(view: EditorView, codeBlockDom: HTMLElement, button
   CodeMirrorView.findFromDOM(codeBlockDom)?.focus();
 }
 
+function focusCodeBlockFromLanguageControl(view: EditorView, codeBlockDom: HTMLElement, button: HTMLButtonElement) {
+  updateCodeBlockLanguage(view, codeBlockDom, currentLanguageText(button));
+  finishLanguageEdit(button);
+  closeLanguagePicker(button);
+
+  const codeMirror = CodeMirrorView.findFromDOM(codeBlockDom);
+  if (!codeMirror) {
+    view.focus();
+    return false;
+  }
+
+  const selection = codeMirror.state.selection.main;
+  codeMirror.focus();
+  codeMirror.dispatch({
+    selection: { anchor: selection.anchor, head: selection.head },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
 function convertTypedMarkdownLink(view: EditorView) {
   const { state } = view;
   const { selection } = state;
@@ -959,8 +1059,23 @@ function runEditorCommand(editor: Editor, command: EditorCommandSignal) {
           commands.call(toggleLinkCommand.key, { href: command.payload });
         }
         break;
+      case "cut":
+        cutRichSelection(view);
+        break;
+      case "copy":
+        copyRichSelection(view);
+        break;
+      case "paste":
+        pasteRichText(view);
+        break;
+      case "undo":
+        commands.call(undoCommand.key);
+        break;
+      case "redo":
+        commands.call(redoCommand.key);
+        break;
       case "selectAllSmart":
-        commands.inline(selectCurrentCodeBlock) || commands.inline(selectAll);
+        commands.inline(selectCurrentCodeBlock) || commands.inline(selectCurrentDocument);
         break;
       default:
         break;
@@ -1226,6 +1341,7 @@ function EditorSurface({
         const isCodeMirrorTarget = Boolean(codeBlock && target?.closest(".cm-editor"));
         const languageButton = target?.closest<HTMLButtonElement>(".language-button") ?? null;
         const isPlainArrowDown = event.key === "ArrowDown" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+        const isPlainArrowUp = event.key === "ArrowUp" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
 
         if (wikiSuggestRef.current && !event.ctrlKey && !event.metaKey && !event.altKey) {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -1335,6 +1451,14 @@ function EditorSurface({
 
         if (codeBlock && languageButton) {
           if (!languageButton.hasAttribute("data-language-draft")) beginLanguageEdit(languageButton);
+
+          if (isPlainArrowUp) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            focusCodeBlockFromLanguageControl(view, codeBlock, languageButton);
+            return;
+          }
 
           if (isPlainArrowDown) {
             event.preventDefault();
@@ -1628,6 +1752,7 @@ function EditorSurface({
       .config((ctx) => {
         ctx.set(rootCtx, root);
         ctx.set(defaultValueCtx, initialMarkdownRef.current);
+        ctx.set(remarkGFMPlugin.options.key, { singleTilde: false });
         ctx.update(codeBlockConfig.key, (defaultConfig) => ({
           ...defaultConfig,
           extensions: [
@@ -1671,7 +1796,7 @@ function EditorSurface({
         });
       })
       .use(commonmark)
-      .use(gfm)
+      .use(sereinGfm)
       .use([codeBlockConfig, sereinCodeBlockView])
       .use(imageInlineComponent)
       .use(tableBlock)

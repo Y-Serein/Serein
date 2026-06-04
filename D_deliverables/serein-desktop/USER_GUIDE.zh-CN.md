@@ -197,6 +197,6 @@ Vault 索引当前识别这些格式：
 预期产物：
 
 ```text
-D_deliverables\serein-desktop\src-tauri\target\release\bundle\nsis\Serein_0.0.4_x64-setup.exe
+D_deliverables\serein-desktop\src-tauri\target\release\bundle\nsis\Serein_0.0.5_x64-setup.exe
 D_deliverables\serein-desktop\src-tauri\target\release\serein-desktop.exe
 ```
