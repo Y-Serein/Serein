@@ -92,20 +92,7 @@ button:active:not(:disabled) {
   overflow: hidden;
   background: var(--bg);
   font-size: calc(13px * var(--ui-scale, 1));
-  transition:
-    grid-template-columns var(--motion-layout) var(--ease-smooth),
-    opacity var(--motion-medium) var(--ease-out),
-    transform var(--motion-medium) var(--ease-out);
-}
-
-.desktop-shell[data-presented="false"] {
-  opacity: 0;
-  transform: translateY(4px) scale(.996);
-}
-
-.desktop-shell[data-presented="true"] {
-  opacity: 1;
-  transform: none;
+  transition: grid-template-columns var(--motion-layout) var(--ease-smooth);
 }
 
 .desktop-shell[data-sidebar="hidden"] {
