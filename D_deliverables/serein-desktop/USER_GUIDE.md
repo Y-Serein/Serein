@@ -9,6 +9,8 @@ Serein is a local Markdown desktop writer with a linked Vault workflow. Files st
 3. Select a local folder that contains Markdown or text files.
 4. Click a `.md`, `.markdown`, or `.txt` file in the left file tree to edit it.
 
+For first-time use, open `Help -> User manual`. It is an HTML learning page with a complete feature guide and an editable Markdown practice area for headings, paths, tags, links, and properties.
+
 If the app restores a previous vault and fails to load it, use `Clear vault state` in the left panel, then open the vault again.
 
 ## Editing and Saving
@@ -19,20 +21,23 @@ If the app restores a previous vault and fails to load it, use `Clear vault stat
 - `File -> Save as` writes a copy to a selected path.
 - `New note`, `New folder`, rename, and delete act on the selected Vault folder.
 
-Delete is real file-system deletion. Confirm the target before accepting the prompt.
+Delete moves the target to the Serein app-data trash instead of permanently deleting it from disk. Confirm the target before accepting the prompt.
 
 ## Knowledge Panel
 
 The Knowledge Panel can stay docked on the right or float as a movable panel. Use `Float` to detach it and `Dock` to return it to the right side. When floating, drag its title bar to move it.
 
-The panel has two tabs:
+The panel has these tabs:
 
 - `Backlinks`
+- `Outgoing`
+- `Properties`
 - `Graph`
+- `Tags`
 
 ## Files and Outline
 
-The left rail has two tabs.
+The left rail usually shows `Files` and `Outline`; `Search` appears when you run a search.
 
 ### Files
 
@@ -45,7 +50,68 @@ Shows the current Vault file tree. Click a file to open it.
 
 Shows headings from the current file. Click a heading to jump to it.
 
-Supported heading levels shown in the outline are `#`, `##`, and `###`.
+Supported heading levels shown in the outline are `#` through `######`.
+
+## Obsidian / Vault Basics
+
+### Headings
+
+Use standard Markdown headings:
+
+```markdown
+# Project title
+## Next steps
+### Risks
+```
+
+- The first H1 is used as the note title when present; otherwise Serein uses the file name.
+- The left Outline reads headings and lets you jump to them.
+- Links can target headings, for example `[[Project Atlas#Next steps]]`.
+
+### Paths
+
+Paths come from relative file and folder positions inside the Vault. There is no separate path syntax to create.
+
+If the Vault contains:
+
+```text
+Projects/
+  Atlas.md
+Notes/
+  Research.md
+```
+
+You can write:
+
+```markdown
+[[Projects/Atlas]]
+[Research](./Notes/Research.md)
+```
+
+Directory links such as `[Index](./Notes/)` resolve to `index.md`, `README.md`, or another supported directory entry file.
+
+### Tags and Properties
+
+Inline tags:
+
+```markdown
+#project
+#project/atlas
+```
+
+YAML frontmatter tags and aliases:
+
+```markdown
+---
+tags: [project, writing]
+aliases: [Atlas, Project Atlas]
+status: active
+---
+```
+
+- `tags` appear in search, the right Tags panel, and graph filtering.
+- `aliases` are used for Wiki link candidates and unlinked mentions.
+- Other properties appear in the right Knowledge Panel.
 
 ## Backlinks
 
@@ -77,6 +143,7 @@ The Vault index recognizes:
 [[note]]
 [[note#heading]]
 [[note|alias]]
+[[path/note#heading|alias]]
 [text](path.md)
 [text](folder/path.markdown)
 [text](../relative/path.md)

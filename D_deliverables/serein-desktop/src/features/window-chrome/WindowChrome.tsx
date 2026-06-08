@@ -49,6 +49,10 @@ export function WindowChrome({
   onOpenMenu,
   onDispatchCommand,
 }: WindowChromeProps) {
+  const statusText = hasActiveDocument
+    ? (saveError ?? (saveStatus === "saved" ? t.status.saved : savedAt ? `${t.status.saved} ${formatTime(savedAt)}` : ""))
+    : t.status.noDocument;
+
   return (
     <div className="app-chrome">
       <header
@@ -154,7 +158,7 @@ export function WindowChrome({
         </div>
 
         <div className="menu-status">
-          <span>{hasActiveDocument ? (saveStatus === "saved" ? t.status.saved : saveError ?? (savedAt ? `${t.status.saved} ${formatTime(savedAt)}` : t.status.memoryDraft)) : t.status.noDocument}</span>
+          {statusText ? <span>{statusText}</span> : null}
           <Button
             variant="ghost"
             icon={editorMode === "plain" ? <PanelLeft size={15} /> : <PanelRight size={15} />}

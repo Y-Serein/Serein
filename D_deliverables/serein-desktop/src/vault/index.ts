@@ -1,5 +1,15 @@
 import type { VaultIndexFileResponse, VaultIndexResponse } from "../app/types";
-import { extractFirstLineTitle, normalizeFilePath, parentVaultDir, pathFileName, stripExtension } from "../shared/markdown.js";
+import type { MarkdownProperty } from "../shared/markdown.js";
+import {
+  extractFirstLineTitle,
+  normalizeFilePath,
+  parentVaultDir,
+  pathFileName,
+  pathExtension,
+  stripExtension,
+  splitYamlFrontmatter,
+  yamlPropertyValues,
+} from "../shared/markdown.js";
 
 export type VaultHeading = {
   level: number;
@@ -60,11 +70,7 @@ export type VaultIndexedFile = {
   outgoingLinks: VaultLink[];
 };
 
-export type VaultProperty = {
-  key: string;
-  value: string;
-  type: "text" | "list" | "checkbox" | "number" | "date";
-};
+export type VaultProperty = MarkdownProperty;
 
 export type VaultGraphNode = {
   path: string;
@@ -277,14 +283,22 @@ export function getIncomingUnlinkedMentions(
 }
 
 export function createDraftIndexedFile(index: VaultIndex | null, path: string | null | undefined, markdown: string) {
-  const existing = findIndexedFile(index, path);
-  if (!index || !existing) return null;
+  if (!index || !path) return null;
+
+  const normalizedPath = normalizeFilePath(path);
+  const existing = findIndexedFile(index, normalizedPath);
+  const inferredRelativePath = relativeVaultPathFromRoot(index.root, normalizedPath);
+  if (!existing && inferredRelativePath === null) return null;
+
+  const relativePath = existing?.relativePath ?? inferredRelativePath ?? pathFileName(normalizedPath);
+  const fileName = existing?.fileName ?? pathFileName(relativePath);
+  const fileExt = existing?.fileExt ?? pathExtension(fileName);
 
   const parsed = parseVaultFile({
-    path: existing.path,
-    relativePath: existing.relativePath,
-    fileName: existing.fileName,
-    fileExt: existing.fileExt,
+    path: existing?.path ?? normalizedPath,
+    relativePath,
+    fileName,
+    fileExt,
     content: markdown,
   });
   const { rawLinks, ...file } = parsed;
@@ -440,10 +454,10 @@ export function createGlobalGraph(index: VaultIndex | null, options: GlobalGraph
   };
 }
 
-export function listVaultTags(index: VaultIndex | null): VaultTagSummary[] {
+export function listVaultTags(index: VaultIndex | null, draftFile?: VaultIndexedFile | null): VaultTagSummary[] {
   if (!index) return [];
   const counts = new Map<string, number>();
-  for (const file of index.files) {
+  for (const file of filesWithDraft(index, draftFile)) {
     for (const tag of file.tags) {
       counts.set(tag, (counts.get(tag) ?? 0) + 1);
     }
@@ -456,7 +470,7 @@ export function listVaultTags(index: VaultIndex | null): VaultTagSummary[] {
 export function searchVaultIndex(
   index: VaultIndex | null,
   query: string,
-  options: { tag?: string | null; limit?: number } = {},
+  options: { tag?: string | null; limit?: number; draftFile?: VaultIndexedFile | null } = {},
 ): VaultSearchResult[] {
   if (!index) return [];
   const search = parseVaultSearchQuery(query);
@@ -467,7 +481,7 @@ export function searchVaultIndex(
   if (!cleanQuery && !tag) return [];
 
   const results: VaultSearchResult[] = [];
-  for (const file of index.files) {
+  for (const file of filesWithDraft(index, options.draftFile)) {
     if (tag && !file.tags.includes(tag)) continue;
     const title = file.title.toLowerCase();
     const relativePath = file.relativePath.toLowerCase();
@@ -499,14 +513,21 @@ export function searchVaultIndex(
   return results;
 }
 
+function filesWithDraft(index: VaultIndex, draftFile?: VaultIndexedFile | null) {
+  if (!draftFile) return index.files;
+  const draftPath = normalizeFilePath(draftFile.path);
+  const files = index.files.filter((file) => normalizeFilePath(file.path) !== draftPath);
+  return [draftFile, ...files];
+}
+
 function parseVaultSearchQuery(query: string): { mode: VaultSearchMode; query: string } {
   const trimmed = query.trim();
   const prefix = trimmed[0];
   if (!prefix) return { mode: "all", query: trimmed };
 
-  if (prefix === "@") return { mode: "title", query: trimmed.slice(1).trim() };
+  if (prefix === "@") return { mode: "tag", query: trimmed.slice(1).trim() };
   if (prefix === "/") return { mode: "path", query: trimmed.slice(1).trim() };
-  if (prefix === "#") return { mode: "tag", query: trimmed.slice(1).trim() };
+  if (prefix === "#") return { mode: "title", query: trimmed.slice(1).trim() };
   if (prefix === ":") return { mode: "content", query: trimmed.slice(1).trim() };
   return { mode: "all", query: trimmed };
 }
@@ -663,10 +684,12 @@ function createCandidateMap(files: LinkTargetFile[]) {
 }
 
 function parseVaultFile(file: VaultIndexFileResponse): ParsedVaultFile {
-  const title = extractFirstLineTitle(file.content) ?? stripExtension(file.fileName);
-  const properties = extractFrontmatterProperties(file.content);
-  const aliases = propertyValues(properties, "aliases");
-  const propertyTags = propertyValues(properties, "tags").map((tag) => tag.replace(/^#/, ""));
+  const frontmatter = splitYamlFrontmatter(file.content);
+  const body = frontmatter?.body ?? file.content;
+  const title = extractFirstLineTitle(body) ?? stripExtension(file.fileName);
+  const properties = frontmatter?.properties ?? [];
+  const aliases = yamlPropertyValues(properties, "aliases");
+  const propertyTags = yamlPropertyValues(properties, "tags").map((tag) => tag.replace(/^#/, ""));
 
   return {
     path: file.path,
@@ -712,83 +735,6 @@ function extractTags(markdown: string): string[] {
   }
 
   return [...tags].sort((left, right) => left.localeCompare(right));
-}
-
-function extractFrontmatterProperties(markdown: string): VaultProperty[] {
-  const normalized = markdown.replace(/\r\n?/g, "\n");
-  if (!normalized.startsWith("---\n")) return [];
-  const end = normalized.indexOf("\n---", 4);
-  if (end < 0) return [];
-
-  const lines = normalized.slice(4, end).split("\n");
-  const properties: VaultProperty[] = [];
-  let currentKey = "";
-  let currentItems: string[] = [];
-
-  const flushList = () => {
-    if (!currentKey) return;
-    properties.push({
-      key: currentKey,
-      value: currentItems.join(", "),
-      type: "list",
-    });
-    currentKey = "";
-    currentItems = [];
-  };
-
-  for (const line of lines) {
-    const listItem = line.match(/^\s+-\s+(.+)$/);
-    if (listItem && currentKey) {
-      currentItems.push(cleanYamlValue(listItem[1]));
-      continue;
-    }
-
-    flushList();
-    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (!match) continue;
-
-    const key = match[1].trim();
-    const rawValue = match[2].trim();
-    if (!rawValue) {
-      currentKey = key;
-      currentItems = [];
-      continue;
-    }
-
-    properties.push({
-      key,
-      value: cleanYamlValue(rawValue),
-      type: yamlPropertyType(rawValue),
-    });
-  }
-
-  flushList();
-  return properties;
-}
-
-function propertyValues(properties: VaultProperty[], key: string) {
-  const property = properties.find((item) => item.key.toLowerCase() === key.toLowerCase());
-  if (!property) return [];
-  const value = property.value.trim();
-  if (!value) return [];
-  return value
-    .replace(/^\[|\]$/g, "")
-    .split(",")
-    .map((item) => cleanYamlValue(item))
-    .filter(Boolean);
-}
-
-function cleanYamlValue(value: string) {
-  return value.trim().replace(/^['"]|['"]$/g, "");
-}
-
-function yamlPropertyType(value: string): VaultProperty["type"] {
-  const clean = cleanYamlValue(value);
-  if (/^\[.*]$/.test(value.trim())) return "list";
-  if (/^(true|false)$/i.test(clean)) return "checkbox";
-  if (/^-?\d+(\.\d+)?$/.test(clean)) return "number";
-  if (/^\d{4}-\d{2}-\d{2}/.test(clean)) return "date";
-  return "text";
 }
 
 function uniqueSorted(values: string[]) {
@@ -1034,6 +980,14 @@ function normalizeVaultPath(path: string) {
     .replace(/^\/+/, "")
     .replace(/\/+/g, "/")
     .replace(/\/+$/, "");
+}
+
+function relativeVaultPathFromRoot(root: string, path: string) {
+  const normalizedRoot = normalizeFilePath(root);
+  const normalizedPath = normalizeFilePath(path);
+  if (normalizedPath === normalizedRoot) return "";
+  if (!normalizedPath.startsWith(`${normalizedRoot}/`)) return null;
+  return normalizeVaultPath(normalizedPath.slice(normalizedRoot.length + 1));
 }
 
 function isDirectoryTarget(target: string) {

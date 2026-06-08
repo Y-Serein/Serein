@@ -75,7 +75,7 @@ export function KnowledgeRail({
   const [graphTag, setGraphTag] = useState("");
   const [graphIsolatedOnly, setGraphIsolatedOnly] = useState(false);
   const [graphShowUnresolved, setGraphShowUnresolved] = useState(true);
-  const tags = useMemo(() => listVaultTags(vaultIndex), [vaultIndex]);
+  const tags = useMemo(() => listVaultTags(vaultIndex, activeIndexedFile), [activeIndexedFile, vaultIndex]);
   const globalGraph = useMemo(() => createGlobalGraph(vaultIndex, {
     tag: graphTag || null,
     isolatedOnly: graphIsolatedOnly,

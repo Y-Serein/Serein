@@ -43,6 +43,7 @@ export const defaultSettings: AppSettings = {
   uiScale: 100,
   zoomWithWheel: true,
   showEditorStatusOverlay: true,
+  showFrontmatterTagRow: true,
   defaultSaveExt: "md",
   defaultNewNoteName: "Untitled",
   imageAttachmentFolder: "./image_ys",

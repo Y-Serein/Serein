@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { defaultHighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages as codeMirrorLanguages } from "@codemirror/language-data";
@@ -43,9 +44,18 @@ import { AllSelection, Plugin, PluginKey, Selection, TextSelection } from "@milk
 import type { Command } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
-import { $inputRule, $prose, $shortcut } from "@milkdown/kit/utils";
+import { $inputRule, $prose, $shortcut, replaceAll } from "@milkdown/kit/utils";
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from "@milkdown/react";
 import type { EditorCommandSignal } from "../domain/model";
+import type { YamlFrontmatterParts } from "../shared/markdown";
+import {
+  composeMarkdownWithFrontmatter,
+  createYamlFrontmatter,
+  setYamlPropertyValue,
+  splitYamlFrontmatter,
+  splitYamlPropertyValue,
+  yamlListValueFromInput,
+} from "../shared/markdown";
 import { sereinCodeBlockView } from "./sereinCodeBlockView";
 
 type MilkdownEditorProps = {
@@ -60,6 +70,17 @@ type MilkdownEditorProps = {
   imagePreviewMap: Record<string, string>;
   showImageSourceOnFocus: boolean;
   normalizeWindowsImagePaths: boolean;
+  showFrontmatterTagRow: boolean;
+  frontmatterLabels: {
+    properties: string;
+    edit: string;
+    empty: string;
+    tags: string;
+    aliases: string;
+    status: string;
+    active: string;
+    inactive: string;
+  };
 };
 
 export type WikiLinkSuggestion = {
@@ -142,6 +163,57 @@ function normalizeWindowsImageMarkdown(markdown: string) {
   return markdown.replace(/!\[([^\]\n]*)]\(((?:[A-Za-z]:\\|\\\\)[^)\n]*)\)/g, (_, alt: string, source: string) => (
     markdownImageText(source.trim(), alt)
   ));
+}
+
+function displayFrontmatterValue(property: YamlFrontmatterParts["properties"][number]) {
+  if (property.type === "list" || property.key.toLowerCase() === "tags" || property.key.toLowerCase() === "aliases") {
+    return splitYamlPropertyValue(property.value).join(", ");
+  }
+
+  return property.value;
+}
+
+function frontmatterPropertyValue(frontmatter: YamlFrontmatterParts | null, key: string) {
+  return frontmatter?.properties.find((property) => property.key.toLowerCase() === key.toLowerCase())?.value ?? "";
+}
+
+function normalizeRichFrontmatterBody(body: string) {
+  return body.replace(/^\n+/, "");
+}
+
+function editorDocumentFromMarkdown(markdown: string, normalizeWindowsImagePaths: boolean) {
+  const normalizedMarkdown = normalizeWindowsImagePaths ? normalizeWindowsImageMarkdown(markdown) : markdown;
+  const frontmatter = splitYamlFrontmatter(normalizedMarkdown);
+  const bodyMarkdown = frontmatter ? normalizeRichFrontmatterBody(frontmatter.body) : normalizedMarkdown;
+  return {
+    frontmatter,
+    bodyMarkdown,
+    fullMarkdown: frontmatter ? composeMarkdownWithFrontmatter(frontmatter.frontmatter, bodyMarkdown) : bodyMarkdown,
+  };
+}
+
+function selectionStartsAtDocumentTop(view: EditorView) {
+  const beforeSelection = view.state.doc.textBetween(0, view.state.selection.from, "\n", "\n");
+  return beforeSelection.trim().length === 0;
+}
+
+function selectionIsInFirstTextBlock(view: EditorView) {
+  const { $from } = view.state.selection;
+  const topLevelIndex = $from.index(0);
+  for (let index = 0; index < topLevelIndex; index += 1) {
+    const node = view.state.doc.child(index);
+    if (node.textContent.trim()) return false;
+    if (node.type.name !== "paragraph") return false;
+  }
+  return true;
+}
+
+function mergeMarkdownBodies(first: string, second: string) {
+  const left = first.replace(/^\n+/, "");
+  const right = second.replace(/^\n+/, "");
+  if (!left) return right;
+  if (!right) return left;
+  return `${left.replace(/\n*$/, "\n\n")}${right}`;
 }
 
 function writeClipboardText(text: string) {
@@ -1095,8 +1167,14 @@ function EditorSurface({
   imagePreviewMap,
   showImageSourceOnFocus,
   normalizeWindowsImagePaths,
+  showFrontmatterTagRow,
+  frontmatterLabels,
 }: MilkdownEditorProps) {
-  const initialMarkdownRef = useRef(normalizeWindowsImagePaths ? normalizeWindowsImageMarkdown(markdown) : markdown);
+  const initialDocumentRef = useRef(editorDocumentFromMarkdown(markdown, normalizeWindowsImagePaths));
+  const initialMarkdownRef = useRef(initialDocumentRef.current.bodyMarkdown);
+  const frontmatterRef = useRef(initialDocumentRef.current.frontmatter?.frontmatter ?? "");
+  const latestBodyMarkdownRef = useRef(initialMarkdownRef.current);
+  const lastKnownMarkdownRef = useRef(initialDocumentRef.current.fullMarkdown);
   const onChangeRef = useRef(onChange);
   const onRichMarkdownBaselineRef = useRef(onRichMarkdownBaseline);
   const onOpenLinkRef = useRef(onOpenLink);
@@ -1107,8 +1185,119 @@ function EditorSurface({
   const showImageSourceOnFocusRef = useRef(showImageSourceOnFocus);
   const editorViewRef = useRef<EditorView | null>(null);
   const wikiSuggestRef = useRef<WikiSuggestState | null>(null);
+  const [frontmatter, setFrontmatter] = useState<YamlFrontmatterParts | null>(initialDocumentRef.current.frontmatter);
+  const [frontmatterContent, setFrontmatterContent] = useState(initialDocumentRef.current.frontmatter?.content ?? "");
+  const [frontmatterKeyboardReveal, setFrontmatterKeyboardReveal] = useState(false);
   const [wikiSuggest, setWikiSuggest] = useState<WikiSuggestState | null>(null);
+  const frontmatterPanelRef = useRef<HTMLDivElement | null>(null);
+  const frontmatterTagsInputRef = useRef<HTMLInputElement | null>(null);
+  const frontmatterAliasesInputRef = useRef<HTMLInputElement | null>(null);
+  const showFrontmatterTagRowRef = useRef(showFrontmatterTagRow);
   const [loading, getEditor] = useInstance();
+
+  const emitMarkdownChange = (nextMarkdown: string) => {
+    lastKnownMarkdownRef.current = nextMarkdown;
+    onChangeRef.current(nextMarkdown);
+  };
+
+  const updateFrontmatterContent = (content: string) => {
+    const nextFrontmatter = createYamlFrontmatter(content);
+    const nextParts = nextFrontmatter ? splitYamlFrontmatter(nextFrontmatter) : null;
+    frontmatterRef.current = nextFrontmatter;
+    setFrontmatterContent(content);
+    setFrontmatter(nextParts);
+    emitMarkdownChange(composeMarkdownWithFrontmatter(nextFrontmatter, latestBodyMarkdownRef.current));
+  };
+
+  const updateFrontmatterProperty = (key: string, value: string) => {
+    updateFrontmatterContent(setYamlPropertyValue(frontmatterContent, key, value));
+  };
+
+  const removeFrontmatter = () => {
+    frontmatterRef.current = "";
+    setFrontmatterContent("");
+    setFrontmatter(null);
+    setFrontmatterKeyboardReveal(false);
+    emitMarkdownChange(latestBodyMarkdownRef.current);
+    editorViewRef.current?.focus();
+  };
+
+  const focusFrontmatterEnd = () => {
+    setFrontmatterKeyboardReveal(true);
+    window.requestAnimationFrame(() => {
+      const target = frontmatterAliasesInputRef.current ?? frontmatterTagsInputRef.current;
+      if (!target) return;
+      target.focus();
+      const end = target.value.length;
+      target.setSelectionRange(end, end);
+    });
+  };
+
+  const focusEditorStart = () => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    setFrontmatterKeyboardReveal(false);
+    view.focus();
+    view.dispatch(view.state.tr.setSelection(Selection.atStart(view.state.doc)).scrollIntoView());
+  };
+
+  const handleFrontmatterBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
+    const nextTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+    if (nextTarget && event.currentTarget.contains(nextTarget)) return;
+    setFrontmatterKeyboardReveal(false);
+  };
+
+  const handleFrontmatterPointerLeave = () => {
+    if (frontmatterKeyboardReveal) return;
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement && frontmatterPanelRef.current?.contains(activeElement)) {
+      activeElement.blur();
+    }
+  };
+
+  const handleFrontmatterKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const editableTarget = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ? target : null;
+    const isPlainArrowDown = event.key === "ArrowDown" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+
+    if (isPlainArrowDown) {
+      event.preventDefault();
+      event.stopPropagation();
+      focusEditorStart();
+      return;
+    }
+
+    if (!event.altKey && !event.ctrlKey && !event.metaKey && editableTarget && ["Backspace", "Delete"].includes(event.key)) {
+      const tags = splitYamlPropertyValue(frontmatterPropertyValue(frontmatter, "tags"));
+      const aliases = splitYamlPropertyValue(frontmatterPropertyValue(frontmatter, "aliases"));
+      const customProperties = frontmatter?.properties.filter((property) => (
+        !["tags", "aliases", "status"].includes(property.key.toLowerCase())
+        && displayFrontmatterValue(property).trim()
+      )) ?? [];
+      const canRemoveFrontmatter = tags.length === 0 && aliases.length === 0 && customProperties.length === 0;
+      const atInputStart = editableTarget.selectionStart === 0 && editableTarget.selectionEnd === 0;
+      if (canRemoveFrontmatter && editableTarget.value.trim().length === 0 && (event.key === "Delete" || atInputStart)) {
+        event.preventDefault();
+        event.stopPropagation();
+        removeFrontmatter();
+        return;
+      }
+    }
+
+    if (event.key === "Escape" && frontmatterPanelRef.current?.contains(target)) {
+      event.preventDefault();
+      event.stopPropagation();
+      setFrontmatterKeyboardReveal(false);
+      editorViewRef.current?.focus();
+      return;
+    }
+
+    if (!(event.ctrlKey || event.metaKey)) return;
+    if (!["a", "c", "x", "v", "z", "y", "f"].includes(event.key.toLowerCase())) return;
+    if (event.key.toLowerCase() === "f") event.preventDefault();
+    if (event.key.toLowerCase() === "a" && !editableTarget) event.preventDefault();
+    event.stopPropagation();
+  };
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -1144,6 +1333,10 @@ function EditorSurface({
     if (!showImageSourceOnFocus && editorViewRef.current) clearActiveImageSource(editorViewRef.current.dom);
   }, [showImageSourceOnFocus]);
 
+  useEffect(() => {
+    showFrontmatterTagRowRef.current = showFrontmatterTagRow;
+  }, [showFrontmatterTagRow]);
+
   const closeWikiSuggest = () => {
     wikiSuggestRef.current = null;
     setWikiSuggest(null);
@@ -1173,6 +1366,29 @@ function EditorSurface({
   }, [command, getEditor, loading]);
 
   useEffect(() => {
+    if (loading) return;
+    const nextDocument = editorDocumentFromMarkdown(markdown, normalizeWindowsImagePaths);
+    if (nextDocument.fullMarkdown === lastKnownMarkdownRef.current) return;
+
+    const editor = getEditor();
+    if (!editor) return;
+
+    lastKnownMarkdownRef.current = nextDocument.fullMarkdown;
+    frontmatterRef.current = nextDocument.frontmatter?.frontmatter ?? "";
+    latestBodyMarkdownRef.current = nextDocument.bodyMarkdown;
+    setFrontmatter(nextDocument.frontmatter);
+    setFrontmatterContent(nextDocument.frontmatter?.content ?? "");
+    setFrontmatterKeyboardReveal(false);
+
+    editor.action((ctx) => {
+      replaceAll(nextDocument.bodyMarkdown)(ctx);
+      onRichMarkdownBaselineRef.current(nextDocument.fullMarkdown);
+      const view = ctx.get(editorViewCtx);
+      window.requestAnimationFrame(() => refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current));
+    });
+  }, [getEditor, loading, markdown, normalizeWindowsImagePaths]);
+
+  useEffect(() => {
     if (loading) return undefined;
     const editor = getEditor();
     if (!editor) return undefined;
@@ -1181,7 +1397,13 @@ function EditorSurface({
       const view = ctx.get(editorViewCtx);
       editorViewRef.current = view;
       refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current);
-      onRichMarkdownBaselineRef.current(ctx.get(serializerCtx)(view.state.doc));
+      const baselineBody = ctx.get(serializerCtx)(view.state.doc);
+      const normalizedBaselineBody = frontmatterRef.current ? normalizeRichFrontmatterBody(baselineBody) : baselineBody;
+      latestBodyMarkdownRef.current = normalizedBaselineBody;
+      onRichMarkdownBaselineRef.current(composeMarkdownWithFrontmatter(frontmatterRef.current, normalizedBaselineBody));
+      if (baselineBody !== normalizedBaselineBody) {
+        window.requestAnimationFrame(() => replaceAll(normalizedBaselineBody)(ctx));
+      }
       const maybeConvertBeforeCursorMove = (event: KeyboardEvent) => {
         if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
         if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown", "Tab"].includes(event.key)) return false;
@@ -1365,6 +1587,19 @@ function EditorSurface({
             closeWikiSuggest();
             return;
           }
+        }
+
+        if (
+          isPlainArrowUp
+          && !isCodeMirrorTarget
+          && frontmatterRef.current
+          && showFrontmatterTagRowRef.current
+          && selectionIsInFirstTextBlock(view)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          focusFrontmatterEnd();
+          return;
         }
 
         if (isCodeMirrorTarget && codeBlock) {
@@ -1624,6 +1859,24 @@ function EditorSurface({
         scheduleActiveImageRefresh();
         scheduleWikiSuggestUpdate();
       };
+      const handlePaste = (event: ClipboardEvent) => {
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        const pastedFrontmatter = splitYamlFrontmatter(text);
+        if (!pastedFrontmatter) return;
+        if (!selectionStartsAtDocumentTop(view)) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        const currentBodyMarkdown = ctx.get(serializerCtx)(view.state.doc);
+        const nextBodyMarkdown = mergeMarkdownBodies(pastedFrontmatter.body, currentBodyMarkdown);
+        frontmatterRef.current = pastedFrontmatter.frontmatter;
+        latestBodyMarkdownRef.current = nextBodyMarkdown;
+        setFrontmatter(pastedFrontmatter);
+        setFrontmatterContent(pastedFrontmatter.content);
+        emitMarkdownChange(composeMarkdownWithFrontmatter(pastedFrontmatter.frontmatter, nextBodyMarkdown));
+        replaceAll(nextBodyMarkdown)(ctx);
+        window.requestAnimationFrame(() => refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current));
+      };
       const handlePointerDown = (event: PointerEvent) => {
         const target = event.target instanceof Element ? event.target : null;
         setActiveTableFromTarget(target);
@@ -1720,6 +1973,7 @@ function EditorSurface({
       view.dom.addEventListener("keydown", handleKeyDown, { capture: true });
       view.dom.addEventListener("keyup", handleKeyUp, { capture: true });
       view.dom.addEventListener("input", handleInput, { capture: true });
+      view.dom.addEventListener("paste", handlePaste, { capture: true });
       view.dom.addEventListener("pointerdown", handlePointerDown, { capture: true });
       view.dom.addEventListener("pointerup", scheduleLinkExpandRefresh, { capture: true });
       view.dom.addEventListener("focusout", handleFocusOut, { capture: true });
@@ -1734,6 +1988,7 @@ function EditorSurface({
         view.dom.removeEventListener("keydown", handleKeyDown, { capture: true });
         view.dom.removeEventListener("keyup", handleKeyUp, { capture: true });
         view.dom.removeEventListener("input", handleInput, { capture: true });
+        view.dom.removeEventListener("paste", handlePaste, { capture: true });
         view.dom.removeEventListener("pointerdown", handlePointerDown, { capture: true });
         view.dom.removeEventListener("pointerup", scheduleLinkExpandRefresh, { capture: true });
         view.dom.removeEventListener("focusout", handleFocusOut, { capture: true });
@@ -1788,8 +2043,24 @@ function EditorSurface({
           ...defaultConfig,
           renderButton: renderTableButtonIcon,
         }));
-        ctx.get(listenerCtx).markdownUpdated((_, nextMarkdown) => {
-          onChangeRef.current(nextMarkdown);
+        ctx.get(listenerCtx).markdownUpdated((ctx, nextMarkdown) => {
+          const promotedFrontmatter = splitYamlFrontmatter(nextMarkdown);
+          if (promotedFrontmatter) {
+            const promotedBody = normalizeRichFrontmatterBody(promotedFrontmatter.body);
+            frontmatterRef.current = promotedFrontmatter.frontmatter;
+            latestBodyMarkdownRef.current = promotedBody;
+            setFrontmatter(promotedFrontmatter);
+            setFrontmatterContent(promotedFrontmatter.content);
+            emitMarkdownChange(composeMarkdownWithFrontmatter(promotedFrontmatter.frontmatter, promotedBody));
+            window.requestAnimationFrame(() => replaceAll(promotedBody)(ctx));
+          } else {
+            const nextBodyMarkdown = frontmatterRef.current ? normalizeRichFrontmatterBody(nextMarkdown) : nextMarkdown;
+            latestBodyMarkdownRef.current = nextBodyMarkdown;
+            emitMarkdownChange(composeMarkdownWithFrontmatter(frontmatterRef.current, nextBodyMarkdown));
+            if (nextMarkdown !== nextBodyMarkdown) {
+              window.requestAnimationFrame(() => replaceAll(nextBodyMarkdown)(ctx));
+            }
+          }
           if (editorViewRef.current) {
             window.requestAnimationFrame(() => refreshLocalImagePreviews(editorViewRef.current!.dom, imagePreviewMapRef.current));
           }
@@ -1859,11 +2130,72 @@ function EditorSurface({
     </div>
   ) : null;
 
+  const tagValues = splitYamlPropertyValue(frontmatterPropertyValue(frontmatter, "tags"));
+  const aliasValues = splitYamlPropertyValue(frontmatterPropertyValue(frontmatter, "aliases"));
+  const statusValue = frontmatterPropertyValue(frontmatter, "status").trim();
+  const statusActive = statusValue.toLowerCase() === "active" || statusValue.toLowerCase() === "true";
+  const showFrontmatterPanel = Boolean(frontmatter && showFrontmatterTagRow);
+  const tagInputValue = tagValues.join(" ");
+  const aliasInputValue = aliasValues.join(", ");
+  const editorClassName = frontmatter
+    ? `serein-rich-editor has-frontmatter${showFrontmatterPanel ? " show-frontmatter-row" : ""}`
+    : "serein-rich-editor";
+
   return (
-    <>
+    <div className={editorClassName}>
+      {showFrontmatterPanel ? (
+        <div
+          ref={frontmatterPanelRef}
+          className="serein-frontmatter-panel"
+          data-keyboard-reveal={frontmatterKeyboardReveal ? "true" : "false"}
+          onBlur={handleFrontmatterBlur}
+          onKeyDown={handleFrontmatterKeyDown}
+          onPointerLeave={handleFrontmatterPointerLeave}
+          aria-label={frontmatterLabels.properties}
+        >
+          <div className="serein-frontmatter-strip">
+            <input
+              ref={frontmatterTagsInputRef}
+              className="serein-frontmatter-inline-input serein-frontmatter-tags-input"
+              value={tagInputValue}
+              aria-label={frontmatterLabels.tags}
+              title={tagInputValue}
+              spellCheck={false}
+              onChange={(event) => updateFrontmatterProperty("tags", yamlListValueFromInput(event.target.value))}
+            />
+            <button
+              type="button"
+              className="serein-frontmatter-token"
+              data-active={statusActive ? "true" : "false"}
+              aria-label={frontmatterLabels.status}
+              aria-pressed={statusActive}
+              title={statusActive ? frontmatterLabels.active : frontmatterLabels.inactive}
+              onClick={(event) => {
+                event.stopPropagation();
+                updateFrontmatterProperty("status", statusActive ? "inactive" : "active");
+              }}
+            >
+              <span className="serein-frontmatter-token-edge">--</span>
+              <span className="serein-frontmatter-token-core">- tags -</span>
+              <span className="serein-frontmatter-token-edge">--</span>
+            </button>
+            <div className="serein-frontmatter-alias-cell">
+              <input
+                ref={frontmatterAliasesInputRef}
+                className="serein-frontmatter-inline-input serein-frontmatter-aliases-input"
+                value={aliasInputValue}
+                aria-label={frontmatterLabels.aliases}
+                title={aliasInputValue}
+                spellCheck={false}
+                onChange={(event) => updateFrontmatterProperty("aliases", yamlListValueFromInput(event.target.value))}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
       <Milkdown />
       {wikiSuggestPopover ? createPortal(wikiSuggestPopover, document.body) : null}
-    </>
+    </div>
   );
 }
 
@@ -1879,6 +2211,8 @@ export function MilkdownEditor({
   imagePreviewMap,
   showImageSourceOnFocus,
   normalizeWindowsImagePaths,
+  showFrontmatterTagRow,
+  frontmatterLabels,
 }: MilkdownEditorProps) {
   return (
     <MilkdownProvider>
@@ -1894,6 +2228,8 @@ export function MilkdownEditor({
         imagePreviewMap={imagePreviewMap}
         showImageSourceOnFocus={showImageSourceOnFocus}
         normalizeWindowsImagePaths={normalizeWindowsImagePaths}
+        showFrontmatterTagRow={showFrontmatterTagRow}
+        frontmatterLabels={frontmatterLabels}
       />
     </MilkdownProvider>
   );

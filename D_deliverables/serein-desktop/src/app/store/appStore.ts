@@ -85,6 +85,7 @@ type AppStoreState = {
   uiScale: number;
   zoomWithWheel: boolean;
   showEditorStatusOverlay: boolean;
+  showFrontmatterTagRow: boolean;
   defaultSaveExt: SaveFileExt;
   defaultNewNoteName: string;
   imageAttachmentFolder: string;
@@ -143,6 +144,7 @@ type AppStoreActions = {
   setUiScale: (value: Updater<number>) => void;
   setZoomWithWheel: (value: boolean) => void;
   setShowEditorStatusOverlay: (value: boolean) => void;
+  setShowFrontmatterTagRow: (value: boolean) => void;
   setDefaultSaveExt: (value: SaveFileExt) => void;
   setDefaultNewNoteName: (value: Updater<string>) => void;
   setImageAttachmentFolder: (value: Updater<string>) => void;
@@ -217,6 +219,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   uiScale: initialSettings.uiScale,
   zoomWithWheel: initialSettings.zoomWithWheel,
   showEditorStatusOverlay: initialSettings.showEditorStatusOverlay,
+  showFrontmatterTagRow: initialSettings.showFrontmatterTagRow,
   defaultSaveExt: initialSettings.defaultSaveExt,
   defaultNewNoteName: initialSettings.defaultNewNoteName,
   imageAttachmentFolder: initialSettings.imageAttachmentFolder,
@@ -272,6 +275,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   setUiScale: (value) => set((state) => ({ uiScale: resolveUpdater(state.uiScale, value) })),
   setZoomWithWheel: (value) => set({ zoomWithWheel: value }),
   setShowEditorStatusOverlay: (value) => set({ showEditorStatusOverlay: value }),
+  setShowFrontmatterTagRow: (value) => set({ showFrontmatterTagRow: value }),
   setDefaultSaveExt: (value) => set({ defaultSaveExt: value }),
   setDefaultNewNoteName: (value) => set((state) => ({ defaultNewNoteName: resolveUpdater(state.defaultNewNoteName, value) })),
   setImageAttachmentFolder: (value) => set((state) => ({ imageAttachmentFolder: resolveUpdater(state.imageAttachmentFolder, value) })),

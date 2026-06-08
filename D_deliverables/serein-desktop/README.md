@@ -14,7 +14,7 @@ Serein is a local-first Markdown writing desktop app.
 
 ## User Manual
 
-See [USER_MANUAL.md](./USER_MANUAL.md) for file operations, search prefixes, tags, bookmarks, and knowledge-panel usage.
+Open `Help -> User manual` in Serein. The manual is bundled as `public/vault-quickstart.html` and includes a complete feature guide plus an editable Markdown practice area.
 
 ## Screenshot
 
@@ -27,7 +27,7 @@ Download link placeholder: publish the signed Windows installer after release va
 Expected Windows installer path after packaging:
 
 ```text
-src-tauri\target\release\bundle\nsis\Serein_0.0.5_x64-setup.exe
+src-tauri\target\release\bundle\nsis\Serein_1.0.1_x64-setup.exe
 ```
 
 ## Development

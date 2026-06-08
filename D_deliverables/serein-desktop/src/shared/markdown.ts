@@ -2,6 +2,19 @@ import type { SaveFileExt } from "../app/types";
 
 export type OutlineItem = { level: 1 | 2 | 3 | 4 | 5 | 6; text: string };
 
+export type MarkdownProperty = {
+  key: string;
+  value: string;
+  type: "text" | "list" | "checkbox" | "number" | "date";
+};
+
+export type YamlFrontmatterParts = {
+  frontmatter: string;
+  content: string;
+  body: string;
+  properties: MarkdownProperty[];
+};
+
 export function formatTime(date: Date) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
@@ -123,6 +136,193 @@ export function extractFirstLineTitle(markdown: string) {
   const firstLine = markdown.split(/\r?\n/, 1)[0] ?? "";
   const match = firstLine.match(/^#(?!#)\s+(.+?)\s*$/);
   return match?.[1].trim() || null;
+}
+
+export function splitYamlFrontmatter(markdown: string): YamlFrontmatterParts | null {
+  const normalized = markdown.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  const leadingBlankLineCount = countLeadingBlankLines(lines);
+  const openingFence = frontmatterFenceMarker(lines[leadingBlankLineCount] ?? "");
+  if (!openingFence) return null;
+
+  for (let index = leadingBlankLineCount + 1; index < lines.length; index += 1) {
+    const closingFence = frontmatterFenceMarker(lines[index]);
+    if (!closingFence) continue;
+
+    const content = lines.slice(leadingBlankLineCount + 1, index).join("\n");
+    const properties = parseYamlProperties(content);
+    if ((leadingBlankLineCount > 0 || openingFence !== "---" || closingFence !== "---") && properties.length === 0) continue;
+
+    const sourceFrontmatterWithoutTrailingNewline = lines.slice(0, index + 1).join("\n");
+    const frontmatterEnd = sourceFrontmatterWithoutTrailingNewline.length + (index < lines.length - 1 ? 1 : 0);
+    const frontmatter = content.trim() ? createYamlFrontmatter(content) : "---\n---\n";
+    return {
+      frontmatter: index < lines.length - 1 ? frontmatter : frontmatter.replace(/\n$/, ""),
+      content,
+      body: normalized.slice(frontmatterEnd),
+      properties,
+    };
+  }
+
+  return null;
+}
+
+export function composeMarkdownWithFrontmatter(frontmatter: string | null | undefined, body: string) {
+  if (!frontmatter) return body;
+  if (!body) return frontmatter.replace(/\r\n?/g, "\n").replace(/\n?$/, "");
+
+  const normalizedFrontmatter = frontmatter.replace(/\r\n?/g, "\n");
+  return normalizedFrontmatter.endsWith("\n")
+    ? `${normalizedFrontmatter}${body}`
+    : `${normalizedFrontmatter}\n${body}`;
+}
+
+export function createYamlFrontmatter(content: string) {
+  const cleanContent = content.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
+  return cleanContent ? `---\n${cleanContent}\n---\n` : "";
+}
+
+export function parseYamlFrontmatterProperties(markdown: string) {
+  return splitYamlFrontmatter(markdown)?.properties ?? [];
+}
+
+export function yamlPropertyValues(properties: MarkdownProperty[], key: string) {
+  const property = properties.find((item) => item.key.toLowerCase() === key.toLowerCase());
+  if (!property) return [];
+  return splitYamlPropertyValue(property.value);
+}
+
+export function splitYamlPropertyValue(value: string) {
+  const cleanValue = value.trim().replace(/^\[|\]$/g, "");
+  if (!cleanValue) return [];
+  return cleanValue
+    .split(",")
+    .map((item) => cleanYamlValue(item))
+    .filter(Boolean);
+}
+
+export function yamlListValue(items: string[]) {
+  const cleanItems = items
+    .map((item) => item.trim().replace(/^#/, ""))
+    .filter(Boolean);
+  return cleanItems.length ? `[${cleanItems.join(", ")}]` : "";
+}
+
+export function yamlListValueFromInput(value: string) {
+  const normalized = value.trim();
+  if (!normalized) return "";
+  const hasExplicitSeparator = /[,，\n]/.test(normalized);
+  return yamlListValue(hasExplicitSeparator ? normalized.split(/[,，\n]+/) : normalized.split(/\s+/));
+}
+
+export function setYamlPropertyValue(content: string, key: string, value: string) {
+  const normalized = content.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
+  const lines = normalized ? normalized.split("\n") : [];
+  const keyPattern = new RegExp(`^${escapeRegExp(key)}\\s*:`);
+  const nextLines: string[] = [];
+  let replaced = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!keyPattern.test(line.trimStart())) {
+      nextLines.push(line);
+      continue;
+    }
+
+    replaced = true;
+    if (value.trim()) nextLines.push(`${key}: ${value.trim()}`);
+
+    while (index + 1 < lines.length && isYamlPropertyContinuation(lines[index + 1])) {
+      index += 1;
+    }
+  }
+
+  if (!replaced && value.trim()) nextLines.push(`${key}: ${value.trim()}`);
+  return nextLines.filter((line, index, items) => line.trim() || (items[index - 1]?.trim() && items[index + 1]?.trim())).join("\n");
+}
+
+function isYamlPropertyContinuation(line: string) {
+  return /^\s+-\s+/.test(line) || (line.trim() === "");
+}
+
+function parseYamlProperties(content: string): MarkdownProperty[] {
+  const lines = content.split("\n");
+  const properties: MarkdownProperty[] = [];
+  let currentKey = "";
+  let currentItems: string[] = [];
+
+  const flushList = () => {
+    if (!currentKey) return;
+    properties.push({
+      key: currentKey,
+      value: currentItems.join(", "),
+      type: "list",
+    });
+    currentKey = "";
+    currentItems = [];
+  };
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      if (currentKey) continue;
+      continue;
+    }
+
+    const listItem = line.match(/^\s+-\s+(.+)$/);
+    if (listItem && currentKey) {
+      currentItems.push(cleanYamlValue(listItem[1]));
+      continue;
+    }
+
+    flushList();
+    const match = line.match(/^\s*([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (!match) continue;
+
+    const key = match[1].trim();
+    const rawValue = match[2].trim();
+    if (!rawValue) {
+      currentKey = key;
+      currentItems = [];
+      continue;
+    }
+
+    properties.push({
+      key,
+      value: cleanYamlValue(rawValue),
+      type: yamlPropertyType(rawValue),
+    });
+  }
+
+  flushList();
+  return properties;
+}
+
+function frontmatterFenceMarker(line: string) {
+  const trimmed = line.trim();
+  return trimmed === "---" || trimmed === "***" || trimmed === "___" ? trimmed : null;
+}
+
+function countLeadingBlankLines(lines: string[]) {
+  let count = 0;
+  while (count < lines.length && lines[count].trim() === "") count += 1;
+  return count;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cleanYamlValue(value: string) {
+  return value.trim().replace(/^['"]|['"]$/g, "");
+}
+
+function yamlPropertyType(value: string): MarkdownProperty["type"] {
+  const clean = cleanYamlValue(value);
+  if (/^\[.*]$/.test(value.trim())) return "list";
+  if (/^(true|false)$/i.test(clean)) return "checkbox";
+  if (/^-?\d+(\.\d+)?$/.test(clean)) return "number";
+  if (/^\d{4}-\d{2}-\d{2}/.test(clean)) return "date";
+  return "text";
 }
 
 export function getHeadingOffsets(markdown: string) {

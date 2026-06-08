@@ -1,6 +1,7 @@
 import { EditorView as CodeMirrorView } from "@codemirror/view";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { X } from "lucide-react";
 import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
@@ -94,6 +95,7 @@ import {
   pathExtension,
   pathFileName,
   stripExtension,
+  splitYamlFrontmatter,
   vaultFileNameCandidate,
 } from "./shared/markdown";
 import {
@@ -150,6 +152,8 @@ type SourceLocationTarget = {
   line: number;
   text: string | null;
 };
+type NativeEditCommand = "cut" | "copy" | "paste" | "undo" | "redo" | "selectAll";
+const SEARCH_SEED_MAX_LENGTH = 160;
 
 function isEditorTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
@@ -187,6 +191,124 @@ function selectRichCodeBlockDom(target: EventTarget | null) {
 function isFormTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
     && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function normalizeSearchSeedText(text: string | null | undefined) {
+  const normalized = (text ?? "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return "";
+  return normalized.length > SEARCH_SEED_MAX_LENGTH
+    ? normalized.slice(0, SEARCH_SEED_MAX_LENGTH).trimEnd()
+    : normalized;
+}
+
+function selectionIsInsideElement(selection: Selection | null, element: HTMLElement | null) {
+  if (!selection || !element || selection.rangeCount === 0 || selection.isCollapsed) return false;
+  const range = selection.getRangeAt(0);
+  const startElement = elementFromNode(range.startContainer);
+  const endElement = elementFromNode(range.endContainer);
+  return Boolean(startElement && endElement && element.contains(startElement) && element.contains(endElement));
+}
+
+function isEditorTextControlTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement
+    && Boolean(target.closest(".markdown-editor, .ProseMirror, .milkdown-code-block .cm-editor"));
+}
+
+function nativeTextControlFromTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return null;
+  const control = target.closest("input, textarea");
+  if (control instanceof HTMLTextAreaElement) return control;
+  if (!(control instanceof HTMLInputElement)) return null;
+  const textInputTypes = new Set(["", "email", "number", "password", "search", "tel", "text", "url"]);
+  return textInputTypes.has(control.type) ? control : null;
+}
+
+function canUseNativeTextControl(control: HTMLInputElement | HTMLTextAreaElement | null): control is HTMLInputElement | HTMLTextAreaElement {
+  return Boolean(control && document.contains(control) && !control.disabled && !control.readOnly);
+}
+
+function nativeEditCommandFromCommandId(commandId: string): NativeEditCommand | null {
+  if (commandId === "edit.cut") return "cut";
+  if (commandId === "edit.copy") return "copy";
+  if (commandId === "edit.paste") return "paste";
+  if (commandId === "edit.undo") return "undo";
+  if (commandId === "edit.redo") return "redo";
+  if (commandId === "edit.selectAll") return "selectAll";
+  return null;
+}
+
+function isStandardNativeTextShortcut(key: string, command: NativeEditCommand) {
+  if (command === "cut") return key === "Ctrl+X" || key === "Meta+X";
+  if (command === "copy") return key === "Ctrl+C" || key === "Meta+C";
+  if (command === "paste") return key === "Ctrl+V" || key === "Meta+V";
+  if (command === "undo") return key === "Ctrl+Z" || key === "Meta+Z";
+  if (command === "redo") return key === "Ctrl+Y" || key === "Ctrl+Shift+Z" || key === "Meta+Shift+Z";
+  if (command === "selectAll") return key === "Ctrl+A" || key === "Meta+A";
+  return false;
+}
+
+function textControlSelection(control: HTMLInputElement | HTMLTextAreaElement) {
+  const start = control.selectionStart ?? control.value.length;
+  const end = control.selectionEnd ?? start;
+  return { start, end };
+}
+
+function replaceTextControlSelection(control: HTMLInputElement | HTMLTextAreaElement, text: string) {
+  const { start, end } = textControlSelection(control);
+  try {
+    control.setRangeText(text, start, end, "end");
+  } catch {
+    control.value = `${control.value.slice(0, start)}${text}${control.value.slice(end)}`;
+    const cursor = start + text.length;
+    try {
+      control.setSelectionRange(cursor, cursor);
+    } catch {
+      // Some input types do not expose selection ranges.
+    }
+  }
+  control.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function runNativeTextEditCommand(control: HTMLInputElement | HTMLTextAreaElement, command: NativeEditCommand) {
+  control.focus();
+
+  if (command === "selectAll") {
+    try {
+      control.select();
+    } catch {
+      // Native control does not expose selectable text.
+    }
+    return true;
+  }
+
+  if (command === "copy" || command === "cut") {
+    const { start, end } = textControlSelection(control);
+    if (start === end) return true;
+    writeClipboardText(control.value.slice(start, end));
+    if (command === "cut") replaceTextControlSelection(control, "");
+    return true;
+  }
+
+  if (command === "paste") {
+    readClipboardText().then((text) => {
+      if (text) replaceTextControlSelection(control, text);
+    });
+    return true;
+  }
+
+  if (command === "undo" || command === "redo") {
+    document.execCommand(command);
+    return true;
+  }
+
+  return false;
 }
 
 function isRecordingShortcutTarget(target: EventTarget | null) {
@@ -242,15 +364,6 @@ function normalizeMarkdownDirtyText(markdown: string) {
 
 function markdownEqualForDirty(left: string, right: string) {
   return left === right || normalizeMarkdownDirtyText(left) === normalizeMarkdownDirtyText(right);
-}
-
-function splitYamlFrontmatter(markdown: string) {
-  const match = markdown.match(/^(---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$))/);
-  if (!match) return null;
-  return {
-    frontmatter: match[1],
-    body: markdown.slice(match[1].length),
-  };
 }
 
 function firstMeaningfulMarkdownLine(markdown: string) {
@@ -685,6 +798,8 @@ export default function App() {
     setZoomWithWheel,
     showEditorStatusOverlay,
     setShowEditorStatusOverlay,
+    showFrontmatterTagRow,
+    setShowFrontmatterTagRow,
     richCommand,
     setRichCommand,
     defaultSaveExt,
@@ -719,6 +834,7 @@ export default function App() {
   const appDialogResolverRef = useRef<((value: AppDialogResult) => void) | null>(null);
   const editorSurfaceRef = useRef<HTMLElement | null>(null);
   const plainEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const lastFocusedNativeTextControlRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const editorCommandFocusRef = useRef<HTMLElement | null>(null);
   const editorCommandSelectionRef = useRef<Range | null>(null);
   const editorCommandCodeMirrorSelectionRef = useRef<CodeMirrorSelectionRange | null>(null);
@@ -747,6 +863,7 @@ export default function App() {
   const [imagePreviewMap, setImagePreviewMap] = useState<Record<string, string>>({});
   const [activeUnlinkedMentions, setActiveUnlinkedMentions] = useState<VaultUnlinkedMention[]>([]);
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
+  const [vaultQuickstartOpen, setVaultQuickstartOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [windowActionPending, setWindowActionPending] = useState<"minimize" | "maximize" | "close" | null>(null);
   const [centerView, setCenterView] = useState<"markdown" | "graph">("markdown");
@@ -758,6 +875,7 @@ export default function App() {
   const [demoVaultMode, setDemoVaultMode] = useState(false);
   const [initialOpenFileChecked, setInitialOpenFileChecked] = useState(false);
   const [sidebarSearchFocusSignal, setSidebarSearchFocusSignal] = useState(0);
+  const [sidebarSearchSeed, setSidebarSearchSeed] = useState("");
   const appShellRef = useRef<HTMLDivElement | null>(null);
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0];
@@ -774,7 +892,7 @@ export default function App() {
   const activeResolvedLinks = activeOutgoingLinks.filter((link) => link.targetPath);
   const activeUnresolvedLinks = activeOutgoingLinks.filter((link) => !link.targetPath);
   const localGraph = useMemo(() => createLocalGraph(vaultIndex, activeNote.filePath, activeIndexedFile), [activeIndexedFile, activeNote.filePath, vaultIndex]);
-  const vaultTags = useMemo(() => listVaultTags(vaultIndex), [vaultIndex]);
+  const vaultTags = useMemo(() => listVaultTags(vaultIndex, activeIndexedFile), [activeIndexedFile, vaultIndex]);
   const wikiLinkSuggestions = useMemo(() => {
     if (!vaultIndex) return [];
     const baseNameCounts = new Map<string, number>();
@@ -813,6 +931,22 @@ export default function App() {
   const vaultMode = Boolean(vaultRoot);
   const textStats = useMemo(() => countDocumentText(deferredActiveMarkdown), [deferredActiveMarkdown]);
   const lineCount = useMemo(() => deferredActiveMarkdown.split(/\r?\n/).length, [deferredActiveMarkdown]);
+
+  useEffect(() => {
+    const handleFocusIn = (event: FocusEvent) => {
+      const control = nativeTextControlFromTarget(event.target);
+      if (control && !isEditorTextControlTarget(control)) {
+        lastFocusedNativeTextControlRef.current = control;
+        return;
+      }
+      if (isEditorTextControlTarget(event.target)) {
+        lastFocusedNativeTextControlRef.current = null;
+      }
+    };
+
+    window.addEventListener("focusin", handleFocusIn);
+    return () => window.removeEventListener("focusin", handleFocusIn);
+  }, []);
 
   useEffect(() => {
     if (!vaultIndex || !activeNote.filePath || !activeIndexedFile) {
@@ -2220,7 +2354,20 @@ export default function App() {
     setRichCommand({ id: richCommandIdRef.current, action, payload, alt });
   }, [activeNote, editorMode]);
 
+  const nativeTextControlForEditCommand = useCallback(() => {
+    const activeControl = nativeTextControlFromTarget(document.activeElement);
+    if (canUseNativeTextControl(activeControl) && !isEditorTextControlTarget(activeControl)) return activeControl;
+    if (openMenuId || contextMenu) {
+      const lastControl = lastFocusedNativeTextControlRef.current;
+      if (canUseNativeTextControl(lastControl)) return lastControl;
+    }
+    return null;
+  }, [contextMenu, openMenuId]);
+
   const runEditCommand = useCallback((command: "cut" | "copy" | "paste" | "undo" | "redo") => {
+    const nativeControl = nativeTextControlForEditCommand();
+    if (nativeControl && runNativeTextEditCommand(nativeControl, command)) return;
+
     if (editorMode === "plain") {
       runPlainEditCommand(command);
       return;
@@ -2252,7 +2399,7 @@ export default function App() {
     }
 
     runEditorCommand(command);
-  }, [editorMode, runEditorCommand, runPlainEditCommand]);
+  }, [editorMode, nativeTextControlForEditCommand, runEditorCommand, runPlainEditCommand]);
 
   const runLinkCommand = useCallback(async () => {
     const href = await showInputDialog(t.prompts.linkUrl, "https://");
@@ -2276,15 +2423,67 @@ export default function App() {
     }
   }, [importImagePathForEditor, runEditorCommand]);
 
-  const openSidebarSearch = useCallback(() => {
+  const selectedTextForSearch = useCallback(() => {
+    const activeControl = nativeTextControlFromTarget(document.activeElement);
+    if (activeControl) {
+      const { start, end } = textControlSelection(activeControl);
+      if (start !== end) return normalizeSearchSeedText(activeControl.value.slice(start, end));
+    }
+
+    const selection = window.getSelection();
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const codeMirror = activeElement?.closest<HTMLElement>(".milkdown-code-block .cm-editor")
+      ?? elementFromNode(selection?.anchorNode ?? null)?.closest<HTMLElement>(".milkdown-code-block .cm-editor")
+      ?? null;
+    if (codeMirror && editorSurfaceRef.current?.contains(codeMirror)) {
+      const view = CodeMirrorView.findFromDOM(codeMirror);
+      const range = view?.state.selection.main;
+      if (view && range && !range.empty) {
+        return normalizeSearchSeedText(view.state.sliceDoc(range.from, range.to));
+      }
+    }
+
+    if (selectionIsInsideElement(selection, editorSurfaceRef.current)) {
+      return normalizeSearchSeedText(selection?.toString());
+    }
+
+    return "";
+  }, []);
+
+  const openSidebarSearch = useCallback((seedText = "") => {
+    setSidebarSearchSeed(normalizeSearchSeedText(seedText));
     setSidebarVisible(true);
     setLeftPanelTab("search");
     setSidebarSearchFocusSignal((signal) => signal + 1);
   }, [setLeftPanelTab, setSidebarVisible]);
 
   const handleFind = useCallback(() => {
-    openSidebarSearch();
-  }, [openSidebarSearch]);
+    openSidebarSearch(selectedTextForSearch());
+  }, [openSidebarSearch, selectedTextForSearch]);
+
+  const focusActiveEditor = useCallback(() => {
+    if (editorMode === "plain") {
+      plainEditorRef.current?.focus();
+      return;
+    }
+
+    const richEditor = editorSurfaceRef.current?.querySelector<HTMLElement>(".ProseMirror");
+    if (richEditor) {
+      richEditor.focus();
+      return;
+    }
+
+    editorSurfaceRef.current?.focus();
+  }, [editorMode]);
+
+  const handleSelectAll = useCallback(() => {
+    const control = nativeTextControlForEditCommand();
+    if (canUseNativeTextControl(control)) {
+      runNativeTextEditCommand(control, "selectAll");
+      return;
+    }
+    runEditorCommand("selectAllSmart");
+  }, [nativeTextControlForEditCommand, runEditorCommand]);
 
   const commands = useMemo<Record<string, CommandDefinition>>(() => ({
     "file.new": { id: "file.new", label: t.commandLabels["file.new"], enabled: true, run: handleCreateNote },
@@ -2334,13 +2533,19 @@ export default function App() {
         setSettingsOpen(true);
       },
     },
+    "app.openVaultQuickstart": {
+      id: "app.openVaultQuickstart",
+      label: t.commandLabels["app.openVaultQuickstart"],
+      enabled: true,
+      run: () => setVaultQuickstartOpen(true),
+    },
     "app.about": { id: "app.about", label: t.commandLabels["app.about"], enabled: true, run: () => showMessageDialog(t.commandLabels["app.about"], t.prompts.about) },
     "edit.cut": { id: "edit.cut", label: t.commandLabels["edit.cut"], enabled: true, run: () => runEditCommand("cut") },
     "edit.copy": { id: "edit.copy", label: t.commandLabels["edit.copy"], enabled: true, run: () => runEditCommand("copy") },
     "edit.paste": { id: "edit.paste", label: t.commandLabels["edit.paste"], enabled: true, run: () => runEditCommand("paste") },
-    "edit.undo": { id: "edit.undo", label: t.commandLabels["edit.undo"], enabled: editorMode === "rich" && hasActiveDocument, run: () => runEditCommand("undo") },
-    "edit.redo": { id: "edit.redo", label: t.commandLabels["edit.redo"], enabled: editorMode === "rich" && hasActiveDocument, run: () => runEditCommand("redo") },
-    "edit.selectAll": { id: "edit.selectAll", label: t.commandLabels["edit.selectAll"], enabled: true, run: () => runEditorCommand("selectAllSmart") },
+    "edit.undo": { id: "edit.undo", label: t.commandLabels["edit.undo"], enabled: true, run: () => runEditCommand("undo") },
+    "edit.redo": { id: "edit.redo", label: t.commandLabels["edit.redo"], enabled: true, run: () => runEditCommand("redo") },
+    "edit.selectAll": { id: "edit.selectAll", label: t.commandLabels["edit.selectAll"], enabled: true, run: handleSelectAll },
     "edit.find": { id: "edit.find", label: t.commandLabels["edit.find"], enabled: true, run: handleFind },
     "paragraph.text": { id: "paragraph.text", label: t.commandLabels["paragraph.text"], enabled: hasActiveDocument, run: () => runEditorCommand("paragraph") },
     "paragraph.heading1": { id: "paragraph.heading1", label: t.commandLabels["paragraph.heading1"], enabled: hasActiveDocument, run: () => runEditorCommand("heading1") },
@@ -2379,6 +2584,7 @@ export default function App() {
     handleSaveAs,
     runEditorCommand,
     runEditCommand,
+    handleSelectAll,
     runImageCommand,
     runLinkCommand,
     setGlobalEditorMode,
@@ -2387,6 +2593,15 @@ export default function App() {
     theme,
     vaultIndex,
   ]);
+
+  useEffect(() => {
+    if (!vaultQuickstartOpen) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setVaultQuickstartOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [vaultQuickstartOpen]);
 
   const dispatchCommand = useCallback(async (commandId: string) => {
     const command = commands[commandId];
@@ -2618,6 +2833,7 @@ export default function App() {
       uiScale,
       zoomWithWheel,
       showEditorStatusOverlay,
+      showFrontmatterTagRow,
       defaultSaveExt,
       defaultNewNoteName: normalizeDefaultNewNoteName(defaultNewNoteName),
       imageAttachmentFolder: normalizeImageAttachmentFolder(imageAttachmentFolder),
@@ -2643,6 +2859,7 @@ export default function App() {
     rightPanelWidth,
     rightPanelVisible,
     selectedVaultDir,
+    showFrontmatterTagRow,
     showImageSourceOnFocus,
     showEditorStatusOverlay,
     sidebarVisible,
@@ -2934,6 +3151,12 @@ export default function App() {
       const key = shortcutFromEvent(event);
       if (!key) return;
 
+      const formTarget = isFormTarget(event.target);
+      const editorTextControlTarget = isEditorTextControlTarget(event.target);
+      const shortcut = shortcuts.find((item) => item.enabled && item.currentKeys.includes(key));
+      const isDefaultFindKey = key === "Ctrl+F" || key === "Meta+F";
+      const isFindCommand = shortcut?.commandId === "edit.find" || (isDefaultFindKey && !shortcut);
+
       if ((key === "Ctrl+A" || key === "Meta+A") && isCodeMirrorEditorTarget(event.target)) return;
 
       if ((key === "Ctrl+A" || key === "Meta+A") && selectRichCodeBlockDom(event.target)) {
@@ -2942,8 +3165,29 @@ export default function App() {
         return;
       }
 
-      const shortcut = shortcuts.find((item) => item.enabled && item.currentKeys.includes(key));
+      if (isFindCommand) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!(formTarget && !editorTextControlTarget)) {
+          dispatchCommand("edit.find");
+        }
+        return;
+      }
+
       if (!shortcut) return;
+
+      if (formTarget && !editorTextControlTarget) {
+        const nativeEditCommand = nativeEditCommandFromCommandId(shortcut.commandId);
+        if (nativeEditCommand) {
+          if (isStandardNativeTextShortcut(key, nativeEditCommand)) return;
+          const control = nativeTextControlFromTarget(event.target);
+          if (canUseNativeTextControl(control) && runNativeTextEditCommand(control, nativeEditCommand)) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+          return;
+        }
+      }
 
       if (
         isEditorTarget(event.target)
@@ -2959,18 +3203,17 @@ export default function App() {
       }
 
       if (
-        isFormTarget(event.target)
+        formTarget
+        && !editorTextControlTarget
         && shortcut.commandId !== "file.save"
         && shortcut.commandId !== "file.saveAs"
         && shortcut.commandId !== "file.export"
         && shortcut.commandId !== "file.open"
         && shortcut.commandId !== "file.openVault"
         && shortcut.commandId !== "file.new"
-        && shortcut.commandId !== "edit.selectAll"
         && shortcut.commandId !== "app.openSettings"
         && shortcut.commandId !== "app.openQuickOpen"
         && shortcut.commandId !== "app.openCommandPalette"
-        && shortcut.commandId !== "edit.find"
       ) {
         return;
       }
@@ -3789,6 +4032,7 @@ export default function App() {
           vaultRoot={vaultRoot}
           vaultTree={vaultTree}
           vaultIndex={vaultIndex}
+          activeIndexedFile={activeIndexedFile}
           vaultError={vaultError}
           vaultRecoveryBlocked={vaultRecoveryBlocked}
           expandedDirs={expandedDirs}
@@ -3798,6 +4042,7 @@ export default function App() {
           notes={notes}
           outline={outline}
           searchFocusSignal={sidebarSearchFocusSignal}
+          searchFocusQuery={sidebarSearchSeed}
           onTabChange={setLeftPanelTab}
           onDispatchCommand={dispatchCommand}
           onOpenMarkdownFile={(path) => {
@@ -3814,6 +4059,7 @@ export default function App() {
           onClearVaultState={clearVaultState}
           onOutlineClick={handleOutlineClick}
           onSelectNote={setActiveNoteId}
+          onReturnToEditor={focusActiveEditor}
         />
       ) : null}
 
@@ -3889,6 +4135,7 @@ export default function App() {
           imagePreviewMap={imagePreviewMap}
           showImageSourceOnFocus={showImageSourceOnFocus}
           normalizeWindowsImagePaths={normalizeWindowsImagePaths}
+          showFrontmatterTagRow={showFrontmatterTagRow}
         />
       </WorkspaceCenter>
 
@@ -3968,6 +4215,7 @@ export default function App() {
         placeholder={paletteMode === "command" ? t.palette.commandPlaceholder : t.palette.quickOpenPlaceholder}
         emptyText={t.palette.noResults}
         vaultIndex={vaultIndex}
+        activeIndexedFile={activeIndexedFile}
         commands={commands}
         onClose={() => setPaletteMode(null)}
         onOpenFile={(path) => {
@@ -4008,6 +4256,7 @@ export default function App() {
         uiScale={uiScale}
         zoomWithWheel={zoomWithWheel}
         showEditorStatusOverlay={showEditorStatusOverlay}
+        showFrontmatterTagRow={showFrontmatterTagRow}
         editorLeftGap={editorLeftGap}
         sidebarWidth={sidebarWidth}
         rightPanelWidth={rightPanelWidth}
@@ -4039,6 +4288,7 @@ export default function App() {
         onUiScaleChange={(value) => setUiScale(clampUiScale(value))}
         onZoomWithWheelChange={setZoomWithWheel}
         onShowEditorStatusOverlayChange={setShowEditorStatusOverlay}
+        onShowFrontmatterTagRowChange={setShowFrontmatterTagRow}
         onEditorLeftGapChange={(value) => setEditorLeftGap(clampEditorLeftGap(value))}
         onSidebarWidthChange={(value) => setSidebarWidth(clampSidebarWidth(value))}
         onRightPanelWidthChange={(value) => setRightPanelWidth(clampRightPanelWidth(value))}
@@ -4069,6 +4319,39 @@ export default function App() {
         onNormalizeWindowsImagePathsChange={setNormalizeWindowsImagePaths}
         onClearVaultState={clearVaultState}
       />
+
+      {vaultQuickstartOpen ? (
+        <div
+          className="quickstart-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setVaultQuickstartOpen(false);
+          }}
+        >
+          <section
+            className="quickstart-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t.commandLabels["app.openVaultQuickstart"]}
+          >
+            <header>
+              <div>
+                <strong>{t.commandLabels["app.openVaultQuickstart"]}</strong>
+                <span>{language === "zh-CN" ? "完整功能学习页，包含可编辑练习区" : "Complete feature guide with an editable practice area"}</span>
+              </div>
+              <button
+                type="button"
+                className="quickstart-close"
+                aria-label={t.dialog.close}
+                onClick={() => setVaultQuickstartOpen(false)}
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </header>
+            <iframe title={t.commandLabels["app.openVaultQuickstart"]} src="vault-quickstart.html" />
+          </section>
+        </div>
+      ) : null}
 
       {toastMessage ? (
         <div className="app-toast" role="status" aria-live="polite">

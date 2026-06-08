@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
-import { FileText, Folder, FolderOpen, RotateCcw, Search, Trash2, Edit3 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { Clock3, FileText, Folder, FolderOpen, RotateCcw, Search, Trash2, Edit3 } from "lucide-react";
 import type { LeftPanelTab } from "../../app/store/appStore";
 import type { AppLanguage, appText } from "../../app/i18n";
 import type { VaultTreeEntry } from "../../app/types";
 import type { Note } from "../../domain/model";
 import type { OutlineItem } from "../../shared/markdown";
-import type { VaultIndex } from "../../vault";
+import type { VaultIndex, VaultIndexedFile } from "../../vault";
 import { searchVaultIndex } from "../../vault";
 import { Button, IconButton, SegmentedTabs, cx } from "../../shared/ui";
 
@@ -19,6 +19,7 @@ type VaultSidebarProps = {
   vaultRoot: string | null;
   vaultTree: VaultTreeEntry | null;
   vaultIndex: VaultIndex | null;
+  activeIndexedFile: VaultIndexedFile | null | undefined;
   vaultError: string | null;
   vaultRecoveryBlocked: boolean;
   expandedDirs: Set<string>;
@@ -28,6 +29,7 @@ type VaultSidebarProps = {
   notes: Note[];
   outline: OutlineItem[];
   searchFocusSignal: number;
+  searchFocusQuery: string;
   onTabChange: (tab: LeftPanelTab) => void;
   onDispatchCommand: (commandId: string) => void;
   onOpenMarkdownFile: (path: string) => void;
@@ -39,7 +41,79 @@ type VaultSidebarProps = {
   onClearVaultState: () => void;
   onOutlineClick: (index: number) => void;
   onSelectNote: (noteId: string) => void;
+  onReturnToEditor: () => void;
 };
+
+const SEARCH_HISTORY_STORAGE_KEY = "serein.sidebar.searchHistory.v1";
+const MAX_SEARCH_HISTORY_ITEMS = 20;
+
+function normalizeSearchHistoryItem(query: string) {
+  return query.replace(/\r\n?/g, "\n").split("\n").map((line) => line.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
+function readSearchHistory() {
+  try {
+    const raw = window.localStorage.getItem(SEARCH_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === "string")
+      .map(normalizeSearchHistoryItem)
+      .filter(Boolean)
+      .slice(0, MAX_SEARCH_HISTORY_ITEMS);
+  } catch {
+    return [];
+  }
+}
+
+function writeSearchHistory(items: string[]) {
+  try {
+    window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(items));
+  } catch {
+    // Search history is a convenience feature; storage failures should not block search.
+  }
+}
+
+function protectTextInputShortcut(event: ReactKeyboardEvent<HTMLInputElement>) {
+  if (!(event.ctrlKey || event.metaKey)) return false;
+  const key = event.key.toLowerCase();
+  if (["a", "c", "x", "v", "z", "y"].includes(key)) {
+    event.stopPropagation();
+    return true;
+  }
+  if (key === "f") {
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+  return false;
+}
+
+function highlightedSearchText(text: string, query: string): ReactNode {
+  const needle = normalizeSearchHistoryItem(query);
+  if (!needle) return text;
+
+  const lowerText = text.toLocaleLowerCase();
+  const lowerNeedle = needle.toLocaleLowerCase();
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  let matchIndex = lowerText.indexOf(lowerNeedle, cursor);
+  let key = 0;
+
+  while (matchIndex >= 0 && parts.length < 25) {
+    if (matchIndex > cursor) parts.push(text.slice(cursor, matchIndex));
+    const end = matchIndex + needle.length;
+    parts.push(<mark key={`hit-${key}`} className="search-match">{text.slice(matchIndex, end)}</mark>);
+    cursor = end;
+    key += 1;
+    matchIndex = lowerText.indexOf(lowerNeedle, cursor);
+  }
+
+  if (!parts.length) return text;
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
+}
 
 function VaultEntry({
   entry,
@@ -152,6 +226,7 @@ export function VaultSidebar({
   vaultRoot,
   vaultTree,
   vaultIndex,
+  activeIndexedFile,
   vaultError,
   vaultRecoveryBlocked,
   expandedDirs,
@@ -161,6 +236,7 @@ export function VaultSidebar({
   notes,
   outline,
   searchFocusSignal,
+  searchFocusQuery,
   onTabChange,
   onDispatchCommand,
   onOpenMarkdownFile,
@@ -172,10 +248,18 @@ export function VaultSidebar({
   onClearVaultState,
   onOutlineClick,
   onSelectNote,
+  onReturnToEditor,
 }: VaultSidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => readSearchHistory());
+  const [searchHistoryDeleteMode, setSearchHistoryDeleteMode] = useState(false);
+  const [selectedSearchResultIndex, setSelectedSearchResultIndex] = useState(-1);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const searchResults = useMemo(() => searchVaultIndex(vaultIndex, searchQuery, { limit: 60 }), [searchQuery, vaultIndex]);
+  const selectedSearchResultRef = useRef<HTMLButtonElement | null>(null);
+  const searchResults = useMemo(
+    () => searchVaultIndex(vaultIndex, searchQuery, { limit: 60, draftFile: activeIndexedFile }),
+    [activeIndexedFile, searchQuery, vaultIndex],
+  );
   const normalizedSearchQuery = searchQuery.trim();
   const searchPrefix = ["@", "/", "#", ":"].includes(normalizedSearchQuery[0]) ? normalizedSearchQuery[0] : "";
   const effectiveSearchQuery = searchPrefix ? normalizedSearchQuery.slice(1).trim() : normalizedSearchQuery;
@@ -188,14 +272,37 @@ export function VaultSidebar({
   }), [t.knowledge.searchContent, t.knowledge.searchPath, t.knowledge.searchTag, t.knowledge.searchTitle]);
   const searchScopes = useMemo(() => [
     { prefix: "", label: t.knowledge.searchAll, title: t.knowledge.searchPlaceholder },
-    { prefix: "@", label: "@", title: t.knowledge.searchTitle },
+    { prefix: "@", label: "@", title: t.knowledge.searchTag },
     { prefix: "/", label: "/", title: t.knowledge.searchPath },
-    { prefix: "#", label: "#", title: t.knowledge.searchTag },
+    { prefix: "#", label: "#", title: t.knowledge.searchTitle },
     { prefix: ":", label: ":", title: t.knowledge.searchContent },
   ], [t.knowledge.searchAll, t.knowledge.searchContent, t.knowledge.searchPath, t.knowledge.searchPlaceholder, t.knowledge.searchTag, t.knowledge.searchTitle]);
   const activeSearchPrefix = useMemo(() => {
     return searchPrefix;
   }, [searchPrefix]);
+  const highlightedQuery = effectiveSearchQuery;
+  const rememberSearchQuery = useCallback((query: string) => {
+    const normalized = normalizeSearchHistoryItem(query);
+    if (!normalized) return;
+    setSearchHistory((current) => {
+      const next = [normalized, ...current.filter((item) => item.toLocaleLowerCase() !== normalized.toLocaleLowerCase())]
+        .slice(0, MAX_SEARCH_HISTORY_ITEMS);
+      writeSearchHistory(next);
+      return next;
+    });
+  }, []);
+  const deleteSearchHistoryItem = useCallback((query: string) => {
+    setSearchHistory((current) => {
+      const next = current.filter((item) => item !== query);
+      writeSearchHistory(next);
+      return next;
+    });
+  }, []);
+  const clearSearchHistory = useCallback(() => {
+    setSearchHistory([]);
+    setSearchHistoryDeleteMode(false);
+    writeSearchHistory([]);
+  }, []);
   const setSearchScope = (prefix: string) => {
     setSearchQuery((current) => {
       const trimmed = current.trimStart();
@@ -212,13 +319,34 @@ export function VaultSidebar({
 
   useEffect(() => {
     if (tab !== "search") return undefined;
+    const focusQuery = normalizeSearchHistoryItem(searchFocusQuery);
+    if (focusQuery) {
+      setSearchQuery(focusQuery);
+      rememberSearchQuery(focusQuery);
+    }
 
     const frame = window.requestAnimationFrame(() => {
       searchInputRef.current?.focus();
       searchInputRef.current?.select();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [searchFocusSignal, tab]);
+  }, [rememberSearchQuery, searchFocusQuery, searchFocusSignal, tab]);
+
+  useEffect(() => {
+    setSelectedSearchResultIndex(searchResults.length ? 0 : -1);
+  }, [searchQuery, searchResults.length]);
+
+  useEffect(() => {
+    if (tab !== "search" || selectedSearchResultIndex < 0) return;
+    selectedSearchResultRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selectedSearchResultIndex, tab]);
+
+  const openSelectedSearchResult = useCallback((index: number) => {
+    const result = searchResults[index];
+    if (!result) return;
+    rememberSearchQuery(searchQuery);
+    onOpenMarkdownFile(result.path);
+  }, [onOpenMarkdownFile, rememberSearchQuery, searchQuery, searchResults]);
 
   return (
     <aside className="left-rail">
@@ -296,6 +424,41 @@ export function VaultSidebar({
                 ref={searchInputRef}
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (protectTextInputShortcut(event)) return;
+                  if ((event.key === "ArrowDown" || event.key === "ArrowUp") && searchResults.length) {
+                    event.preventDefault();
+                    const direction = event.key === "ArrowDown" ? 1 : -1;
+                    setSelectedSearchResultIndex((current) => {
+                      const base = current < 0 ? 0 : current;
+                      return (base + direction + searchResults.length) % searchResults.length;
+                    });
+                    return;
+                  }
+                  if (event.key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+                    const query = normalizeSearchHistoryItem(searchQuery);
+                    if (!query) return;
+                    event.preventDefault();
+                    if (searchResults.length) {
+                      openSelectedSearchResult(selectedSearchResultIndex >= 0 ? selectedSearchResultIndex : 0);
+                    } else {
+                      rememberSearchQuery(query);
+                    }
+                    return;
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    if (searchHistoryDeleteMode) {
+                      setSearchHistoryDeleteMode(false);
+                      return;
+                    }
+                    if (searchQuery) {
+                      setSearchQuery("");
+                      return;
+                    }
+                    onReturnToEditor();
+                  }
+                }}
                 placeholder={t.knowledge.searchPlaceholder}
               />
             </label>
@@ -313,21 +476,67 @@ export function VaultSidebar({
                 </button>
               ))}
             </div>
+            {!hasSidebarSearchIntent && searchHistory.length ? (
+              <section className="sidebar-search-history" aria-label={t.knowledge.searchHistory}>
+                <header>
+                  <span>{t.knowledge.searchHistory}</span>
+                  <div>
+                    <button
+                      type="button"
+                      className={cx(searchHistoryDeleteMode && "active")}
+                      onClick={() => setSearchHistoryDeleteMode((enabled) => !enabled)}
+                    >
+                      {searchHistoryDeleteMode ? t.knowledge.searchHistoryDone : t.knowledge.searchHistoryDelete}
+                    </button>
+                    {searchHistoryDeleteMode ? (
+                      <button type="button" onClick={clearSearchHistory}>{t.knowledge.clearSearchHistory}</button>
+                    ) : null}
+                  </div>
+                </header>
+                <div className="sidebar-search-history-list">
+                  {searchHistory.map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      className={cx("search-history-item", searchHistoryDeleteMode && "delete-mode")}
+                      onClick={() => {
+                        if (searchHistoryDeleteMode) {
+                          deleteSearchHistoryItem(item);
+                          return;
+                        }
+                        setSearchQuery(item);
+                        rememberSearchQuery(item);
+                      }}
+                      title={item}
+                    >
+                      {searchHistoryDeleteMode ? <Trash2 size={13} aria-hidden="true" /> : <Clock3 size={13} aria-hidden="true" />}
+                      <span>{item}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : null}
             <div className="link-list sidebar-search-results">
-              {searchResults.length ? searchResults.map((result) => (
+              {searchResults.length ? searchResults.map((result, index) => (
                 <button
                   key={result.path}
+                  ref={index === selectedSearchResultIndex ? selectedSearchResultRef : null}
                   type="button"
-                  className="link-item search-result-item"
-                  onClick={() => onOpenMarkdownFile(result.path)}
+                  className={cx("link-item search-result-item", index === selectedSearchResultIndex && "selected")}
+                  aria-current={index === selectedSearchResultIndex ? "true" : undefined}
+                  onClick={() => {
+                    setSelectedSearchResultIndex(index);
+                    rememberSearchQuery(searchQuery);
+                    onOpenMarkdownFile(result.path);
+                  }}
                 >
                   <Search size={14} aria-hidden="true" />
                   <strong>
-                    <span>{result.title}</span>
+                    <span>{highlightedSearchText(result.title, highlightedQuery)}</span>
                     <em className={`search-result-type ${result.matchType}`}>{searchScopeLabels[result.matchType]}</em>
                   </strong>
-                  <span>{result.relativePath}</span>
-                  <small>{result.snippet}</small>
+                  <span>{highlightedSearchText(result.relativePath, highlightedQuery)}</span>
+                  <small>{highlightedSearchText(result.snippet, highlightedQuery)}</small>
                 </button>
               )) : !hasSidebarSearchIntent ? (
                 !vaultMode ? <p className="muted">{t.knowledge.openVaultForGraph}</p> : null

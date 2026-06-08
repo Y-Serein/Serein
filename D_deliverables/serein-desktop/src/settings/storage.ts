@@ -197,6 +197,9 @@ export function readSettings(): AppSettings {
       showEditorStatusOverlay: hasEditorStatusOverlaySetting
         ? Boolean(parsed.showEditorStatusOverlay)
         : defaultSettings.showEditorStatusOverlay,
+      showFrontmatterTagRow: typeof parsed.showFrontmatterTagRow === "boolean"
+        ? parsed.showFrontmatterTagRow
+        : defaultSettings.showFrontmatterTagRow,
       defaultSaveExt: parsed.defaultSaveExt === "txt" ? "txt" : "md",
       defaultNewNoteName: normalizeDefaultNewNoteName(parsed.defaultNewNoteName),
       imageAttachmentFolder: normalizeImageAttachmentFolder(parsed.imageAttachmentFolder),

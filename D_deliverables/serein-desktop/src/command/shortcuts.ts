@@ -139,6 +139,7 @@ export const menuGroups: MenuGroup[] = [
     id: "help",
     label: "帮助",
     items: [
+      { label: "使用手册", commandId: "app.openVaultQuickstart" },
       { label: "快捷键", commandId: "app.openShortcuts" },
       { label: "关于", commandId: "app.about" },
     ],

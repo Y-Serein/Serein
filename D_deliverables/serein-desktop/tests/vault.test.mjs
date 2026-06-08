@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildVaultIndex,
+  createDraftIndexedFile,
   createGlobalGraph,
   createLocalGraph,
   getBacklinks,
@@ -13,7 +14,16 @@ import {
   resolveVaultLinkTarget,
   searchVaultIndex,
 } from "../.test-dist/vault/index.js";
-import { normalizeWikiLinkEscapes } from "../.test-dist/shared/markdown.js";
+import {
+  composeMarkdownWithFrontmatter,
+  createYamlFrontmatter,
+  normalizeWikiLinkEscapes,
+  parseYamlFrontmatterProperties,
+  setYamlPropertyValue,
+  splitYamlFrontmatter,
+  yamlListValueFromInput,
+  yamlPropertyValues,
+} from "../.test-dist/shared/markdown.js";
 import { findHeadingIndex } from "../.test-dist/shared/markdown.js";
 import {
   directoryFromResponse,
@@ -159,11 +169,11 @@ test("builds searchable tags and limited global graph with unresolved links", ()
     { tag: "misc", count: 1 },
   ]);
   assert.equal(searchVaultIndex(index, "body")[0].relativePath, "b.md");
-  assert.equal(searchVaultIndex(index, "@beta")[0].relativePath, "b.md");
+  assert.equal(searchVaultIndex(index, "#beta")[0].relativePath, "b.md");
   assert.equal(searchVaultIndex(index, "/extra-2")[0].relativePath, "extra-2.md");
-  assert.equal(searchVaultIndex(index, "#misc")[0].relativePath, "c.md");
+  assert.equal(searchVaultIndex(index, "@misc")[0].relativePath, "c.md");
   assert.equal(searchVaultIndex(index, ":body")[0].relativePath, "b.md");
-  assert.equal(searchVaultIndex(index, "@body").length, 0);
+  assert.equal(searchVaultIndex(index, "#body").length, 0);
   assert.equal(searchVaultIndex(index, "@").length, 0);
   assert.equal(searchVaultIndex(index, "/").length, 0);
   assert.equal(searchVaultIndex(index, "#").length, 0);
@@ -208,6 +218,145 @@ test("extracts YAML properties, aliases, and frontmatter tags", () => {
 
   const home = index.filesByRelativePath.get("home.md");
   assert.equal(home.outgoingLinks[0].targetPath, `${root}/meta.md`);
+});
+
+test("splits and composes YAML frontmatter for rich editor rendering", () => {
+  const markdown = [
+    "---",
+    "",
+    "tags: [project, writing]",
+    "",
+    "aliases:",
+    "  - Atlas",
+    "  - Project Atlas",
+    "",
+    "status: active",
+    "",
+    "---",
+    "",
+    "# Atlas",
+    "",
+    "Body",
+  ].join("\r\n");
+
+  const parts = splitYamlFrontmatter(markdown);
+  assert.ok(parts);
+  assert.equal(parts.body, "\n# Atlas\n\nBody");
+  assert.equal(parts.content.includes("tags: [project, writing]"), true);
+  assert.deepEqual(yamlPropertyValues(parts.properties, "tags"), ["project", "writing"]);
+  assert.deepEqual(yamlPropertyValues(parts.properties, "aliases"), ["Atlas", "Project Atlas"]);
+
+  const editedFrontmatter = createYamlFrontmatter("tags: [project, release]\nstatus: active");
+  assert.equal(composeMarkdownWithFrontmatter(editedFrontmatter, parts.body.replace(/^\n/, "")), [
+    "---",
+    "tags: [project, release]",
+    "status: active",
+    "---",
+    "# Atlas",
+    "",
+    "Body",
+  ].join("\n"));
+});
+
+test("updates YAML property content from structured controls", () => {
+  const content = [
+    "",
+    "tags: [project, writing]",
+    "",
+    "aliases:",
+    "  - Atlas",
+    "  - Project Atlas",
+    "",
+    "status: active",
+  ].join("\n");
+
+  assert.equal(yamlListValueFromInput("release public"), "[release, public]");
+  assert.equal(yamlListValueFromInput("Atlas, Project Atlas"), "[Atlas, Project Atlas]");
+
+  const updatedTags = setYamlPropertyValue(content, "tags", yamlListValueFromInput("release, public"));
+  assert.equal(updatedTags.includes("tags: [release, public]"), true);
+  assert.equal(updatedTags.includes("aliases:"), true);
+
+  const updatedAliases = setYamlPropertyValue(updatedTags, "aliases", yamlListValueFromInput("Atlas, Manual"));
+  assert.equal(updatedAliases.includes("aliases: [Atlas, Manual]"), true);
+  assert.equal(updatedAliases.includes("  - Project Atlas"), false);
+
+  const updatedStatus = setYamlPropertyValue(updatedAliases, "status", "inactive");
+  assert.equal(updatedStatus.includes("status: inactive"), true);
+});
+
+test("promotes Milkdown thematic-break frontmatter when it contains YAML properties", () => {
+  const markdown = [
+    "",
+    "***",
+    "",
+    "tags: [project, writing]",
+    "",
+    "aliases: [Atlas, Project Atlas]",
+    "",
+    "status: active",
+    "",
+    "***",
+    "",
+    "vibe-bridge",
+  ].join("\n");
+
+  const parts = splitYamlFrontmatter(markdown);
+  assert.ok(parts);
+  assert.equal(parts.frontmatter.startsWith("---\n"), true);
+  assert.equal(parts.frontmatter.includes("***"), false);
+  assert.equal(parts.body, "\nvibe-bridge");
+  assert.deepEqual(yamlPropertyValues(parts.properties, "tags"), ["project", "writing"]);
+});
+
+test("parses draft frontmatter tags before a vault index refresh", () => {
+  const index = buildVaultIndex(root, {
+    truncated: false,
+    skippedFiles: 0,
+    files: [
+      file("home.md", "# Home"),
+    ],
+  });
+
+  const draft = createDraftIndexedFile(index, `${root}/draft.md`, "---\ntags: [project, writing]\n---\n# Draft");
+  assert.ok(draft);
+  assert.equal(draft.relativePath, "draft.md");
+  assert.deepEqual(draft.tags, ["project", "writing"]);
+  assert.deepEqual(yamlPropertyValues(parseYamlFrontmatterProperties(draft.content), "tags"), ["project", "writing"]);
+  assert.equal(searchVaultIndex(index, "@project", { draftFile: draft })[0].relativePath, "draft.md");
+});
+
+test("parses indented YAML frontmatter fields and indexes draft tags", () => {
+  const markdown = [
+    "---",
+    "",
+    "    tags: [project, writing]",
+    "",
+    "    aliases: [Atlas, Project Atlas]",
+    "",
+    "    status: active",
+    "",
+    "---",
+    "",
+    "vibe-bridge",
+  ].join("\n");
+  const parts = splitYamlFrontmatter(markdown);
+  assert.ok(parts);
+  assert.deepEqual(yamlPropertyValues(parts.properties, "tags"), ["project", "writing"]);
+  assert.deepEqual(yamlPropertyValues(parts.properties, "aliases"), ["Atlas", "Project Atlas"]);
+  assert.equal(parts.properties.find((property) => property.key === "status")?.value, "active");
+
+  const index = buildVaultIndex(root, {
+    truncated: false,
+    skippedFiles: 0,
+    files: [
+      file("home.md", "# Home"),
+    ],
+  });
+  const draft = createDraftIndexedFile(index, `${root}/draft.md`, markdown);
+  assert.ok(draft);
+  assert.deepEqual(draft.tags, ["project", "writing"]);
+  assert.equal(searchVaultIndex(index, "@project", { draftFile: draft })[0].relativePath, "draft.md");
 });
 
 test("finds unlinked mentions from file names and aliases outside existing links", () => {

@@ -28,6 +28,7 @@ type EditorWorkspaceProps = {
   imagePreviewMap: Record<string, string>;
   showImageSourceOnFocus: boolean;
   normalizeWindowsImagePaths: boolean;
+  showFrontmatterTagRow: boolean;
 };
 
 export function EditorWorkspace({
@@ -48,6 +49,7 @@ export function EditorWorkspace({
   imagePreviewMap,
   showImageSourceOnFocus,
   normalizeWindowsImagePaths,
+  showFrontmatterTagRow,
 }: EditorWorkspaceProps) {
   return (
     <main className="editor-column">
@@ -92,6 +94,8 @@ export function EditorWorkspace({
               imagePreviewMap={imagePreviewMap}
               showImageSourceOnFocus={showImageSourceOnFocus}
               normalizeWindowsImagePaths={normalizeWindowsImagePaths}
+              showFrontmatterTagRow={showFrontmatterTagRow}
+              frontmatterLabels={t.editor.frontmatter}
             />
           </Suspense>
         )}

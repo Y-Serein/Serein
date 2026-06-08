@@ -1,5 +1,6 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import { readFileSync } from "node:fs";
 
 const CORE_CODEMIRROR_PACKAGES = [
   "@codemirror/autocomplete",
@@ -43,8 +44,22 @@ function includesNodePackagePrefix(id: string, packagePrefix: string) {
   return id.includes(`/node_modules/${packagePrefix}`);
 }
 
+function bundledPublicAssets(): Plugin {
+  return {
+    name: "serein-bundled-public-assets",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "vault-quickstart.html",
+        source: readFileSync(new URL("./public/vault-quickstart.html", import.meta.url)),
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), bundledPublicAssets()],
+  publicDir: false,
   clearScreen: false,
   server: {
     port: 1420,

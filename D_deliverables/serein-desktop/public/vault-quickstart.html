@@ -1,0 +1,1350 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Serein 使用手册</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #111113;
+        --panel: #1b1b1f;
+        --panel-2: #242429;
+        --paper: #1f1f23;
+        --line: #32323a;
+        --line-soft: #292930;
+        --text: #eeeeee;
+        --muted: #b6b6bf;
+        --quiet: #85858f;
+        --accent: #8bd5ca;
+        --accent-2: #f0c674;
+        --accent-3: #a371f7;
+        --good: #7ccf8a;
+        --danger: #f08c8c;
+        --shadow: 0 24px 72px rgb(0 0 0 / 32%);
+        --font-ui: "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+        --font-mono: "Cascadia Code", "Consolas", "Noto Sans Mono CJK SC", monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background:
+          linear-gradient(180deg, #151518 0, var(--bg) 360px),
+          var(--bg);
+        color: var(--text);
+        font-family: var(--font-ui);
+      }
+
+      button,
+      textarea {
+        font: inherit;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      code,
+      pre,
+      textarea {
+        font-family: var(--font-mono);
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: end;
+        border-bottom: 1px solid var(--line);
+        background: rgb(17 17 19 / 91%);
+        padding: 20px clamp(18px, 4vw, 42px) 17px;
+        backdrop-filter: blur(18px);
+      }
+
+      .brand {
+        display: grid;
+        gap: 8px;
+      }
+
+      .brand small {
+        color: var(--accent);
+        font-size: 12px;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+      }
+
+      .brand h1 {
+        font-size: clamp(25px, 3vw, 42px);
+        line-height: 1.08;
+        letter-spacing: 0;
+      }
+
+      .subtitle {
+        max-width: 860px;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: end;
+        gap: 8px;
+      }
+
+      .button {
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel-2);
+        color: var(--text);
+        padding: 7px 11px;
+        cursor: pointer;
+        transition: background 160ms ease, border-color 160ms ease, transform 100ms ease;
+      }
+
+      .button:hover {
+        border-color: color-mix(in srgb, var(--accent) 52%, var(--line));
+        background: #2b2b32;
+      }
+
+      .button:active {
+        transform: translateY(1px);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 240px minmax(0, 1fr);
+        min-height: calc(100vh - 106px);
+      }
+
+      .toc {
+        position: sticky;
+        top: 106px;
+        align-self: start;
+        display: grid;
+        gap: 8px;
+        height: calc(100vh - 106px);
+        overflow: auto;
+        border-right: 1px solid var(--line);
+        background: #151518;
+        padding: 18px 14px;
+      }
+
+      .toc strong {
+        color: var(--quiet);
+        font-size: 12px;
+        letter-spacing: .06em;
+      }
+
+      .toc a {
+        display: block;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: var(--muted);
+        padding: 7px 8px;
+        text-decoration: none;
+      }
+
+      .toc a:hover {
+        border-color: var(--line);
+        background: var(--panel);
+        color: var(--text);
+      }
+
+      .content {
+        min-width: 0;
+        padding: clamp(18px, 3vw, 34px);
+      }
+
+      .section {
+        scroll-margin-top: 128px;
+        display: grid;
+        gap: 16px;
+        max-width: 1180px;
+        margin: 0 auto 28px;
+      }
+
+      .section-heading {
+        display: grid;
+        gap: 7px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 12px;
+      }
+
+      .section-heading h2 {
+        font-size: clamp(22px, 2.2vw, 31px);
+        letter-spacing: 0;
+      }
+
+      .section-heading p,
+      .hint {
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .grid.two {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .card,
+      .lesson,
+      .lab-panel,
+      .preview,
+      .rule {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .card,
+      .lesson {
+        display: grid;
+        gap: 9px;
+        padding: 15px;
+      }
+
+      .card h3,
+      .lesson h3 {
+        font-size: 16px;
+      }
+
+      .card p,
+      .lesson p,
+      .card li,
+      .lesson li {
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .lesson ol,
+      .lesson ul,
+      .card ul {
+        margin: 0;
+        padding-left: 20px;
+      }
+
+      .callout {
+        border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line));
+        border-radius: 8px;
+        background: rgb(139 213 202 / 8%);
+        color: var(--muted);
+        line-height: 1.65;
+        padding: 14px;
+      }
+
+      .warning {
+        border-color: color-mix(in srgb, var(--danger) 36%, var(--line));
+        background: rgb(240 140 140 / 8%);
+      }
+
+      .module-title {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid color-mix(in srgb, var(--line) 70%, var(--accent));
+        border-radius: 999px;
+        color: var(--accent);
+        padding: 2px 8px;
+        font-size: 12px;
+      }
+
+      pre {
+        overflow: auto;
+        margin: 0;
+        border: 1px solid var(--line-soft);
+        border-radius: 7px;
+        background: #151519;
+        color: #eeeeee;
+        padding: 12px;
+        line-height: 1.62;
+      }
+
+      code {
+        border: 1px solid var(--line-soft);
+        border-radius: 5px;
+        background: #17171b;
+        color: var(--accent-2);
+        padding: 1px 5px;
+      }
+
+      pre code {
+        border: 0;
+        background: transparent;
+        color: inherit;
+        padding: 0;
+      }
+
+      .workflow {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        counter-reset: step;
+      }
+
+      .workflow li {
+        list-style: none;
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--muted);
+        line-height: 1.55;
+        padding: 36px 12px 12px;
+      }
+
+      .workflow li::before {
+        counter-increment: step;
+        content: counter(step);
+        position: absolute;
+        top: 10px;
+        left: 12px;
+        display: grid;
+        place-items: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #111113;
+        font-weight: 700;
+      }
+
+      .lab {
+        display: grid;
+        grid-template-columns: minmax(320px, .92fr) minmax(380px, 1.08fr);
+        gap: 1px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--line);
+      }
+
+      .lab-panel {
+        min-width: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 16px;
+      }
+
+      .snippet-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin: 12px 0;
+      }
+
+      .snippet {
+        border-color: color-mix(in srgb, var(--line) 72%, var(--accent));
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 560px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        outline: none;
+        background: #151519;
+        color: #eeeeee;
+        padding: 18px;
+        font-size: 14px;
+        line-height: 1.62;
+        tab-size: 2;
+      }
+
+      textarea:focus {
+        border-color: color-mix(in srgb, var(--accent) 54%, var(--line));
+      }
+
+      .right-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 290px;
+        gap: 14px;
+        align-items: start;
+      }
+
+      .preview {
+        min-width: 0;
+        padding: 18px;
+        line-height: 1.72;
+        overflow-wrap: anywhere;
+      }
+
+      .preview h1 {
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 10px;
+        margin-bottom: 14px;
+      }
+
+      .preview h2,
+      .preview h3 {
+        margin: 18px 0 8px;
+      }
+
+      .preview p,
+      .preview ul,
+      .preview blockquote,
+      .preview pre {
+        margin: 0 0 12px;
+      }
+
+      .preview ul {
+        padding-left: 22px;
+      }
+
+      .preview blockquote {
+        border-left: 3px solid var(--accent-3);
+        padding: 6px 0 6px 12px;
+        color: var(--muted);
+        background: rgb(163 113 247 / 7%);
+      }
+
+      .wiki-link {
+        color: var(--accent);
+        text-decoration: none;
+        border-bottom: 1px solid rgb(139 213 202 / 42%);
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid rgb(139 213 202 / 28%);
+        border-radius: 999px;
+        background: rgb(139 213 202 / 10%);
+        color: var(--accent);
+        padding: 0 7px;
+        font-size: .92em;
+      }
+
+      .tag-row-demo {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+        gap: 14px;
+        align-items: center;
+        border: 1px solid var(--line-soft);
+        border-radius: 7px;
+        background: #151519;
+        padding: 10px 12px;
+        color: var(--muted);
+      }
+
+      .tag-row-demo .tag-side {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--muted);
+        font-family: "Times New Roman", Georgia, serif;
+        font-size: 15px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .tag-row-demo .tag-side:last-child {
+        text-align: right;
+      }
+
+      .tag-row-demo .tag-token {
+        color: var(--quiet);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .tag-row-demo .tag-token strong {
+        color: var(--muted);
+        font-weight: 600;
+      }
+
+      .side {
+        display: grid;
+        gap: 12px;
+      }
+
+      .mini-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        padding: 13px;
+      }
+
+      .mini-card h3 {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 9px;
+        font-size: 14px;
+      }
+
+      .mini-card h3 span {
+        color: var(--quiet);
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .list {
+        display: grid;
+        gap: 7px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .list li {
+        display: grid;
+        gap: 2px;
+        border: 1px solid var(--line-soft);
+        border-radius: 6px;
+        background: rgb(255 255 255 / 2%);
+        padding: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .list strong {
+        color: var(--text);
+        font-size: 13px;
+      }
+
+      .empty {
+        color: var(--quiet);
+        font-size: 12px;
+      }
+
+      .cheatsheet {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 10px;
+      }
+
+      .rule {
+        padding: 13px;
+      }
+
+      .rule code {
+        display: block;
+        margin-bottom: 8px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .rule span {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .kbd-table {
+        width: 100%;
+        border-collapse: collapse;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      .kbd-table th,
+      .kbd-table td {
+        border-bottom: 1px solid var(--line);
+        padding: 9px 11px;
+        text-align: left;
+      }
+
+      .kbd-table th {
+        color: var(--quiet);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .kbd-table td {
+        color: var(--muted);
+      }
+
+      .kbd-table tr:last-child td {
+        border-bottom: 0;
+      }
+
+      @media (max-width: 1180px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .toc {
+          position: static;
+          height: auto;
+          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .grid,
+        .grid.two,
+        .workflow,
+        .lab,
+        .right-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .topbar {
+          position: static;
+          grid-template-columns: 1fr;
+          align-items: start;
+        }
+
+        .actions {
+          justify-content: start;
+        }
+
+        .content {
+          padding: 14px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <small>Serein User Manual</small>
+        <h1>从打开文件到建立知识库，一页学完 Serein</h1>
+        <p class="subtitle">这是一份内置 HTML 使用手册。你可以按左侧目录完整学习，也可以在练习区直接修改 Markdown，实时观察 Serein 会如何识别标题、路径、标签、链接和属性。</p>
+      </div>
+      <div class="actions">
+        <button class="button" id="copyButton" type="button">复制练习示例</button>
+        <button class="button" id="resetButton" type="button">恢复练习示例</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav class="toc" aria-label="手册目录">
+        <strong>学习目录</strong>
+        <a href="#start">1. 快速开始</a>
+        <a href="#interface">2. 界面区域</a>
+        <a href="#files">3. Vault 与文件</a>
+        <a href="#editing">4. 编辑模式</a>
+        <a href="#markdown">5. Markdown 基础</a>
+        <a href="#vault-syntax">6. Obsidian 语法</a>
+        <a href="#lab">7. 练习区</a>
+        <a href="#images">8. 图片</a>
+        <a href="#search">9. 搜索与快速打开</a>
+        <a href="#knowledge">10. 知识面板</a>
+        <a href="#graph">11. 图谱</a>
+        <a href="#settings">12. 设置与快捷键</a>
+        <a href="#export">13. 导出</a>
+        <a href="#safety">14. 数据安全</a>
+        <a href="#faq">15. 常见问题</a>
+      </nav>
+
+      <main class="content">
+        <section class="section" id="start">
+          <div class="section-heading">
+            <h2>1. 快速开始</h2>
+            <p>Serein 是本地 Markdown 桌面写作工具。文件保存在你的电脑上，Serein 不提供云同步，也不会上传你的文档。</p>
+          </div>
+          <ol class="workflow">
+            <li>启动 Serein。</li>
+            <li>点击左侧栏的“打开”，或使用 `文件 -> 打开 Vault`。</li>
+            <li>选择一个本地文件夹作为 Vault。</li>
+            <li>点击 `.md`、`.markdown` 或 `.txt` 文件开始编辑。</li>
+          </ol>
+          <div class="grid two">
+            <article class="card">
+              <h3>推荐用法</h3>
+              <ul>
+                <li>日常写作：使用 Rich Edit。</li>
+                <li>精确改 Markdown：使用 Plain Edit。</li>
+                <li>做知识库：用文件夹组织路径，用标签分类，用链接建立关系。</li>
+              </ul>
+            </article>
+            <article class="card">
+              <h3>单文件使用</h3>
+              <p>如果只是临时打开一个文件，可以使用 `文件 -> 打开文件`。如果要使用反链、图谱、标签和快速打开，建议打开整个文件夹为 Vault。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="interface">
+          <div class="section-heading">
+            <h2>2. 界面区域</h2>
+            <p>先理解界面，再学习语法。Serein 的核心是左侧组织文件，中间写作，右侧看关系。</p>
+          </div>
+          <div class="grid">
+            <article class="card"><h3>顶部菜单栏</h3><p>包含文件、编辑、段落、格式、视图、主题、帮助。</p></article>
+            <article class="card"><h3>左侧工具栏</h3><p>打开 Vault、快速打开、搜索、图谱、知识面板、新建文档、命令面板、设置。</p></article>
+            <article class="card"><h3>左侧栏</h3><p>显示文件树、大纲。执行搜索时会显示搜索分区。</p></article>
+            <article class="card"><h3>中间编辑区</h3><p>当前文档的 Rich Edit 或 Plain Edit。</p></article>
+            <article class="card"><h3>右侧知识面板</h3><p>反链、出链、属性、图谱、标签。</p></article>
+            <article class="card"><h3>状态浮层</h3><p>显示当前编辑模式，可在设置中隐藏。</p></article>
+          </div>
+        </section>
+
+        <section class="section" id="files">
+          <div class="section-heading">
+            <h2>3. Vault 与文件管理</h2>
+            <p>Vault 就是一个本地文件夹。Serein 会读取其中的 Markdown / 文本文件，并基于这些文件建立索引。</p>
+          </div>
+          <div class="grid two">
+            <article class="lesson">
+              <div class="module-title"><h3>打开与新建</h3><span class="pill">文件</span></div>
+              <ul>
+                <li>`文件 -> 打开 Vault`：打开一个本地文件夹。</li>
+                <li>`文件 -> 打开文件`：打开单个文件。</li>
+                <li>`文件 -> 新建笔记` 或 `Ctrl+N`：新建文档。</li>
+                <li>`文件 -> 新建文件夹`：在当前选中目录中新建文件夹。</li>
+              </ul>
+            </article>
+            <article class="lesson">
+              <div class="module-title"><h3>保存与另存为</h3><span class="pill">数据安全</span></div>
+              <ul>
+                <li>`Ctrl+S` 保存当前文件。</li>
+                <li>`Ctrl+Shift+S` 另存为。</li>
+                <li>切换文件前，如果有未保存修改，Serein 会提示保存或放弃。</li>
+              </ul>
+            </article>
+            <article class="lesson">
+              <div class="module-title"><h3>重命名</h3><span class="pill">链接更新</span></div>
+              <p>在文件树中右键文件或点击行右侧按钮。若其他文件链接到旧文件，Serein 会询问是否同步更新链接。</p>
+            </article>
+            <article class="lesson">
+              <div class="module-title"><h3>删除</h3><span class="pill">非永久删除</span></div>
+              <p>删除会移动到 Serein 应用数据回收站，不会直接永久删除磁盘文件。删除前仍要确认目标是否正确。</p>
+            </article>
+          </div>
+          <div class="callout">支持索引的文件类型：`.md`、`.markdown`、`.txt`。其他文件可以放在 Vault 中，但不会作为知识库文档进入反链和图谱。</div>
+        </section>
+
+        <section class="section" id="editing">
+          <div class="section-heading">
+            <h2>4. 编辑模式</h2>
+            <p>Serein 有 Rich Edit 和 Plain Edit。两种模式编辑的是同一份 Markdown。</p>
+          </div>
+          <div class="grid two">
+            <article class="card">
+              <h3>Rich Edit</h3>
+              <p>所见即所得模式，适合日常写作。支持标题、列表、引用、链接、图片、代码块、表格等常见 Markdown 结构。</p>
+            </article>
+            <article class="card">
+              <h3>Plain Edit</h3>
+              <p>源码模式，适合精确编辑 frontmatter、路径、复杂链接和 Markdown 语法。</p>
+            </article>
+            <article class="card">
+              <h3>模式记忆</h3>
+              <p>切换 Rich Edit 或 Plain Edit 会作为全局偏好保存。之后打开其他文件也沿用上次模式；没有记录或记录异常时默认使用 Rich Edit。</p>
+            </article>
+            <article class="card">
+              <h3>桌面操作边界</h3>
+              <p>搜索框、命令面板、属性输入框等输入区域会优先响应自己的复制、粘贴、撤销和全选，不会把整个界面一起选中。</p>
+            </article>
+          </div>
+          <div class="callout">切换方式：右上角模式按钮、`视图 -> Rich Edit / Plain Edit`、`Ctrl+Alt+R`、`Ctrl+Alt+P`。</div>
+        </section>
+
+        <section class="section" id="markdown">
+          <div class="section-heading">
+            <h2>5. Markdown 基础</h2>
+            <p>这些是最常用的写法。不会 Markdown 也可以先照着复制。</p>
+          </div>
+          <div class="cheatsheet">
+            <div class="rule"><code># 标题
+## 二级标题</code><span>标题会进入左侧大纲，也可以作为链接锚点。</span></div>
+            <div class="rule"><code>**加粗**
+*斜体*
+~~删除线~~
+`代码`</code><span>常见行内格式。</span></div>
+            <div class="rule"><code>- 无序列表
+1. 有序列表</code><span>用于整理步骤、任务和清单。</span></div>
+            <div class="rule"><code>&gt; 引用内容</code><span>适合摘录和强调。</span></div>
+            <div class="rule"><code>```bash
+npm run build
+```</code><span>代码块支持语言名和高亮。</span></div>
+            <div class="rule"><code>| 项目 | 状态 |
+| --- | --- |
+| 文档 | 完成 |</code><span>表格使用标准 Markdown 写法。</span></div>
+          </div>
+        </section>
+
+        <section class="section" id="vault-syntax">
+          <div class="section-heading">
+            <h2>6. Obsidian / Vault 语法</h2>
+            <p>这是 Serein 知识库能力的核心：路径、标签、属性、链接和别名。</p>
+          </div>
+          <div class="grid two">
+            <article class="lesson">
+              <h3>路径</h3>
+              <p>路径来自 Vault 文件树里的文件夹和文件相对位置，不需要额外创建语法。</p>
+              <pre><code>Projects/
+  Atlas.md
+Notes/
+  Research.md</code></pre>
+              <p>可以写：`[[Projects/Atlas]]` 或 `[研究](./Notes/Research.md)`。</p>
+            </article>
+            <article class="lesson">
+              <h3>标签</h3>
+              <pre><code>#project
+#project/atlas</code></pre>
+              <p>正文里写 `#project` 是标签。左侧搜索里用 `@project` 搜标签，`#Project` 用于搜索标题。</p>
+            </article>
+            <article class="lesson">
+              <h3>属性区 / YAML frontmatter</h3>
+              <pre><code>---
+tags: [project, writing]
+aliases: [Atlas, Project Atlas]
+status: active
+---</code></pre>
+              <p>这是文件开头的属性区，不是正文。`tags` 是标签，`aliases` 是别名，`status` 可用来表示 active / inactive。</p>
+              <div class="tag-row-demo" aria-label="Rich Edit tags row example">
+                <span class="tag-side">project writing</span>
+                <span class="tag-token">--<strong>- tags -</strong>--</span>
+                <span class="tag-side">Atlas, Project Atlas</span>
+              </div>
+              <p>在 Rich Edit 中，属性区会收起成一行 `--- tags ---`。鼠标移到这一行或用键盘跳到这一行时，左侧显示标签，右侧显示别名，可以直接编辑。</p>
+            </article>
+            <article class="lesson">
+              <h3>Wiki 链接</h3>
+              <pre><code>[[note]]
+[[note#heading]]
+[[note|alias]]
+[[path/note#heading|alias]]</code></pre>
+              <p>建议公开使用时写带路径的链接，避免同名文件歧义。</p>
+            </article>
+          </div>
+          <div class="callout">属性行补充：标签和别名输入支持空格、英文逗号或中文逗号分隔；包含空格的别名建议用逗号分隔，例如 `Atlas, Project Atlas`。点击中间 `--- tags ---` 可切换 active / inactive。标签和别名都清空后，可用 Delete / Backspace 删除整行属性。</div>
+          <div class="callout">目录链接如 `[目录入口](./Notes/)` 会尝试解析到 `index.md`、`index.markdown`、`index.txt`、`README.md`、`README.markdown` 或 `README.txt`。</div>
+        </section>
+
+        <section class="section" id="lab">
+          <div class="section-heading">
+            <h2>7. 练习区</h2>
+            <p>左侧可以直接改 Markdown，右侧会实时显示 Serein 能识别出的标题、标签、路径、链接和属性。</p>
+          </div>
+          <div class="lab">
+            <section class="lab-panel">
+              <h3>Markdown 练习</h3>
+              <p class="hint">把示例复制进 Serein，就能得到大纲、搜索、反链、出链、标签、属性和图谱。</p>
+              <div class="snippet-bar">
+                <button class="button snippet" type="button" data-template="heading">插入标题</button>
+                <button class="button snippet" type="button" data-template="frontmatter">插入属性</button>
+                <button class="button snippet" type="button" data-template="wiki">插入 Wiki 链接</button>
+                <button class="button snippet" type="button" data-template="path">插入路径链接</button>
+                <button class="button snippet" type="button" data-template="tag">插入标签</button>
+              </div>
+              <textarea id="editor" spellcheck="false" aria-label="Serein Markdown 练习"></textarea>
+            </section>
+
+            <section class="lab-panel">
+              <h3>实时理解结果</h3>
+              <p class="hint">这里不是完整 Markdown 渲染器，重点是帮你理解 Serein 的 Vault 语法会触发哪些功能。</p>
+              <div class="right-grid">
+                <article class="preview" id="preview" aria-label="Markdown 预览"></article>
+                <aside class="side" aria-label="Vault 识别结果">
+                  <section class="mini-card">
+                    <h3>标题 <span>大纲和锚点</span></h3>
+                    <ul class="list" id="headings"></ul>
+                  </section>
+                  <section class="mini-card">
+                    <h3>标签 <span>搜索和图谱过滤</span></h3>
+                    <ul class="list" id="tags"></ul>
+                  </section>
+                  <section class="mini-card">
+                    <h3>路径 <span>文件夹和相对位置</span></h3>
+                    <ul class="list" id="paths"></ul>
+                  </section>
+                  <section class="mini-card">
+                    <h3>链接 <span>反链和出链</span></h3>
+                    <ul class="list" id="links"></ul>
+                  </section>
+                  <section class="mini-card">
+                    <h3>属性 <span>tags / aliases / status</span></h3>
+                    <ul class="list" id="properties"></ul>
+                  </section>
+                </aside>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="section" id="images">
+          <div class="section-heading">
+            <h2>8. 图片</h2>
+            <p>可以通过菜单、粘贴或拖拽插入图片。插入图片前，当前文档需要先保存到磁盘。</p>
+          </div>
+          <div class="grid">
+            <article class="card"><h3>附件目录</h3><p>默认是 `./image_ys`，表示复制到当前文档旁边的 `image_ys` 子目录。</p></article>
+            <article class="card"><h3>相对路径</h3><p>更适合迁移 Vault，推荐日常使用。</p></article>
+            <article class="card"><h3>绝对路径</h3><p>依赖当前电脑路径，不建议用于可迁移笔记。</p></article>
+          </div>
+        </section>
+
+        <section class="section" id="search">
+          <div class="section-heading">
+            <h2>9. 搜索与快速打开</h2>
+            <p>快速打开用于切换文件，搜索用于查标题、路径、标签和正文。</p>
+          </div>
+          <div class="grid two">
+            <article class="card">
+              <h3>快速打开</h3>
+              <p>`Ctrl+P` 或 `文件 -> 快速打开`。在当前 Vault 内按标题或路径快速切换文件。</p>
+            </article>
+            <article class="card">
+              <h3>搜索</h3>
+              <p>`Ctrl+F` 或 `编辑 -> 搜索`。左侧搜索支持范围前缀；如果正文里已经选中文字，会自动填入搜索框。</p>
+            </article>
+            <article class="card">
+              <h3>历史搜索</h3>
+              <p>搜索框为空时会显示历史搜索。可以点历史项重新搜索，也可以进入删除模式删除单项或一键清空。</p>
+            </article>
+            <article class="card">
+              <h3>输入边界</h3>
+              <p>搜索框内的 `Ctrl+A` 只选择搜索框内容；复制、粘贴、撤销也优先作用于当前输入框。</p>
+            </article>
+          </div>
+          <table class="kbd-table">
+            <thead><tr><th>输入</th><th>范围</th><th>示例</th></tr></thead>
+            <tbody>
+              <tr><td><code>关键词</code></td><td>全部</td><td><code>Serein</code></td></tr>
+              <tr><td><code>@关键词</code></td><td>标签</td><td><code>@work</code></td></tr>
+              <tr><td><code>/关键词</code></td><td>路径</td><td><code>/docs</code></td></tr>
+              <tr><td><code>#关键词</code></td><td>标题</td><td><code>#Project</code></td></tr>
+              <tr><td><code>:关键词</code></td><td>正文</td><td><code>:build_win</code></td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="section" id="knowledge">
+          <div class="section-heading">
+            <h2>10. 知识面板</h2>
+            <p>右侧知识面板帮助你理解当前文档与 Vault 其他文档的关系。</p>
+          </div>
+          <div class="grid">
+            <article class="card"><h3>反链</h3><p>哪些文件链接到了当前文件。</p></article>
+            <article class="card"><h3>出链</h3><p>当前文件链接到了哪些文件，包含已解析、未解析和多候选链接。</p></article>
+            <article class="card"><h3>属性</h3><p>显示 YAML frontmatter，例如 tags、aliases、status。</p></article>
+            <article class="card"><h3>图谱</h3><p>查看当前文件附近或整个 Vault 的链接关系。</p></article>
+            <article class="card"><h3>标签</h3><p>列出当前 Vault 中识别到的标签。</p></article>
+            <article class="card"><h3>浮动/停靠</h3><p>知识面板可以从右侧栏脱离，也可以重新停靠。</p></article>
+          </div>
+        </section>
+
+        <section class="section" id="graph">
+          <div class="section-heading">
+            <h2>11. 图谱</h2>
+            <p>图谱依赖真实链接。没有链接时，图谱通常只有当前文件或为空。</p>
+          </div>
+          <div class="grid two">
+            <article class="lesson"><h3>局部图谱</h3><p>围绕当前文件显示：当前文件、当前文件链接出去的文件、链接到当前文件的文件。</p></article>
+            <article class="lesson"><h3>全局图谱</h3><p>显示当前 Vault 的链接关系。可按标签筛选、只看孤立节点、显示未解析链接。</p></article>
+          </div>
+          <div class="warning callout">如果图谱很少，说明文档之间还没有真实链接。先写 `[[Wiki Link]]` 或 `[text](./path.md)`。</div>
+        </section>
+
+        <section class="section" id="settings">
+          <div class="section-heading">
+            <h2>12. 设置与快捷键</h2>
+            <p>设置入口：`文件 -> 偏好设置`、左侧工具栏设置图标或 `Ctrl+,`。</p>
+          </div>
+          <div class="grid">
+            <article class="card"><h3>通用</h3><p>语言、默认编辑模式、启动恢复、窗口位置、侧栏和知识面板显示。</p></article>
+            <article class="card"><h3>文件</h3><p>默认保存格式、默认新文档名称、清除 Vault 状态。</p></article>
+            <article class="card"><h3>编辑器</h3><p>字体、字号、行高、界面缩放、状态浮层、侧栏宽度、知识面板宽度。</p></article>
+            <article class="card"><h3>图像</h3><p>附件目录、图片路径风格、Windows 路径兼容。</p></article>
+            <article class="card"><h3>外观</h3><p>主题和界面密度。</p></article>
+            <article class="card"><h3>快捷键</h3><p>点击快捷键输入框后直接按组合键即可记录，不需要手动输入文字；可禁用、恢复单项或恢复全部。</p></article>
+            <article class="card"><h3>唤出窗口</h3><p>默认 `Alt+S` 可以把 Serein 唤到前台。这个快捷键可以修改，也可以关闭。</p></article>
+            <article class="card"><h3>属性 tags 行</h3><p>可在编辑器设置中显示或隐藏 Rich Edit 的 `--- tags ---` 属性行。</p></article>
+          </div>
+          <table class="kbd-table">
+            <thead><tr><th>功能</th><th>默认快捷键</th></tr></thead>
+            <tbody>
+              <tr><td>新建笔记</td><td><code>Ctrl+N</code></td></tr>
+              <tr><td>打开文件</td><td><code>Ctrl+O</code></td></tr>
+              <tr><td>打开 Vault</td><td><code>Ctrl+Shift+O</code></td></tr>
+              <tr><td>保存</td><td><code>Ctrl+S</code></td></tr>
+              <tr><td>快速打开</td><td><code>Ctrl+P</code></td></tr>
+              <tr><td>命令面板</td><td><code>Ctrl+Shift+P</code></td></tr>
+              <tr><td>唤出 Serein</td><td><code>Alt+S</code></td></tr>
+              <tr><td>Plain / Rich</td><td><code>Ctrl+Alt+P</code> / <code>Ctrl+Alt+R</code></td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="section" id="export">
+          <div class="section-heading">
+            <h2>13. 导出</h2>
+            <p>导出入口：`文件 -> 导出` 或 `Ctrl+Shift+E`。</p>
+          </div>
+          <div class="grid two">
+            <article class="card"><h3>HTML</h3><p>适合浏览器打开和二次编辑。</p></article>
+            <article class="card"><h3>PDF</h3><p>适合固定版式分享或打印。</p></article>
+          </div>
+          <div class="callout">如果文档包含本地图片，建议先保存当前文档。Serein 需要知道当前文件路径，才能安全读取并嵌入图片。</div>
+        </section>
+
+        <section class="section" id="safety">
+          <div class="section-heading">
+            <h2>14. 数据安全和索引限制</h2>
+            <p>Serein 直接读写本地文件。它会尽量保护未保存修改，但你仍应确认文件路径和操作目标。</p>
+          </div>
+          <div class="grid two">
+            <article class="lesson">
+              <h3>安全保护</h3>
+              <ul>
+                <li>切换文件前有未保存修改会提示。</li>
+                <li>重命名前如果目标文件有未保存修改，会要求先保存。</li>
+                <li>批量更新链接前，如果受影响文件有未保存修改，会要求先保存。</li>
+                <li>当前文件被其他应用修改后，Serein 会在窗口聚焦、回到可见状态或定时检查时同步。</li>
+                <li>删除移动到应用数据回收站，不直接永久删除。</li>
+              </ul>
+            </article>
+            <article class="lesson">
+              <h3>索引限制</h3>
+              <ul>
+                <li>单层目录显示数量限制：300。</li>
+                <li>最多索引文件数：2000。</li>
+                <li>单个索引文件上限：1 MB。</li>
+                <li>总索引内容上限：32 MB。</li>
+              </ul>
+            </article>
+          </div>
+          <div class="callout">外部修改同步：如果当前文档没有未保存内容，磁盘更新会自动读入当前编辑区；如果你正在 Serein 里改同一个文件，Serein 会提示冲突，不会直接覆盖你的未保存内容。</div>
+          <div class="warning callout">不建议把 `node_modules`、`target`、`dist`、日志目录、大图片目录当作 Vault 内容。Serein 会跳过常见重型目录，但最好只打开真正写作目录。</div>
+        </section>
+
+        <section class="section" id="faq">
+          <div class="section-heading">
+            <h2>15. 常见问题</h2>
+            <p>公开用户最容易遇到的问题集中在属性、路径、图片和索引。</p>
+          </div>
+          <div class="grid two">
+            <article class="card"><h3>frontmatter 是什么？</h3><p>文件开头 `---` 到 `---` 之间是属性区，不是正文。`tags` 是标签，`aliases` 是别名，`status` 是自定义状态。</p></article>
+            <article class="card"><h3>路径不知道怎么写</h3><p>看左侧文件树的相对位置。例如 `Projects/Atlas.md` 可以写 `[[Projects/Atlas]]`。</p></article>
+            <article class="card"><h3>图谱很少</h3><p>需要文件之间存在真实链接。先写 `[[Wiki Link]]` 或 Markdown 路径链接。</p></article>
+            <article class="card"><h3>链接未解析</h3><p>确认目标文件在当前 Vault 内，路径正确，目录链接下有 index 或 README。</p></article>
+            <article class="card"><h3>图片插入失败</h3><p>先保存当前文档，再插入图片。未保存文档没有附件目录。</p></article>
+            <article class="card"><h3>启动恢复失败</h3><p>进入 `设置 -> 文件`，点击 `清除上次 Vault 状态`，然后重新打开 Vault。</p></article>
+            <article class="card"><h3>为什么只看到 `--- tags ---`？</h3><p>这是 Rich Edit 把 YAML 属性区收起后的显示。鼠标移到这一行，或从正文第一行按 `↑` 跳上去，就能看到并编辑 tags 和 aliases。</p></article>
+            <article class="card"><h3>为什么搜索 `#project` 没结果？</h3><p>搜索前缀里 `@` 代表标签，`#` 代表标题。要搜标签请用 `@project`；正文里仍然写 `#project` 创建标签。</p></article>
+            <article class="card"><h3>外部工具改了文件怎么办？</h3><p>如果 Serein 当前文档没有未保存修改，会自动同步磁盘内容；如果有未保存修改，会提示冲突，需要你先比较再保存或另存为。</p></article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const sample = `---
+tags: [project, writing]
+aliases: [Atlas, Project Atlas]
+status: active
+---
+
+# Project Atlas
+
+一句话标题决定左侧大纲和搜索里的标题结果。正文里的 #project/atlas 和 #writing 会进入标签列表。
+
+## 下一步
+
+- 用 [[Project Atlas#下一步|跳到下一步]] 创建同文件标题链接。
+- 用 [[Notes/Research]] 链到 Vault 里的其他文件。
+- 用 [设计说明](./Notes/Research.md#资料来源) 创建 Markdown 路径链接。
+- 用 [目录入口](./Notes/) 链到 Notes/index.md 或 Notes/README.md。
+
+## 资料来源
+
+Serein 会把 [[Notes/Research|研究笔记]] 记为出链；其他文件链接回来时，会显示在右侧反链面板。
+
+> 没有加链接但直接提到 Research，可能会出现在未链接提及中。
+`;
+
+      const snippets = {
+        heading: "\n## 新标题\n\n这里写这一节内容。\n",
+        frontmatter: "---\ntags: [idea, draft]\naliases: [短名字]\nstatus: draft\n---\n\n",
+        wiki: "[[Folder/Note#标题|显示名称]]",
+        path: "[说明文字](./Folder/Note.md#标题)",
+        tag: " #topic/example "
+      };
+
+      const editor = document.getElementById("editor");
+      const preview = document.getElementById("preview");
+      const headingsList = document.getElementById("headings");
+      const tagsList = document.getElementById("tags");
+      const pathsList = document.getElementById("paths");
+      const linksList = document.getElementById("links");
+      const propertiesList = document.getElementById("properties");
+      const copyButton = document.getElementById("copyButton");
+      const resetButton = document.getElementById("resetButton");
+
+      function escapeHtml(value) {
+        return value
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function parseFrontmatter(markdown) {
+        const normalized = markdown.replace(/\r\n?/g, "\n");
+        if (!normalized.startsWith("---\n")) return { properties: [], body: markdown };
+        const end = normalized.indexOf("\n---", 4);
+        if (end < 0) return { properties: [], body: markdown };
+        const block = normalized.slice(4, end).split("\n");
+        const body = normalized.slice(end + 4).replace(/^\n/, "");
+        const properties = [];
+        let current = null;
+
+        for (const line of block) {
+          const listItem = line.match(/^\s+-\s+(.+)$/);
+          if (listItem && current) {
+            current.value = current.value ? `${current.value}, ${cleanYaml(listItem[1])}` : cleanYaml(listItem[1]);
+            continue;
+          }
+          const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+          if (!match) continue;
+          current = { key: match[1], value: cleanYaml(match[2]) };
+          properties.push(current);
+        }
+
+        return { properties, body };
+      }
+
+      function cleanYaml(value) {
+        return value.trim().replace(/^\[|\]$/g, "").replace(/^['"]|['"]$/g, "");
+      }
+
+      function valuesFor(properties, key) {
+        const property = properties.find((item) => item.key.toLowerCase() === key);
+        if (!property || !property.value) return [];
+        return property.value
+          .split(",")
+          .map((item) => cleanYaml(item).replace(/^#/, "").trim())
+          .filter(Boolean);
+      }
+
+      function parseHeadings(markdown) {
+        return markdown
+          .split(/\r?\n/)
+          .map((line) => line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/))
+          .filter(Boolean)
+          .map((match) => ({ level: match[1].length, text: match[2].trim() }));
+      }
+
+      function parseInlineTags(markdown) {
+        const tags = new Set();
+        const pattern = /(^|[\s([{])#([A-Za-z0-9_/-]+)/g;
+        let match;
+        while ((match = pattern.exec(markdown)) !== null) {
+          tags.add(match[2]);
+        }
+        return [...tags].sort((a, b) => a.localeCompare(b));
+      }
+
+      function parseLinks(markdown) {
+        const links = [];
+        let match;
+        const wikiPattern = /!?\[\[([^\]\n]+)\]\]/g;
+        const markdownPattern = /!?\[([^\]]*)\]\(([^)]+)\)/g;
+        while ((match = wikiPattern.exec(markdown)) !== null) {
+          const parts = match[1].split("|");
+          const target = parts[0].trim();
+          links.push({ type: "Wiki", label: parts[1]?.trim() || target, target });
+        }
+        while ((match = markdownPattern.exec(markdown)) !== null) {
+          const target = match[2].trim();
+          if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+          links.push({ type: "Path", label: match[1].trim() || target, target });
+        }
+        return links;
+      }
+
+      function parsePaths(links) {
+        const paths = new Map();
+        for (const link of links) {
+          const target = link.target.split("#", 1)[0].split("?", 1)[0].replace(/\\/g, "/").trim();
+          if (!target) continue;
+          const clean = target.replace(/^\.\//, "");
+          const folder = clean.endsWith("/")
+            ? clean
+            : clean.includes("/")
+              ? clean.slice(0, clean.lastIndexOf("/")) || "Vault 根目录"
+              : "当前文件夹或 Vault 根目录";
+          paths.set(clean || target, { target: clean || target, folder });
+        }
+        return [...paths.values()];
+      }
+
+      function renderInline(text) {
+        return escapeHtml(text)
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(/(!?)\[\[([^\]\n]+)\]\]/g, (_, embedded, raw) => {
+            const parts = raw.split("|");
+            const target = parts[0].trim();
+            const label = parts[1]?.trim() || target;
+            return `${embedded ? "!" : ""}<a class="wiki-link" href="#">${escapeHtml(label)}</a>`;
+          })
+          .replace(/#([A-Za-z0-9_/-]+)/g, '<span class="tag">#$1</span>')
+          .replace(/\[([^\]]*)\]\(([^)]+)\)/g, '<a class="wiki-link" href="#">$1</a>');
+      }
+
+      function renderPreview(markdown) {
+        const { body } = parseFrontmatter(markdown);
+        const lines = body.split(/\r?\n/);
+        const html = [];
+        let inCode = false;
+        let inList = false;
+
+        function closeList() {
+          if (inList) {
+            html.push("</ul>");
+            inList = false;
+          }
+        }
+
+        for (const line of lines) {
+          if (/^\s*```/.test(line)) {
+            if (inCode) {
+              html.push("</code></pre>");
+              inCode = false;
+            } else {
+              closeList();
+              html.push("<pre><code>");
+              inCode = true;
+            }
+            continue;
+          }
+          if (inCode) {
+            html.push(`${escapeHtml(line)}\n`);
+            continue;
+          }
+          const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+          if (heading) {
+            closeList();
+            const level = Math.min(heading[1].length, 3);
+            html.push(`<h${level}>${renderInline(heading[2].trim())}</h${level}>`);
+            continue;
+          }
+          const item = line.match(/^\s*[-*]\s+(.+)$/);
+          if (item) {
+            if (!inList) {
+              html.push("<ul>");
+              inList = true;
+            }
+            html.push(`<li>${renderInline(item[1])}</li>`);
+            continue;
+          }
+          closeList();
+          if (/^\s*>\s+/.test(line)) {
+            html.push(`<blockquote>${renderInline(line.replace(/^\s*>\s+/, ""))}</blockquote>`);
+          } else if (line.trim()) {
+            html.push(`<p>${renderInline(line)}</p>`);
+          }
+        }
+        closeList();
+        if (inCode) html.push("</code></pre>");
+        return html.join("");
+      }
+
+      function renderList(target, items, emptyLabel, renderItem) {
+        target.innerHTML = "";
+        if (!items.length) {
+          target.innerHTML = `<li class="empty">${emptyLabel}</li>`;
+          return;
+        }
+        for (const item of items) {
+          const li = document.createElement("li");
+          li.innerHTML = renderItem(item);
+          target.appendChild(li);
+        }
+      }
+
+      function update() {
+        const markdown = editor.value;
+        const { properties } = parseFrontmatter(markdown);
+        const headings = parseHeadings(markdown);
+        const tags = [...new Set([...parseInlineTags(markdown), ...valuesFor(properties, "tags")])].sort((a, b) => a.localeCompare(b));
+        const links = parseLinks(markdown);
+        const paths = parsePaths(links);
+
+        preview.innerHTML = renderPreview(markdown);
+        renderList(headingsList, headings, "还没有标题。用 # 或 ## 创建。", (item) => (
+          `<strong>H${item.level} ${escapeHtml(item.text)}</strong><span>可在大纲中跳转，也可用 #${escapeHtml(item.text)} 链接到这里。</span>`
+        ));
+        renderList(tagsList, tags, "还没有标签。写 #tag 或 YAML tags。", (tag) => (
+          `<strong>#${escapeHtml(tag)}</strong><span>可用左侧搜索 @${escapeHtml(tag)}，也可在图谱按标签过滤。</span>`
+        ));
+        renderList(pathsList, paths, "还没有路径。先在左侧新建文件夹，再写 [[Folder/Note]]。", (item) => (
+          `<strong>${escapeHtml(item.target)}</strong><span>${escapeHtml(item.folder)}</span>`
+        ));
+        renderList(linksList, links, "还没有 Vault 链接。写 [[Note]] 或 [text](./Note.md)。", (link) => (
+          `<strong>${escapeHtml(link.type)}: ${escapeHtml(link.label)}</strong><span>${escapeHtml(link.target)}</span>`
+        ));
+        renderList(propertiesList, properties, "还没有 YAML 属性。", (property) => (
+          `<strong>${escapeHtml(property.key)}</strong><span>${escapeHtml(property.value || "空值")}</span>`
+        ));
+      }
+
+      function insertAtCursor(textarea, text) {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const before = textarea.value.slice(0, start);
+        const after = textarea.value.slice(end);
+        textarea.value = `${before}${text}${after}`;
+        textarea.focus();
+        textarea.setSelectionRange(start + text.length, start + text.length);
+        update();
+      }
+
+      editor.value = sample;
+      editor.addEventListener("input", update);
+      document.querySelectorAll("[data-template]").forEach((button) => {
+        button.addEventListener("click", () => insertAtCursor(editor, snippets[button.dataset.template]));
+      });
+      resetButton.addEventListener("click", () => {
+        editor.value = sample;
+        update();
+      });
+      copyButton.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(editor.value);
+          copyButton.textContent = "已复制";
+          setTimeout(() => {
+            copyButton.textContent = "复制练习示例";
+          }, 1200);
+        } catch {
+          editor.select();
+        }
+      });
+      update();
+    </script>
+  </body>
+</html>

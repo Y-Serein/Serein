@@ -9,6 +9,8 @@ Serein 是一个本地 Markdown 桌面写作工具，提供沉浸式编辑和链
 3. 选择一个包含 Markdown 或文本文件的本地文件夹。
 4. 在左侧文件树中点击 `.md`、`.markdown` 或 `.txt` 文件开始编辑。
 
+第一次使用时，可以先打开菜单 `帮助 -> 使用手册`。这个 HTML 页面会完整介绍 Serein 功能，并提供可编辑 Markdown 练习区，实时显示 Serein 识别出的标题、路径、标签、链接和属性。
+
 如果应用恢复上次 Vault 时失败，可以在左侧面板点击 `清除 Vault 状态`，然后重新打开 Vault。
 
 ## 打开文件
@@ -44,7 +46,7 @@ Rich Edit 模式使用 Milkdown 渲染 Markdown，支持常见 Markdown 结构�
 
 ## 左侧面板
 
-左侧面板有两个标签页。
+左侧面板常用分区是“文件”和“大纲”；执行搜索时会显示“搜索”分区。
 
 ### 文件
 
@@ -60,9 +62,68 @@ Rich Edit 模式使用 Milkdown 渲染 Markdown，支持常见 Markdown 结构�
 
 当前大纲主要显示：
 
-- `#`
-- `##`
-- `###`
+- `#` 到 `######`
+
+## Obsidian / Vault 基础
+
+### 标题
+
+标题使用标准 Markdown 写法：
+
+```markdown
+# 项目标题
+## 下一步
+### 风险
+```
+
+- 第一个一级标题会优先作为笔记标题；没有一级标题时使用文件名。
+- 左侧“大纲”会读取标题并支持点击跳转。
+- 链接可以写标题锚点，例如 `[[Project Atlas#下一步]]`。
+
+### 路径
+
+路径来自 Vault 文件树里的相对位置，不需要额外创建语法。
+
+如果 Vault 中有：
+
+```text
+Projects/
+  Atlas.md
+Notes/
+  Research.md
+```
+
+可以写：
+
+```markdown
+[[Projects/Atlas]]
+[研究](./Notes/Research.md)
+```
+
+目录链接如 `[目录入口](./Notes/)` 会尝试解析到该目录下的 `index.md` 或 `README.md` 等入口文件。
+
+### 标签和属性
+
+正文标签：
+
+```markdown
+#project
+#project/atlas
+```
+
+YAML frontmatter 标签和别名：
+
+```markdown
+---
+tags: [project, writing]
+aliases: [Atlas, Project Atlas]
+status: active
+---
+```
+
+- `tags` 会进入搜索、右侧标签面板和图谱过滤。
+- `aliases` 会参与 Wiki 链接候选和未链接提及。
+- 其他属性会显示在右侧知识面板的属性区域。
 
 ## 知识面板
 
@@ -72,10 +133,13 @@ Rich Edit 模式使用 Milkdown 渲染 Markdown，支持常见 Markdown 结构�
 - 点击 `停靠`：恢复到右侧栏。
 - 浮动状态下，可以拖动面板标题区域移动位置。
 
-知识面板包含两个标签页：
+知识面板包含这些标签页：
 
 - 反向链接
+- 出链
+- 属性
 - 图谱
+- 标签
 
 ## 反向链接
 
@@ -108,6 +172,7 @@ Vault 索引当前识别这些格式：
 [[note]]
 [[note#heading]]
 [[note|alias]]
+[[path/note#heading|alias]]
 [text](path.md)
 [text](folder/path.markdown)
 [text](../relative/path.md)
@@ -197,6 +262,6 @@ Vault 索引当前识别这些格式：
 预期产物：
 
 ```text
-D_deliverables\serein-desktop\src-tauri\target\release\bundle\nsis\Serein_0.0.5_x64-setup.exe
+D_deliverables\serein-desktop\src-tauri\target\release\bundle\nsis\Serein_1.0.1_x64-setup.exe
 D_deliverables\serein-desktop\src-tauri\target\release\serein-desktop.exe
 ```

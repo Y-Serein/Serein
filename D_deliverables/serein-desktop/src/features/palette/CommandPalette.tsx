@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Command, FileText, Search } from "lucide-react";
 import type { CommandDefinition } from "../../app/types";
-import type { VaultIndex } from "../../vault";
+import type { VaultIndex, VaultIndexedFile } from "../../vault";
 import { searchVaultIndex } from "../../vault";
 import { Button, cx } from "../../shared/ui";
 
@@ -14,11 +15,27 @@ type CommandPaletteProps = {
   placeholder: string;
   emptyText: string;
   vaultIndex: VaultIndex | null;
+  activeIndexedFile?: VaultIndexedFile | null;
   commands: Record<string, CommandDefinition>;
   onClose: () => void;
   onOpenFile: (path: string) => void;
   onRunCommand: (commandId: string) => void;
 };
+
+function protectTextInputShortcut(event: ReactKeyboardEvent<HTMLInputElement>) {
+  if (!(event.ctrlKey || event.metaKey)) return false;
+  const key = event.key.toLowerCase();
+  if (["a", "c", "x", "v", "z", "y"].includes(key)) {
+    event.stopPropagation();
+    return false;
+  }
+  if (key === "f") {
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+  return false;
+}
 
 export function CommandPalette({
   open,
@@ -27,6 +44,7 @@ export function CommandPalette({
   placeholder,
   emptyText,
   vaultIndex,
+  activeIndexedFile,
   commands,
   onClose,
   onOpenFile,
@@ -43,7 +61,7 @@ export function CommandPalette({
 
   const fileResults = useMemo(() => {
     if (mode !== "quickOpen") return [];
-    const searched = searchVaultIndex(vaultIndex, query, { limit: 60 });
+    const searched = searchVaultIndex(vaultIndex, query, { limit: 60, draftFile: activeIndexedFile });
     if (query.trim()) return searched;
     return vaultIndex?.files.slice(0, 60).map((file) => ({
       path: file.path,
@@ -52,7 +70,7 @@ export function CommandPalette({
       matchType: "path" as const,
       snippet: file.relativePath,
     })) ?? [];
-  }, [mode, query, vaultIndex]);
+  }, [activeIndexedFile, mode, query, vaultIndex]);
 
   const commandResults = useMemo(() => {
     if (mode !== "command") return [];
@@ -92,6 +110,7 @@ export function CommandPalette({
             placeholder={placeholder}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
+              if (protectTextInputShortcut(event)) return;
               if (event.key === "Escape") {
                 event.preventDefault();
                 onClose();

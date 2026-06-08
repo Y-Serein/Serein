@@ -41,6 +41,7 @@ export type AppSettings = {
   uiScale: number;
   zoomWithWheel: boolean;
   showEditorStatusOverlay: boolean;
+  showFrontmatterTagRow: boolean;
   defaultSaveExt: SaveFileExt;
   defaultNewNoteName: string;
   imageAttachmentFolder: string;
