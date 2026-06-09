@@ -11,6 +11,7 @@ type WorkspaceGraphLeafProps = {
   graph: GlobalGraph;
   activeFilePath: string | null;
   tags: VaultTagSummary[];
+  tagFeaturesEnabled: boolean;
   selectedTag: string;
   isolatedOnly: boolean;
   showUnresolved: boolean;
@@ -26,6 +27,7 @@ export function WorkspaceGraphLeaf({
   graph,
   activeFilePath,
   tags,
+  tagFeaturesEnabled,
   selectedTag,
   isolatedOnly,
   showUnresolved,
@@ -41,10 +43,12 @@ export function WorkspaceGraphLeaf({
           <strong>{t.knowledge.graph}</strong>
           <span>{t.knowledge.globalGraphSummary(graph.visibleNodes, graph.edges.length)}</span>
         </div>
-        <select value={selectedTag} onChange={(event) => onTagChange(event.target.value)} aria-label={t.knowledge.filterByTag}>
-          <option value="">{t.knowledge.allTags}</option>
-          {tags.map((item) => <option key={item.tag} value={item.tag}>#{item.tag} ({item.count})</option>)}
-        </select>
+        {tagFeaturesEnabled ? (
+          <select value={selectedTag} onChange={(event) => onTagChange(event.target.value)} aria-label={t.knowledge.filterByTag}>
+            <option value="">{t.knowledge.allTags}</option>
+            {tags.map((item) => <option key={item.tag} value={item.tag}>#{item.tag} ({item.count})</option>)}
+          </select>
+        ) : null}
         <label>
           <input type="checkbox" checked={isolatedOnly} onChange={(event) => onIsolatedOnlyChange(event.target.checked)} />
           {t.knowledge.isolatedOnly}

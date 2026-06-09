@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Command, FileText, Search } from "lucide-react";
+import type { VaultIndexStatus } from "../../app/store/appStore";
 import type { CommandDefinition } from "../../app/types";
-import type { VaultIndex, VaultIndexedFile } from "../../vault";
+import type { VaultIndex, VaultIndexedFile, VaultSearchResult } from "../../vault";
 import { searchVaultIndex } from "../../vault";
 import { Button, cx } from "../../shared/ui";
 
@@ -14,10 +15,15 @@ type CommandPaletteProps = {
   title: string;
   placeholder: string;
   emptyText: string;
+  indexingText: string;
   vaultIndex: VaultIndex | null;
+  vaultIndexStatus: VaultIndexStatus;
   activeIndexedFile?: VaultIndexedFile | null;
   commands: Record<string, CommandDefinition>;
   onClose: () => void;
+  tagFeaturesEnabled: boolean;
+  onRequestVaultIndex: () => void;
+  onSearchVaultTags: (query: string) => Promise<VaultSearchResult[]>;
   onOpenFile: (path: string) => void;
   onRunCommand: (commandId: string) => void;
 };
@@ -43,15 +49,24 @@ export function CommandPalette({
   title,
   placeholder,
   emptyText,
+  indexingText,
   vaultIndex,
+  vaultIndexStatus,
   activeIndexedFile,
   commands,
   onClose,
+  tagFeaturesEnabled,
+  onRequestVaultIndex,
+  onSearchVaultTags,
   onOpenFile,
   onRunCommand,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const requestedFileSearchIndexKeyRef = useRef("");
+  const tagSearchRequestIdRef = useRef(0);
+  const [tagFileResults, setTagFileResults] = useState<VaultSearchResult[]>([]);
+  const [tagSearchLoading, setTagSearchLoading] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -61,7 +76,12 @@ export function CommandPalette({
 
   const fileResults = useMemo(() => {
     if (mode !== "quickOpen") return [];
-    const searched = searchVaultIndex(vaultIndex, query, { limit: 60, draftFile: activeIndexedFile });
+    if (!tagFeaturesEnabled && query.trim().startsWith("@")) return [];
+    const searched = searchVaultIndex(vaultIndex, query, {
+      limit: 60,
+      draftFile: activeIndexedFile,
+      includeTags: tagFeaturesEnabled,
+    });
     if (query.trim()) return searched;
     return vaultIndex?.files.slice(0, 60).map((file) => ({
       path: file.path,
@@ -70,7 +90,77 @@ export function CommandPalette({
       matchType: "path" as const,
       snippet: file.relativePath,
     })) ?? [];
-  }, [activeIndexedFile, mode, query, vaultIndex]);
+  }, [activeIndexedFile, mode, query, tagFeaturesEnabled, vaultIndex]);
+  const effectiveFileResults = fileResults.length ? fileResults : tagFileResults;
+
+  useEffect(() => {
+    const cleanQuery = query.trim();
+    if (!open || mode !== "quickOpen" || !cleanQuery) {
+      requestedFileSearchIndexKeyRef.current = "";
+      return;
+    }
+    if (cleanQuery.startsWith("@")) return;
+    if (vaultIndexStatus === "indexing") return;
+
+    const requestKey = `${vaultIndex?.root ?? ""}\n${cleanQuery}`;
+    if (requestedFileSearchIndexKeyRef.current === requestKey) return;
+    if (vaultIndexStatus === "ready" && vaultIndex && fileResults.length > 0) return;
+
+    requestedFileSearchIndexKeyRef.current = requestKey;
+    onRequestVaultIndex();
+  }, [
+    fileResults.length,
+    mode,
+    onRequestVaultIndex,
+    open,
+    query,
+    vaultIndex,
+    vaultIndexStatus,
+  ]);
+
+  useEffect(() => {
+    const cleanQuery = query.trim();
+    if (!tagFeaturesEnabled || !open || mode !== "quickOpen" || !cleanQuery.startsWith("@") || cleanQuery.slice(1).trim().length < 2) {
+      tagSearchRequestIdRef.current += 1;
+      setTagFileResults([]);
+      setTagSearchLoading(false);
+      return;
+    }
+    if (fileResults.length > 0) {
+      setTagFileResults([]);
+      setTagSearchLoading(false);
+      return;
+    }
+
+    const requestId = tagSearchRequestIdRef.current + 1;
+    tagSearchRequestIdRef.current = requestId;
+    setTagSearchLoading(true);
+    const timeoutId = window.setTimeout(() => {
+      if (tagSearchRequestIdRef.current !== requestId) return;
+      onSearchVaultTags(cleanQuery)
+        .then((results) => {
+          if (tagSearchRequestIdRef.current !== requestId) return;
+          setTagFileResults(results);
+        })
+        .catch((error) => {
+          if (tagSearchRequestIdRef.current !== requestId) return;
+          console.warn("Vault quick-open tag search failed", error);
+          setTagFileResults([]);
+        })
+        .finally(() => {
+          if (tagSearchRequestIdRef.current === requestId) setTagSearchLoading(false);
+        });
+    }, 280);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    fileResults.length,
+    mode,
+    onSearchVaultTags,
+    open,
+    query,
+    tagFeaturesEnabled,
+  ]);
 
   const commandResults = useMemo(() => {
     if (mode !== "command") return [];
@@ -117,8 +207,8 @@ export function CommandPalette({
               }
               if (event.key === "Enter") {
                 event.preventDefault();
-                if (mode === "quickOpen" && fileResults[0]) {
-                  onOpenFile(fileResults[0].path);
+                if (mode === "quickOpen" && effectiveFileResults[0]) {
+                  onOpenFile(effectiveFileResults[0].path);
                 }
                 if (mode === "command" && commandResults[0]) {
                   onRunCommand(commandResults[0].id);
@@ -129,7 +219,7 @@ export function CommandPalette({
         </div>
         <div className="palette-results">
           {mode === "quickOpen" ? (
-            fileResults.length ? fileResults.map((file, index) => (
+            effectiveFileResults.length ? effectiveFileResults.map((file, index) => (
               <button
                 key={file.path}
                 type="button"
@@ -142,7 +232,7 @@ export function CommandPalette({
                   <small>{file.relativePath}</small>
                 </span>
               </button>
-            )) : <p className="palette-empty">{emptyText}</p>
+            )) : <p className="palette-empty">{vaultIndexStatus === "indexing" || tagSearchLoading ? indexingText : emptyText}</p>
           ) : (
             commandResults.length ? commandResults.map((command, index) => (
               <button

@@ -85,6 +85,7 @@ type AppStoreState = {
   uiScale: number;
   zoomWithWheel: boolean;
   showEditorStatusOverlay: boolean;
+  tagFeaturesEnabled: boolean;
   showFrontmatterTagRow: boolean;
   defaultSaveExt: SaveFileExt;
   defaultNewNoteName: string;
@@ -124,7 +125,7 @@ type AppStoreActions = {
   setVaultRoot: (value: string | null) => void;
   setVaultTree: (value: Updater<VaultTreeEntry | null>) => void;
   setVaultError: (value: string | null) => void;
-  setVaultIndex: (value: VaultIndex | null) => void;
+  setVaultIndex: (value: Updater<VaultIndex | null>) => void;
   setVaultIndexStatus: (value: VaultIndexStatus) => void;
   setVaultIndexError: (value: string | null) => void;
   setSelectedVaultDir: (value: string) => void;
@@ -144,6 +145,7 @@ type AppStoreActions = {
   setUiScale: (value: Updater<number>) => void;
   setZoomWithWheel: (value: boolean) => void;
   setShowEditorStatusOverlay: (value: boolean) => void;
+  setTagFeaturesEnabled: (value: boolean) => void;
   setShowFrontmatterTagRow: (value: boolean) => void;
   setDefaultSaveExt: (value: SaveFileExt) => void;
   setDefaultNewNoteName: (value: Updater<string>) => void;
@@ -219,6 +221,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   uiScale: initialSettings.uiScale,
   zoomWithWheel: initialSettings.zoomWithWheel,
   showEditorStatusOverlay: initialSettings.showEditorStatusOverlay,
+  tagFeaturesEnabled: initialSettings.tagFeaturesEnabled,
   showFrontmatterTagRow: initialSettings.showFrontmatterTagRow,
   defaultSaveExt: initialSettings.defaultSaveExt,
   defaultNewNoteName: initialSettings.defaultNewNoteName,
@@ -255,7 +258,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   setVaultRoot: (value) => set({ vaultRoot: value }),
   setVaultTree: (value) => set((state) => ({ vaultTree: resolveUpdater(state.vaultTree, value) })),
   setVaultError: (value) => set({ vaultError: value }),
-  setVaultIndex: (value) => set({ vaultIndex: value }),
+  setVaultIndex: (value) => set((state) => ({ vaultIndex: resolveUpdater(state.vaultIndex, value) })),
   setVaultIndexStatus: (value) => set({ vaultIndexStatus: value }),
   setVaultIndexError: (value) => set({ vaultIndexError: value }),
   setSelectedVaultDir: (value) => set({ selectedVaultDir: value }),
@@ -275,6 +278,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   setUiScale: (value) => set((state) => ({ uiScale: resolveUpdater(state.uiScale, value) })),
   setZoomWithWheel: (value) => set({ zoomWithWheel: value }),
   setShowEditorStatusOverlay: (value) => set({ showEditorStatusOverlay: value }),
+  setTagFeaturesEnabled: (value) => set({ tagFeaturesEnabled: value }),
   setShowFrontmatterTagRow: (value) => set({ showFrontmatterTagRow: value }),
   setDefaultSaveExt: (value) => set({ defaultSaveExt: value }),
   setDefaultNewNoteName: (value) => set((state) => ({ defaultNewNoteName: resolveUpdater(state.defaultNewNoteName, value) })),

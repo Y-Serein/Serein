@@ -6,22 +6,22 @@
     <title>Serein 使用手册</title>
     <style>
       :root {
-        color-scheme: dark;
-        --bg: #111113;
-        --panel: #1b1b1f;
-        --panel-2: #242429;
-        --paper: #1f1f23;
-        --line: #32323a;
-        --line-soft: #292930;
-        --text: #eeeeee;
-        --muted: #b6b6bf;
-        --quiet: #85858f;
-        --accent: #8bd5ca;
-        --accent-2: #f0c674;
-        --accent-3: #a371f7;
-        --good: #7ccf8a;
-        --danger: #f08c8c;
-        --shadow: 0 24px 72px rgb(0 0 0 / 32%);
+        color-scheme: light;
+        --bg: #e5f4ef;
+        --panel: #f8fffb;
+        --panel-2: #eaf8f2;
+        --paper: #ffffff;
+        --line: #a9d7cc;
+        --line-soft: #cbe8df;
+        --text: #10231f;
+        --muted: #526963;
+        --quiet: #719089;
+        --accent: #087f75;
+        --accent-2: #a86f08;
+        --accent-3: #0b9b68;
+        --good: #168a55;
+        --danger: #b45353;
+        --shadow: 0 24px 72px rgb(8 84 75 / 14%);
         --font-ui: "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
         --font-mono: "Cascadia Code", "Consolas", "Noto Sans Mono CJK SC", monospace;
       }
@@ -37,7 +37,9 @@
       body {
         margin: 0;
         background:
-          linear-gradient(180deg, #151518 0, var(--bg) 360px),
+          linear-gradient(180deg, #d3eee6 0, var(--bg) 360px),
+          repeating-linear-gradient(90deg, rgb(8 127 117 / 4%) 0 1px, transparent 1px 72px),
+          repeating-linear-gradient(0deg, rgb(8 127 117 / 3%) 0 1px, transparent 1px 72px),
           var(--bg);
         color: var(--text);
         font-family: var(--font-ui);
@@ -74,7 +76,7 @@
         gap: 18px;
         align-items: end;
         border-bottom: 1px solid var(--line);
-        background: rgb(17 17 19 / 91%);
+        background: rgb(239 251 246 / 91%);
         padding: 20px clamp(18px, 4vw, 42px) 17px;
         backdrop-filter: blur(18px);
       }
@@ -123,7 +125,7 @@
 
       .button:hover {
         border-color: color-mix(in srgb, var(--accent) 52%, var(--line));
-        background: #2b2b32;
+        background: #dff3ec;
       }
 
       .button:active {
@@ -145,7 +147,7 @@
         height: calc(100vh - 106px);
         overflow: auto;
         border-right: 1px solid var(--line);
-        background: #151518;
+        background: #e1f1eb;
         padding: 18px 14px;
       }
 
@@ -252,7 +254,7 @@
       .callout {
         border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line));
         border-radius: 8px;
-        background: rgb(139 213 202 / 8%);
+        background: rgb(8 127 117 / 8%);
         color: var(--muted);
         line-height: 1.65;
         padding: 14px;
@@ -260,7 +262,7 @@
 
       .warning {
         border-color: color-mix(in srgb, var(--danger) 36%, var(--line));
-        background: rgb(240 140 140 / 8%);
+        background: rgb(180 83 83 / 8%);
       }
 
       .module-title {
@@ -285,8 +287,8 @@
         margin: 0;
         border: 1px solid var(--line-soft);
         border-radius: 7px;
-        background: #151519;
-        color: #eeeeee;
+        background: #0f2d2a;
+        color: #eafff8;
         padding: 12px;
         line-height: 1.62;
       }
@@ -294,7 +296,7 @@
       code {
         border: 1px solid var(--line-soft);
         border-radius: 5px;
-        background: #17171b;
+        background: #e0f4ed;
         color: var(--accent-2);
         padding: 1px 5px;
       }
@@ -336,7 +338,7 @@
         height: 20px;
         border-radius: 50%;
         background: var(--accent);
-        color: #111113;
+        color: #f8fffb;
         font-weight: 700;
       }
 
@@ -378,8 +380,8 @@
         border: 1px solid var(--line);
         border-radius: 8px;
         outline: none;
-        background: #151519;
-        color: #eeeeee;
+        background: #f7fffb;
+        color: var(--text);
         padding: 18px;
         font-size: 14px;
         line-height: 1.62;
@@ -430,21 +432,21 @@
         border-left: 3px solid var(--accent-3);
         padding: 6px 0 6px 12px;
         color: var(--muted);
-        background: rgb(163 113 247 / 7%);
+        background: rgb(11 155 104 / 8%);
       }
 
       .wiki-link {
         color: var(--accent);
         text-decoration: none;
-        border-bottom: 1px solid rgb(139 213 202 / 42%);
+        border-bottom: 1px solid rgb(8 127 117 / 42%);
       }
 
       .tag {
         display: inline-flex;
         align-items: center;
-        border: 1px solid rgb(139 213 202 / 28%);
+        border: 1px solid rgb(8 127 117 / 28%);
         border-radius: 999px;
-        background: rgb(139 213 202 / 10%);
+        background: rgb(8 127 117 / 10%);
         color: var(--accent);
         padding: 0 7px;
         font-size: .92em;
@@ -457,7 +459,7 @@
         align-items: center;
         border: 1px solid var(--line-soft);
         border-radius: 7px;
-        background: #151519;
+        background: #edf8f3;
         padding: 10px 12px;
         color: var(--muted);
       }
@@ -528,7 +530,7 @@
         gap: 2px;
         border: 1px solid var(--line-soft);
         border-radius: 6px;
-        background: rgb(255 255 255 / 2%);
+        background: rgb(8 127 117 / 5%);
         padding: 8px;
         color: var(--muted);
         font-size: 12px;
@@ -1333,10 +1335,11 @@ Serein 会把 [[Notes/Research|研究笔记]] 记为出链；其他文件链接�
         editor.value = sample;
         update();
       });
-      copyButton.addEventListener("click", async () => {
+      copyButton.addEventListener("click", () => {
         try {
-          await navigator.clipboard.writeText(editor.value);
-          copyButton.textContent = "已复制";
+          editor.select();
+          const copied = document.execCommand("copy");
+          copyButton.textContent = copied ? "已复制" : "已选中";
           setTimeout(() => {
             copyButton.textContent = "复制练习示例";
           }, 1200);

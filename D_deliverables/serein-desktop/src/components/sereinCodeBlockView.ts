@@ -8,9 +8,10 @@ import type { Node as ProseMirrorNode } from "@milkdown/kit/prose/model";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import type { EditorView, NodeView } from "@milkdown/kit/prose/view";
 import { codeBlockSchema } from "@milkdown/kit/preset/commonmark";
-import { codeBlockConfig } from "@milkdown/kit/component/code-block";
-import type { CodeBlockConfig } from "@milkdown/kit/component/code-block";
 import { $view } from "@milkdown/kit/utils";
+import { codeBlockConfig } from "./codeBlockConfig";
+import type { CodeBlockConfig } from "./codeBlockConfig";
+import { writeDesktopClipboardText } from "../services/clipboard";
 
 type GetPos = () => number | undefined;
 
@@ -62,8 +63,7 @@ function computeChange(oldValue: string, newValue: string) {
 }
 
 function clipboardWriteText(text: string) {
-  if (!text || !navigator.clipboard?.writeText) return;
-  navigator.clipboard.writeText(text).catch(() => undefined);
+  writeDesktopClipboardText(text);
 }
 
 class SereinCodeMirrorBlock implements NodeView {
@@ -206,22 +206,235 @@ class SereinCodeMirrorBlock implements NodeView {
         },
       },
       {
+        key: "Tab",
+        run: () => this.handleTab(false),
+      },
+      {
+        key: "Shift-Tab",
+        run: () => this.handleTab(true),
+      },
+      {
         key: "Mod-z",
-        run: () => undo(this.view.state, this.view.dispatch),
+        run: () => this.runHistoryCommand("undo"),
       },
       {
         key: "Shift-Mod-z",
-        run: () => redo(this.view.state, this.view.dispatch),
+        run: () => this.runHistoryCommand("redo"),
       },
       {
         key: "Mod-y",
-        run: () => redo(this.view.state, this.view.dispatch),
+        run: () => this.runHistoryCommand("redo"),
       },
       {
         key: "Backspace",
         run: () => this.turnEmptyCodeBlockIntoParagraph(),
       },
     ];
+  }
+
+  private codeMirrorSelectionFromProseMirror(node: ProseMirrorNode = this.node) {
+    const pos = this.getPos();
+    if (typeof pos !== "number") return null;
+
+    const base = pos + 1;
+    const docLength = node.textContent.length;
+    const selection = this.view.state.selection;
+    const selectionStart = Math.min(selection.anchor, selection.head);
+    const selectionEnd = Math.max(selection.anchor, selection.head);
+    if (selectionStart < base || selectionEnd > base + docLength) return null;
+
+    const clampOffset = (value: number) => Math.min(Math.max(value - base, 0), docLength);
+    return {
+      anchor: clampOffset(selection.anchor),
+      head: clampOffset(selection.head),
+    };
+  }
+
+  private syncCodeMirrorSelectionFromProseMirror(scrollIntoView = false) {
+    const selection = this.codeMirrorSelectionFromProseMirror();
+    if (!selection) return false;
+
+    this.cm.focus();
+    this.cm.dispatch({ selection, scrollIntoView });
+    return true;
+  }
+
+  private editorScroller() {
+    let node: HTMLElement | null = this.dom.parentElement;
+    while (node && node !== document.body) {
+      const style = window.getComputedStyle(node);
+      if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) return node;
+      node = node.parentElement;
+    }
+    return document.scrollingElement instanceof HTMLElement ? document.scrollingElement : null;
+  }
+
+  private selectionVisibleInEditor(scroller: HTMLElement | null) {
+    if (!scroller) return true;
+    try {
+      const coords = this.cm.coordsAtPos(this.cm.state.selection.main.head);
+      if (!coords) return true;
+      const viewport = scroller === document.scrollingElement
+        ? { top: 0, bottom: window.innerHeight }
+        : scroller.getBoundingClientRect();
+      return coords.bottom >= viewport.top + 2 && coords.top <= viewport.bottom - 2;
+    } catch {
+      return true;
+    }
+  }
+
+  private codeMirrorPositionSnapshot() {
+    const { anchor, head } = this.cm.state.selection.main;
+    const doc = this.cm.state.doc;
+    const anchorLine = doc.lineAt(anchor);
+    const headLine = doc.lineAt(head);
+    return {
+      anchor,
+      head,
+      anchorLine: anchorLine.number,
+      anchorColumn: anchor - anchorLine.from,
+      headLine: headLine.number,
+      headColumn: head - headLine.from,
+    };
+  }
+
+  private positionFromLineColumn(lineNumber: number, column: number) {
+    const doc = this.cm.state.doc;
+    const line = doc.line(Math.min(Math.max(lineNumber, 1), doc.lines));
+    return Math.min(line.from + column, line.to);
+  }
+
+  private selectionFromHistoryFallback(snapshot: ReturnType<SereinCodeMirrorBlock["codeMirrorPositionSnapshot"]>) {
+    const fromProseMirror = this.codeMirrorSelectionFromProseMirror();
+    const historySelectionLooksLikeStart = Boolean(
+      fromProseMirror
+        && fromProseMirror.anchor === 0
+        && fromProseMirror.head === 0
+        && (snapshot.anchor > 0 || snapshot.head > 0)
+        && this.cm.state.doc.length > 0,
+    );
+    if (fromProseMirror && !historySelectionLooksLikeStart) return fromProseMirror;
+
+    return {
+      anchor: this.positionFromLineColumn(snapshot.anchorLine, snapshot.anchorColumn),
+      head: this.positionFromLineColumn(snapshot.headLine, snapshot.headColumn),
+    };
+  }
+
+  private setCodeBlockSelection(selection: { anchor: number; head: number }) {
+    const docLength = this.cm.state.doc.length;
+    const anchor = Math.min(Math.max(selection.anchor, 0), docLength);
+    const head = Math.min(Math.max(selection.head, 0), docLength);
+    this.cm.focus();
+    this.cm.dispatch({ selection: { anchor, head } });
+
+    const pos = this.getPos();
+    if (typeof pos !== "number") return;
+    const base = pos + 1;
+    const tr = this.view.state.tr.setSelection(TextSelection.create(this.view.state.doc, base + anchor, base + head));
+    this.view.dispatch(tr);
+  }
+
+  private centerCodeMirrorSelectionInEditor() {
+    const head = this.cm.state.selection.main.head;
+    this.cm.dispatch({ effects: CodeMirrorView.scrollIntoView(head, { y: "center" }) });
+    window.requestAnimationFrame(() => {
+      const scroller = this.editorScroller();
+      if (!scroller) return;
+      const coords = this.cm.coordsAtPos(this.cm.state.selection.main.head);
+      if (!coords) return;
+      const viewport = scroller === document.scrollingElement
+        ? { top: 0, height: window.innerHeight }
+        : scroller.getBoundingClientRect();
+      const cursorCenter = (coords.top + coords.bottom) / 2;
+      const viewportCenter = viewport.top + viewport.height / 2;
+      scroller.scrollTop += cursorCenter - viewportCenter;
+    });
+  }
+
+  private runHistoryCommand(action: "undo" | "redo") {
+    const command = action === "undo" ? undo : redo;
+    const scroller = this.editorScroller();
+    const scrollTopBefore = scroller?.scrollTop ?? 0;
+    const wasSelectionVisible = this.selectionVisibleInEditor(scroller);
+    const selectionSnapshot = this.codeMirrorPositionSnapshot();
+    const handled = command(this.view.state, this.view.dispatch);
+    if (!handled) return false;
+
+    const selection = this.selectionFromHistoryFallback(selectionSnapshot);
+    this.setCodeBlockSelection(selection);
+    if (wasSelectionVisible && scroller) {
+      scroller.scrollTop = scrollTopBefore;
+    } else {
+      this.centerCodeMirrorSelectionInEditor();
+    }
+    window.requestAnimationFrame(() => {
+      this.setCodeBlockSelection(selection);
+      if (wasSelectionVisible && scroller) {
+        scroller.scrollTop = scrollTopBefore;
+      } else {
+        this.centerCodeMirrorSelectionInEditor();
+      }
+    });
+    return true;
+  }
+
+  private handleTab(outdent: boolean) {
+    if (!this.view.editable) return true;
+
+    if (!outdent) {
+      if (this.shouldInsertIndentAtCursor()) {
+        this.cm.dispatch(this.cm.state.replaceSelection("  "));
+        return true;
+      }
+
+      const changes = this.selectedCodeLines()
+        .map((line) => ({ from: line.from, insert: "  " }));
+      if (changes.length) this.cm.dispatch({ changes });
+      return true;
+    }
+
+    const changes = this.selectedCodeLines()
+      .map((line) => {
+        const prefix = this.cm.state.sliceDoc(line.from, Math.min(line.from + 2, line.to));
+        const removeLength = prefix.startsWith("\t")
+          ? 1
+          : prefix.startsWith("  ")
+            ? 2
+            : prefix.startsWith(" ")
+              ? 1
+              : 0;
+
+        return removeLength ? { from: line.from, to: line.from + removeLength } : null;
+      })
+      .filter((change): change is { from: number; to: number } => Boolean(change));
+
+    if (changes.length) this.cm.dispatch({ changes });
+    return true;
+  }
+
+  private shouldInsertIndentAtCursor() {
+    const range = this.cm.state.selection.main;
+    if (!range.empty || this.cm.state.selection.ranges.length > 1) return false;
+
+    const line = this.cm.state.doc.lineAt(range.from);
+    return range.from >= line.to;
+  }
+
+  private selectedCodeLines() {
+    const lineNumbers = new Set<number>();
+    const doc = this.cm.state.doc;
+
+    for (const range of this.cm.state.selection.ranges) {
+      const fromLine = doc.lineAt(range.from);
+      const toPosition = range.empty ? range.to : Math.max(range.from, range.to - 1);
+      const toLine = doc.lineAt(toPosition);
+      for (let number = fromLine.number; number <= toLine.number; number += 1) {
+        lineNumbers.add(number);
+      }
+    }
+
+    return [...lineNumbers].sort((left, right) => left - right).map((number) => doc.line(number));
   }
 
   private selectedText() {
@@ -375,10 +588,12 @@ class SereinCodeMirrorBlock implements NodeView {
 
     const change = computeChange(this.cm.state.doc.toString(), node.textContent);
     if (change) {
+      const selection = this.codeMirrorSelectionFromProseMirror(node);
       this.updatingFromProseMirror = true;
       this.cm.dispatch({
         changes: { from: change.from, to: change.to, insert: change.text },
-        scrollIntoView: true,
+        ...(selection ? { selection } : {}),
+        scrollIntoView: Boolean(selection),
       });
       this.updatingFromProseMirror = false;
     }

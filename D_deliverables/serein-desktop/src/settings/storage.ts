@@ -24,6 +24,15 @@ const MAX_WINDOW_HEIGHT = 10000;
 const MAX_WINDOW_POSITION = 100000;
 let lastSettingsJson: string | null = null;
 
+function isThemeStyle(value: unknown): value is ThemeStyle {
+  return value === "daily"
+    || value === "eye"
+    || value === "ink"
+    || value === "mint"
+    || value === "v5"
+    || value === "v6";
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -126,11 +135,7 @@ export function readSettings(): AppSettings {
       workspaceRecoveryBlocked?: boolean;
     };
     const hasEditorStatusOverlaySetting = typeof parsed.showEditorStatusOverlay === "boolean";
-    const theme: ThemeStyle = parsed.theme === "ink"
-      || parsed.theme === "mint"
-      || parsed.theme === "v5"
-      ? parsed.theme
-      : "daily";
+    const theme: ThemeStyle = isThemeStyle(parsed.theme) ? parsed.theme : defaultSettings.theme;
     const uiDensity: UIDensity = parsed.uiDensity === "compact" ? "compact" : "comfortable";
     const defaultEditorMode: EditorMode = parsed.defaultEditorMode === "plain" || parsed.defaultEditorMode === "rich"
       ? parsed.defaultEditorMode
@@ -197,6 +202,9 @@ export function readSettings(): AppSettings {
       showEditorStatusOverlay: hasEditorStatusOverlaySetting
         ? Boolean(parsed.showEditorStatusOverlay)
         : defaultSettings.showEditorStatusOverlay,
+      tagFeaturesEnabled: typeof parsed.tagFeaturesEnabled === "boolean"
+        ? parsed.tagFeaturesEnabled
+        : defaultSettings.tagFeaturesEnabled,
       showFrontmatterTagRow: typeof parsed.showFrontmatterTagRow === "boolean"
         ? parsed.showFrontmatterTagRow
         : defaultSettings.showFrontmatterTagRow,

@@ -11,6 +11,7 @@ export {
   readMarkdownFile,
   readVaultDirectory,
   readVaultIndexFiles,
+  searchVaultTagFiles,
   renameVaultEntry,
   revealWindow,
   writeExportFile,

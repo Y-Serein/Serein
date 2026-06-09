@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { Clock3, FileText, Folder, FolderOpen, RotateCcw, Search, Trash2, Edit3 } from "lucide-react";
-import type { LeftPanelTab } from "../../app/store/appStore";
+import type { LeftPanelTab, VaultIndexStatus } from "../../app/store/appStore";
 import type { AppLanguage, appText } from "../../app/i18n";
 import type { VaultTreeEntry } from "../../app/types";
 import type { Note } from "../../domain/model";
 import type { OutlineItem } from "../../shared/markdown";
-import type { VaultIndex, VaultIndexedFile } from "../../vault";
+import type { VaultIndex, VaultIndexedFile, VaultSearchResult } from "../../vault";
 import { searchVaultIndex } from "../../vault";
 import { Button, IconButton, SegmentedTabs, cx } from "../../shared/ui";
 
@@ -19,9 +19,11 @@ type VaultSidebarProps = {
   vaultRoot: string | null;
   vaultTree: VaultTreeEntry | null;
   vaultIndex: VaultIndex | null;
+  vaultIndexStatus: VaultIndexStatus;
   activeIndexedFile: VaultIndexedFile | null | undefined;
   vaultError: string | null;
   vaultRecoveryBlocked: boolean;
+  tagFeaturesEnabled: boolean;
   expandedDirs: Set<string>;
   selectedVaultDir: string;
   activeFilePath: string | null;
@@ -34,6 +36,8 @@ type VaultSidebarProps = {
   onDispatchCommand: (commandId: string) => void;
   onOpenMarkdownFile: (path: string) => void;
   onVaultError: (message: string | null) => void;
+  onRequestVaultIndex: () => void;
+  onSearchVaultTags: (query: string) => Promise<VaultSearchResult[]>;
   onVaultDirectoryClick: (entry: VaultTreeEntry) => void;
   onRenameVaultEntry: (entry: VaultTreeEntry) => void;
   onDeleteVaultEntry: (entry: VaultTreeEntry) => void;
@@ -226,9 +230,11 @@ export function VaultSidebar({
   vaultRoot,
   vaultTree,
   vaultIndex,
+  vaultIndexStatus,
   activeIndexedFile,
   vaultError,
   vaultRecoveryBlocked,
+  tagFeaturesEnabled,
   expandedDirs,
   selectedVaultDir,
   activeFilePath,
@@ -241,6 +247,8 @@ export function VaultSidebar({
   onDispatchCommand,
   onOpenMarkdownFile,
   onVaultError,
+  onRequestVaultIndex,
+  onSearchVaultTags,
   onVaultDirectoryClick,
   onRenameVaultEntry,
   onDeleteVaultEntry,
@@ -256,14 +264,24 @@ export function VaultSidebar({
   const [selectedSearchResultIndex, setSelectedSearchResultIndex] = useState(-1);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const selectedSearchResultRef = useRef<HTMLButtonElement | null>(null);
-  const searchResults = useMemo(
-    () => searchVaultIndex(vaultIndex, searchQuery, { limit: 60, draftFile: activeIndexedFile }),
-    [activeIndexedFile, searchQuery, vaultIndex],
-  );
+  const requestedSearchIndexKeyRef = useRef("");
+  const tagSearchRequestIdRef = useRef(0);
+  const [tagSearchResults, setTagSearchResults] = useState<VaultSearchResult[]>([]);
+  const [tagSearchLoading, setTagSearchLoading] = useState(false);
   const normalizedSearchQuery = searchQuery.trim();
   const searchPrefix = ["@", "/", "#", ":"].includes(normalizedSearchQuery[0]) ? normalizedSearchQuery[0] : "";
+  const tagSearchDisabled = searchPrefix === "@" && !tagFeaturesEnabled;
+  const searchResults = useMemo(
+    () => tagSearchDisabled ? [] : searchVaultIndex(vaultIndex, searchQuery, {
+      limit: 60,
+      draftFile: activeIndexedFile,
+      includeTags: tagFeaturesEnabled,
+    }),
+    [activeIndexedFile, searchQuery, tagFeaturesEnabled, tagSearchDisabled, vaultIndex],
+  );
   const effectiveSearchQuery = searchPrefix ? normalizedSearchQuery.slice(1).trim() : normalizedSearchQuery;
   const hasSidebarSearchIntent = effectiveSearchQuery.length > 0;
+  const effectiveSearchResults = searchResults.length ? searchResults : tagSearchResults;
   const searchScopeLabels = useMemo(() => ({
     title: t.knowledge.searchTitle,
     path: t.knowledge.searchPath,
@@ -272,11 +290,11 @@ export function VaultSidebar({
   }), [t.knowledge.searchContent, t.knowledge.searchPath, t.knowledge.searchTag, t.knowledge.searchTitle]);
   const searchScopes = useMemo(() => [
     { prefix: "", label: t.knowledge.searchAll, title: t.knowledge.searchPlaceholder },
-    { prefix: "@", label: "@", title: t.knowledge.searchTag },
+    ...(tagFeaturesEnabled ? [{ prefix: "@", label: "@", title: t.knowledge.searchTag }] : []),
     { prefix: "/", label: "/", title: t.knowledge.searchPath },
     { prefix: "#", label: "#", title: t.knowledge.searchTitle },
     { prefix: ":", label: ":", title: t.knowledge.searchContent },
-  ], [t.knowledge.searchAll, t.knowledge.searchContent, t.knowledge.searchPath, t.knowledge.searchPlaceholder, t.knowledge.searchTag, t.knowledge.searchTitle]);
+  ], [tagFeaturesEnabled, t.knowledge.searchAll, t.knowledge.searchContent, t.knowledge.searchPath, t.knowledge.searchPlaceholder, t.knowledge.searchTag, t.knowledge.searchTitle]);
   const activeSearchPrefix = useMemo(() => {
     return searchPrefix;
   }, [searchPrefix]);
@@ -333,8 +351,82 @@ export function VaultSidebar({
   }, [rememberSearchQuery, searchFocusQuery, searchFocusSignal, tab]);
 
   useEffect(() => {
-    setSelectedSearchResultIndex(searchResults.length ? 0 : -1);
-  }, [searchQuery, searchResults.length]);
+    setSelectedSearchResultIndex(effectiveSearchResults.length ? 0 : -1);
+  }, [effectiveSearchResults.length, searchQuery]);
+
+  useEffect(() => {
+    if (tab !== "search" || !vaultMode || !hasSidebarSearchIntent) {
+      requestedSearchIndexKeyRef.current = "";
+      return;
+    }
+    if (searchPrefix === "@") return;
+    if (vaultIndexStatus === "indexing") return;
+
+    const requestKey = `${vaultRoot ?? ""}\n${normalizedSearchQuery}`;
+    if (requestedSearchIndexKeyRef.current === requestKey) return;
+    if (vaultIndexStatus === "ready" && vaultIndex && searchResults.length > 0) return;
+
+    requestedSearchIndexKeyRef.current = requestKey;
+    onRequestVaultIndex();
+  }, [
+    hasSidebarSearchIntent,
+    normalizedSearchQuery,
+    onRequestVaultIndex,
+    searchPrefix,
+    searchResults.length,
+    tab,
+    vaultIndex,
+    vaultIndexStatus,
+    vaultMode,
+    vaultRoot,
+  ]);
+
+  useEffect(() => {
+    const tagQuery = searchPrefix === "@" ? normalizedSearchQuery : "";
+    const cleanTagQuery = tagQuery.startsWith("@") ? tagQuery.slice(1).trim() : "";
+    if (!tagFeaturesEnabled || tab !== "search" || !vaultMode || !tagQuery || !hasSidebarSearchIntent || cleanTagQuery.length < 2) {
+      tagSearchRequestIdRef.current += 1;
+      setTagSearchResults([]);
+      setTagSearchLoading(false);
+      return;
+    }
+    if (searchResults.length > 0) {
+      setTagSearchResults([]);
+      setTagSearchLoading(false);
+      return;
+    }
+
+    const requestId = tagSearchRequestIdRef.current + 1;
+    tagSearchRequestIdRef.current = requestId;
+    setTagSearchLoading(true);
+    const timeoutId = window.setTimeout(() => {
+      if (tagSearchRequestIdRef.current !== requestId) return;
+      onSearchVaultTags(tagQuery)
+        .then((results) => {
+          if (tagSearchRequestIdRef.current !== requestId) return;
+          setTagSearchResults(results);
+        })
+        .catch((error) => {
+          if (tagSearchRequestIdRef.current !== requestId) return;
+          console.warn("Vault tag search failed", error);
+          setTagSearchResults([]);
+        })
+        .finally(() => {
+          if (tagSearchRequestIdRef.current === requestId) setTagSearchLoading(false);
+        });
+    }, 280);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    hasSidebarSearchIntent,
+    normalizedSearchQuery,
+    onSearchVaultTags,
+    searchPrefix,
+    searchResults.length,
+    tab,
+    tagFeaturesEnabled,
+    vaultMode,
+  ]);
 
   useEffect(() => {
     if (tab !== "search" || selectedSearchResultIndex < 0) return;
@@ -342,11 +434,11 @@ export function VaultSidebar({
   }, [selectedSearchResultIndex, tab]);
 
   const openSelectedSearchResult = useCallback((index: number) => {
-    const result = searchResults[index];
+    const result = effectiveSearchResults[index];
     if (!result) return;
     rememberSearchQuery(searchQuery);
     onOpenMarkdownFile(result.path);
-  }, [onOpenMarkdownFile, rememberSearchQuery, searchQuery, searchResults]);
+  }, [effectiveSearchResults, onOpenMarkdownFile, rememberSearchQuery, searchQuery]);
 
   return (
     <aside className="left-rail">
@@ -426,12 +518,12 @@ export function VaultSidebar({
                 onChange={(event) => setSearchQuery(event.target.value)}
                 onKeyDown={(event) => {
                   if (protectTextInputShortcut(event)) return;
-                  if ((event.key === "ArrowDown" || event.key === "ArrowUp") && searchResults.length) {
+                  if ((event.key === "ArrowDown" || event.key === "ArrowUp") && effectiveSearchResults.length) {
                     event.preventDefault();
                     const direction = event.key === "ArrowDown" ? 1 : -1;
                     setSelectedSearchResultIndex((current) => {
                       const base = current < 0 ? 0 : current;
-                      return (base + direction + searchResults.length) % searchResults.length;
+                      return (base + direction + effectiveSearchResults.length) % effectiveSearchResults.length;
                     });
                     return;
                   }
@@ -439,7 +531,7 @@ export function VaultSidebar({
                     const query = normalizeSearchHistoryItem(searchQuery);
                     if (!query) return;
                     event.preventDefault();
-                    if (searchResults.length) {
+                    if (effectiveSearchResults.length) {
                       openSelectedSearchResult(selectedSearchResultIndex >= 0 ? selectedSearchResultIndex : 0);
                     } else {
                       rememberSearchQuery(query);
@@ -517,7 +609,7 @@ export function VaultSidebar({
               </section>
             ) : null}
             <div className="link-list sidebar-search-results">
-              {searchResults.length ? searchResults.map((result, index) => (
+              {effectiveSearchResults.length ? effectiveSearchResults.map((result, index) => (
                 <button
                   key={result.path}
                   ref={index === selectedSearchResultIndex ? selectedSearchResultRef : null}
@@ -538,7 +630,9 @@ export function VaultSidebar({
                   <span>{highlightedSearchText(result.relativePath, highlightedQuery)}</span>
                   <small>{highlightedSearchText(result.snippet, highlightedQuery)}</small>
                 </button>
-              )) : !hasSidebarSearchIntent ? (
+              )) : hasSidebarSearchIntent && vaultMode && (vaultIndexStatus === "indexing" || tagSearchLoading) ? (
+                <p className="muted">{t.knowledge.indexing}</p>
+              ) : !hasSidebarSearchIntent ? (
                 !vaultMode ? <p className="muted">{t.knowledge.openVaultForGraph}</p> : null
               ) : (
                 <p className="muted">{vaultMode ? t.knowledge.noSearchResults : t.knowledge.openVaultForGraph}</p>

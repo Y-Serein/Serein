@@ -20,7 +20,7 @@ export const defaultEditorMode: EditorMode = "rich";
 
 export const defaultSettings: AppSettings = {
   editorModePreferenceVersion: 4,
-  theme: "daily",
+  theme: "mint",
   language: "zh-CN",
   uiDensity: "comfortable",
   sidebarWidth: 240,
@@ -43,6 +43,7 @@ export const defaultSettings: AppSettings = {
   uiScale: 100,
   zoomWithWheel: true,
   showEditorStatusOverlay: true,
+  tagFeaturesEnabled: true,
   showFrontmatterTagRow: true,
   defaultSaveExt: "md",
   defaultNewNoteName: "Untitled",

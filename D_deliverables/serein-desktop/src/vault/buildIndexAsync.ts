@@ -49,22 +49,39 @@ export function buildVaultIndexAsync(root: string, response: VaultIndexResponse)
       if (event.data.id !== id) return;
       cleanup();
       if (event.data.error) {
-        reject(new Error(event.data.error));
+        console.warn("Vault index worker failed; falling back to main thread", event.data.error);
+        worker = null;
+        resolvedWorker.terminate();
+        resolve(buildVaultIndex(root, response));
         return;
       }
       if (!event.data.index) {
-        reject(new Error("Vault index worker returned no index."));
+        console.warn("Vault index worker returned no index; falling back to main thread");
+        worker = null;
+        resolvedWorker.terminate();
+        resolve(buildVaultIndex(root, response));
         return;
       }
       resolve(event.data.index);
     }
     function handleError(event: ErrorEvent) {
       cleanup();
-      reject(new Error(event.message || "Vault index worker failed."));
+      console.warn("Vault index worker errored; falling back to main thread", event.message || event);
+      worker = null;
+      resolvedWorker.terminate();
+      resolve(buildVaultIndex(root, response));
     }
 
     resolvedWorker.addEventListener("message", handleMessage);
     resolvedWorker.addEventListener("error", handleError);
-    resolvedWorker.postMessage({ id, root, response } satisfies BuildVaultIndexWorkerRequest);
+    try {
+      resolvedWorker.postMessage({ id, root, response } satisfies BuildVaultIndexWorkerRequest);
+    } catch (error) {
+      cleanup();
+      console.warn("Vault index worker postMessage failed; falling back to main thread", error);
+      worker = null;
+      resolvedWorker.terminate();
+      resolve(buildVaultIndex(root, response));
+    }
   });
 }

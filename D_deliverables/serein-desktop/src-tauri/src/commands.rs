@@ -1,4 +1,5 @@
 use crate::{
+    clipboard,
     fs_ops,
     global_hotkey,
     model::{
@@ -47,6 +48,16 @@ pub fn configure_global_reveal_shortcut(app: AppHandle, shortcut: Option<String>
 #[tauri::command]
 pub fn reveal_window(app: AppHandle) -> Result<(), String> {
     global_hotkey::reveal_window(&app)
+}
+
+#[tauri::command]
+pub fn desktop_read_clipboard_text() -> Result<String, String> {
+    clipboard::read_text()
+}
+
+#[tauri::command]
+pub fn desktop_write_clipboard_text(text: String) -> Result<(), String> {
+    clipboard::write_text(&text)
 }
 
 #[tauri::command]
@@ -113,6 +124,15 @@ pub fn read_vault_directory(
 #[tauri::command]
 pub fn read_vault_index_files(root: String) -> Result<VaultIndexResponse, String> {
     vault::read_vault_index_files(root)
+}
+
+#[tauri::command]
+pub fn search_vault_tag_files(
+    root: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<VaultIndexResponse, String> {
+    vault::search_vault_tag_files(root, query, limit)
 }
 
 #[tauri::command]

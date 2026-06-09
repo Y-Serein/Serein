@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   buildVaultIndex,
   createDraftIndexedFile,
@@ -13,6 +14,7 @@ import {
   rewriteVaultLinksInMarkdown,
   resolveVaultLinkTarget,
   searchVaultIndex,
+  upsertVaultIndexFile,
 } from "../.test-dist/vault/index.js";
 import {
   composeMarkdownWithFrontmatter,
@@ -125,7 +127,7 @@ test("resolves wiki links, embeds, headings, markdown links, and directory index
 
   const today = index.filesByRelativePath.get("daily/today.md");
   assert.ok(today);
-  assert.equal(today.tags[0], "work");
+  assert.deepEqual(today.tags, []);
   assert.equal(today.outgoingLinks[0].label, "Main project");
   assert.equal(today.outgoingLinks[0].targetPath, `${root}/Project.md`);
   assert.equal(today.outgoingLinks[1].targetHeading, "Plan");
@@ -155,12 +157,14 @@ test("reports same-name ambiguity instead of silently choosing a file", () => {
   assert.equal(resolved.targetCandidates.length, 2);
 });
 
-test("builds searchable tags and limited global graph with unresolved links", () => {
+test("builds searchable active frontmatter tags and limited global graph with unresolved links", () => {
   const files = [
-    file("a.md", "# Alpha\n\n[[b]]\n[[missing]]\n#work"),
-    file("b.md", "# Beta\n\nbody text\n#work"),
-    file("c.md", "# Gamma\n\nother #misc"),
-    ...Array.from({ length: 24 }, (_, index) => file(`extra-${index}.md`, `# Extra ${index}\n\n#work`)),
+    file("a.md", "---\ntags: [work]\nstatus: active\n---\n# Alpha\n\n[[b]]\n[[missing]]\n#ignored"),
+    file("b.md", "---\ntags: [work]\nstatus: active\n---\n# Beta\n\nbody text\n#ignored"),
+    file("c.md", "---\ntags: [misc]\nstatus: active\n---\n# Gamma\n\nother #ignored"),
+    file("inactive.md", "---\ntags: [work]\nstatus: inactive\n---\n# Inactive"),
+    file("missing-status.md", "---\ntags: [work]\n---\n# Missing Status"),
+    ...Array.from({ length: 24 }, (_, index) => file(`extra-${index}.md`, `---\ntags: [work]\nstatus: active\n---\n# Extra ${index}`)),
   ];
   const index = buildVaultIndex(root, { truncated: false, skippedFiles: 0, files });
 
@@ -199,6 +203,7 @@ test("extracts YAML properties, aliases, and frontmatter tags", () => {
         "draft: false",
         "rating: 4",
         "date: 2026-05-21",
+        "status: active",
         "---",
         "# Meta",
         "",
@@ -211,7 +216,7 @@ test("extracts YAML properties, aliases, and frontmatter tags", () => {
   const meta = index.filesByRelativePath.get("meta.md");
   assert.ok(meta);
   assert.deepEqual(meta.aliases, ["Alpha", "Beta"]);
-  assert.deepEqual(meta.tags, ["active", "inline", "project"]);
+  assert.deepEqual(meta.tags, ["active", "project"]);
   assert.equal(meta.properties.find((item) => item.key === "draft")?.type, "checkbox");
   assert.equal(meta.properties.find((item) => item.key === "rating")?.type, "number");
   assert.equal(meta.properties.find((item) => item.key === "date")?.type, "date");
@@ -309,7 +314,7 @@ test("promotes Milkdown thematic-break frontmatter when it contains YAML propert
   assert.deepEqual(yamlPropertyValues(parts.properties, "tags"), ["project", "writing"]);
 });
 
-test("parses draft frontmatter tags before a vault index refresh", () => {
+test("parses active draft frontmatter tags for current-file tag search", () => {
   const index = buildVaultIndex(root, {
     truncated: false,
     skippedFiles: 0,
@@ -318,12 +323,122 @@ test("parses draft frontmatter tags before a vault index refresh", () => {
     ],
   });
 
-  const draft = createDraftIndexedFile(index, `${root}/draft.md`, "---\ntags: [project, writing]\n---\n# Draft");
+  const draft = createDraftIndexedFile(index, `${root}/draft.md`, "---\ntags: [project, writing]\nstatus: active\n---\n# Draft");
   assert.ok(draft);
   assert.equal(draft.relativePath, "draft.md");
   assert.deepEqual(draft.tags, ["project", "writing"]);
   assert.deepEqual(yamlPropertyValues(parseYamlFrontmatterProperties(draft.content), "tags"), ["project", "writing"]);
   assert.equal(searchVaultIndex(index, "@project", { draftFile: draft })[0].relativePath, "draft.md");
+
+  const inactiveDraft = createDraftIndexedFile(index, `${root}/inactive-draft.md`, "---\ntags: [project]\nstatus: inactive\n---\n# Draft");
+  assert.ok(inactiveDraft);
+  assert.equal(searchVaultIndex(index, "@project", { draftFile: inactiveDraft }).length, 0);
+});
+
+test("requires active status for frontmatter tags", () => {
+  const index = buildVaultIndex(root, {
+    truncated: false,
+    skippedFiles: 0,
+    files: [
+      file("active.md", "---\ntags: [remark]\nstatus: active\n---\n# Active"),
+      file("inactive.md", "---\ntags: [remark]\nstatus: inactive\n---\n# Inactive"),
+      file("missing-status.md", "---\ntags: [remark]\n---\n# Missing Status"),
+      file("body.md", "# Body\n\n#remark"),
+    ],
+  });
+
+  assert.deepEqual(listVaultTags(index), [{ tag: "remark", count: 1 }]);
+  assert.deepEqual(searchVaultIndex(index, "@remark").map((item) => item.relativePath), ["active.md"]);
+});
+
+test("can disable tag matches in vault search", () => {
+  const index = buildVaultIndex(root, {
+    truncated: false,
+    skippedFiles: 0,
+    files: [
+      file("active.md", "---\ntags: [remark]\nstatus: active\n---\n# Active"),
+    ],
+  });
+
+  assert.deepEqual(searchVaultIndex(index, "remark", { includeTags: false }), []);
+  assert.deepEqual(searchVaultIndex(index, "@remark", { includeTags: false }), []);
+});
+
+test("upserts saved active frontmatter tags into the vault index", () => {
+  let index = buildVaultIndex(root, {
+    truncated: false,
+    skippedFiles: 0,
+    files: [
+      file("home.md", "# Home"),
+    ],
+  });
+
+  index = upsertVaultIndexFile(index, root, file("C_context/test/new.md", [
+    "---",
+    "tags: [remark 备注]",
+    "aliases: [remark]",
+    "status: active",
+    "---",
+    "",
+    "# new",
+  ].join("\n")));
+
+  assert.deepEqual(searchVaultIndex(index, "@remark").map((item) => item.relativePath), ["C_context/test/new.md"]);
+
+  index = upsertVaultIndexFile(index, root, file("C_context/test/new.md", [
+    "---",
+    "tags: [remark 备注]",
+    "aliases: [remark]",
+    "status: inactive",
+    "---",
+    "",
+    "# new",
+  ].join("\n")));
+
+  assert.deepEqual(searchVaultIndex(index, "@remark"), []);
+});
+
+test("keeps opened active frontmatter tags searchable after switching active files", () => {
+  let index = buildVaultIndex(root, {
+    truncated: false,
+    skippedFiles: 0,
+    files: [
+      file("home.md", "# Home"),
+    ],
+  });
+
+  index = upsertVaultIndexFile(index, root, file("C_context/test/new.md", [
+    "---",
+    "tags: [remark 备注]",
+    "aliases: [remark]",
+    "status: active",
+    "---",
+    "",
+    "# new",
+  ].join("\n")));
+
+  index = upsertVaultIndexFile(index, root, file("home.md", "# Home\n\nCurrent note"));
+
+  const otherDraft = createDraftIndexedFile(index, `${root}/home.md`, "# Home\n\nCurrent note");
+  assert.ok(otherDraft);
+  assert.deepEqual(
+    searchVaultIndex(index, "@remark", { draftFile: otherDraft }).map((item) => item.relativePath),
+    ["C_context/test/new.md"],
+  );
+});
+
+test("indexes the real unopened C_context active remark fixture", () => {
+  const content = fs.readFileSync("../../C_context/test/new.md", "utf8");
+  const index = buildVaultIndex(root, {
+    truncated: false,
+    skippedFiles: 0,
+    files: [
+      file("home.md", "# Home"),
+      file("C_context/test/new.md", content),
+    ],
+  });
+
+  assert.deepEqual(searchVaultIndex(index, "@remark").map((item) => item.relativePath), ["C_context/test/new.md"]);
 });
 
 test("parses indented YAML frontmatter fields and indexes draft tags", () => {

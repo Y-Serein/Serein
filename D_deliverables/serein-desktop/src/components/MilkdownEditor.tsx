@@ -5,7 +5,6 @@ import { defaultHighlightStyle, LanguageDescription, syntaxHighlighting } from "
 import { languages as codeMirrorLanguages } from "@codemirror/language-data";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
 import { commandsCtx, defaultValueCtx, Editor, editorViewCtx, rootCtx, serializerCtx } from "@milkdown/kit/core";
-import { codeBlockConfig } from "@milkdown/kit/component/code-block";
 import { imageInlineComponent } from "@milkdown/kit/component/image-inline";
 import { tableBlock, tableBlockConfig } from "@milkdown/kit/component/table-block";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
@@ -39,7 +38,7 @@ import {
 } from "@milkdown/kit/preset/gfm";
 import { markRule } from "@milkdown/kit/prose";
 import { lift } from "@milkdown/kit/prose/commands";
-import { liftListItem, splitListItem } from "@milkdown/kit/prose/schema-list";
+import { liftListItem, sinkListItem, splitListItem } from "@milkdown/kit/prose/schema-list";
 import { AllSelection, Plugin, PluginKey, Selection, TextSelection } from "@milkdown/kit/prose/state";
 import type { Command } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
@@ -56,6 +55,8 @@ import {
   splitYamlPropertyValue,
   yamlListValueFromInput,
 } from "../shared/markdown";
+import { codeBlockConfig } from "./codeBlockConfig";
+import { readDesktopClipboardText, writeDesktopClipboardText } from "../services/clipboard";
 import { sereinCodeBlockView } from "./sereinCodeBlockView";
 
 type MilkdownEditorProps = {
@@ -159,6 +160,27 @@ function localImagePreview(imagePreviewMap: Record<string, string>, source: stri
     ?? imagePreviewMap[`./${withoutDot}`];
 }
 
+function spaceEntitiesToSpaces(value: string) {
+  const matches = value.match(/&#x20;|&#32;/g);
+  return matches ? " ".repeat(matches.length) : "";
+}
+
+function normalizeRichSerializedSpaces(markdown: string) {
+  return markdown
+    .replace(/(^|\n)(#{1,6}\s+)((?:&#x20;|&#32;)+)/g, (_, prefix: string, marker: string, spaces: string) => (
+      `${prefix}${marker}${spaceEntitiesToSpaces(spaces)}`
+    ))
+    .replace(/(^|\n)((?:[-*+]|\d+[.)])\s+)((?:&#x20;|&#32;)+)/g, (_, prefix: string, marker: string, spaces: string) => (
+      `${prefix}${marker}${spaceEntitiesToSpaces(spaces)}`
+    ))
+    .replace(/(^|\n)> ((?:&#x20;|&#32;)+)/g, (_, prefix: string, spaces: string) => (
+      `${prefix}> ${spaceEntitiesToSpaces(spaces)}`
+    ))
+    .replace(/(^|\n)((?:&#x20;|&#32;)+)/g, (_, prefix: string, spaces: string) => (
+      `${prefix}${spaceEntitiesToSpaces(spaces)}`
+    ));
+}
+
 function normalizeWindowsImageMarkdown(markdown: string) {
   return markdown.replace(/!\[([^\]\n]*)]\(((?:[A-Za-z]:\\|\\\\)[^)\n]*)\)/g, (_, alt: string, source: string) => (
     markdownImageText(source.trim(), alt)
@@ -216,20 +238,6 @@ function mergeMarkdownBodies(first: string, second: string) {
   return `${left.replace(/\n*$/, "\n\n")}${right}`;
 }
 
-function writeClipboardText(text: string) {
-  if (!text || !navigator.clipboard?.writeText) return;
-  navigator.clipboard.writeText(text).catch(() => undefined);
-}
-
-async function readClipboardText() {
-  if (!navigator.clipboard?.readText) return "";
-  try {
-    return await navigator.clipboard.readText();
-  } catch {
-    return "";
-  }
-}
-
 function selectedRichText(view: EditorView) {
   const { from, to, empty } = view.state.selection;
   if (empty) return "";
@@ -239,7 +247,7 @@ function selectedRichText(view: EditorView) {
 function copyRichSelection(view: EditorView) {
   const text = selectedRichText(view);
   if (!text) return false;
-  writeClipboardText(text);
+  writeDesktopClipboardText(text);
   view.focus();
   return true;
 }
@@ -252,7 +260,8 @@ function cutRichSelection(view: EditorView) {
 }
 
 function pasteRichText(view: EditorView) {
-  readClipboardText().then((text) => {
+  view.focus();
+  readDesktopClipboardText().then((text) => {
     if (!text) {
       view.focus();
       return;
@@ -260,6 +269,74 @@ function pasteRichText(view: EditorView) {
     const { from, to } = view.state.selection;
     view.dispatch(view.state.tr.insertText(text, from, to).scrollIntoView());
     view.focus();
+  });
+}
+
+function clearNativeSelection(view?: EditorView) {
+  const rootSelection = (view?.root as unknown as { getSelection?: typeof window.getSelection } | undefined)?.getSelection?.();
+  (rootSelection ?? window.getSelection())?.removeAllRanges();
+}
+
+function editorScrollerForElement(element: HTMLElement) {
+  let node: HTMLElement | null = element.parentElement;
+  while (node && node !== document.body) {
+    const style = window.getComputedStyle(node);
+    if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) return node;
+    node = node.parentElement;
+  }
+  return document.scrollingElement instanceof HTMLElement ? document.scrollingElement : null;
+}
+
+function selectionHeadPosition(selection: Selection) {
+  return selection instanceof TextSelection ? selection.head : selection.from;
+}
+
+function proseMirrorSelectionVisible(view: EditorView, scroller: HTMLElement | null) {
+  if (!scroller) return true;
+  try {
+    const coords = view.coordsAtPos(selectionHeadPosition(view.state.selection));
+    const viewport = scroller === document.scrollingElement
+      ? { top: 0, bottom: window.innerHeight }
+      : scroller.getBoundingClientRect();
+    return coords.bottom >= viewport.top + 2 && coords.top <= viewport.bottom - 2;
+  } catch {
+    return true;
+  }
+}
+
+function centerProseMirrorSelection(view: EditorView, scroller: HTMLElement | null) {
+  if (!scroller) return;
+  try {
+    const coords = view.coordsAtPos(selectionHeadPosition(view.state.selection));
+    const viewport = scroller === document.scrollingElement
+      ? { top: 0, height: window.innerHeight }
+      : scroller.getBoundingClientRect();
+    const cursorCenter = (coords.top + coords.bottom) / 2;
+    const viewportCenter = viewport.top + viewport.height / 2;
+    scroller.scrollTop += cursorCenter - viewportCenter;
+  } catch {
+    // Native history may leave selection in a transient state; ignore scroll compensation then.
+  }
+}
+
+function runRichHistoryWithEditorScroll(view: EditorView, runHistory: () => void) {
+  const scroller = editorScrollerForElement(view.dom);
+  const scrollTopBefore = scroller?.scrollTop ?? 0;
+  const wasSelectionVisible = proseMirrorSelectionVisible(view, scroller);
+
+  runHistory();
+  if (wasSelectionVisible && scroller) {
+    scroller.scrollTop = scrollTopBefore;
+  } else {
+    centerProseMirrorSelection(view, scroller);
+  }
+
+  window.requestAnimationFrame(() => {
+    if (wasSelectionVisible && scroller) {
+      scroller.scrollTop = scrollTopBefore;
+    } else {
+      centerProseMirrorSelection(view, scroller);
+    }
   });
 }
 
@@ -367,16 +444,88 @@ const selectCurrentCodeBlock: Command = (state, dispatch) => {
   return false;
 };
 
-const smartSelectAllShortcut = $shortcut(() => ({
-  "Mod-a": selectCurrentCodeBlock,
+const richTabIndent = "  ";
+
+const selectionInsideListItem = (state: Parameters<Command>[0]) => {
+  const { $from } = state.selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type.name === "list_item") return true;
+  }
+  return false;
+};
+
+const indentRichTextLine = (outdent: boolean): Command => (state, dispatch) => {
+  const { $from } = state.selection;
+  const parent = $from.parent;
+  if (!parent.isTextblock || parent.type.name === "code_block") return false;
+
+  const textBeforeCursor = parent.textBetween(0, $from.parentOffset, "\n", "\n");
+  const lineBreakIndex = textBeforeCursor.lastIndexOf("\n");
+  const lineStartOffset = lineBreakIndex >= 0 ? lineBreakIndex + 1 : 0;
+  const lineStart = $from.start() + lineStartOffset;
+
+  if (outdent) {
+    const lineEnd = $from.end();
+    const prefix = state.doc.textBetween(lineStart, Math.min(lineStart + richTabIndent.length, lineEnd), "\n", "\n");
+    const removeLength = prefix.startsWith("\t")
+      ? 1
+      : prefix.startsWith(richTabIndent)
+        ? richTabIndent.length
+        : prefix.startsWith(" ")
+          ? 1
+          : 0;
+
+    if (!removeLength) return true;
+    if (dispatch) dispatch(state.tr.delete(lineStart, lineStart + removeLength).scrollIntoView());
+    return true;
+  }
+
+  if (dispatch) dispatch(state.tr.insertText(richTabIndent, lineStart).scrollIntoView());
+  return true;
+};
+
+const handleRichTab = (outdent: boolean): Command => (state, dispatch, view) => {
+  const listItemType = state.schema.nodes.list_item;
+  if (listItemType && selectionInsideListItem(state)) {
+    const command = outdent ? liftListItem(listItemType) : sinkListItem(listItemType);
+    if (command(state, dispatch, view)) return true;
+    return true;
+  }
+
+  return indentRichTextLine(outdent)(state, dispatch, view);
+};
+
+const richTabShortcut = $shortcut(() => ({
+  Tab: { key: "Tab", priority: 200, onRun: () => handleRichTab(false) },
+  "Shift-Tab": { key: "Shift-Tab", priority: 200, onRun: () => handleRichTab(true) },
 }));
 
 const selectCurrentDocument: Command = (state, dispatch) => {
   if (dispatch) {
-    dispatch(state.tr.setSelection(new AllSelection(state.doc)).scrollIntoView());
+    dispatch(state.tr.setSelection(new AllSelection(state.doc)));
   }
   return true;
 };
+
+const selectRichScope: Command = (state, dispatch, view) => {
+  if (selectCurrentCodeBlock(state, dispatch, view)) {
+    clearNativeSelection(view);
+    view?.focus();
+    return true;
+  }
+
+  if (selectCurrentDocument(state, dispatch, view)) {
+    clearNativeSelection(view);
+    view?.focus();
+    return true;
+  }
+
+  return false;
+};
+
+const smartSelectAllShortcut = $shortcut(() => ({
+  "Mod-a": selectRichScope,
+}));
 
 const doubleTildeStrikethroughInputRule = $inputRule((ctx) => (
   markRule(/(?<![\w:/])~~(.+?)~~(?!\w|\/)/, strikethroughSchema.type(ctx))
@@ -1147,7 +1296,7 @@ function runEditorCommand(editor: Editor, command: EditorCommandSignal) {
         commands.call(redoCommand.key);
         break;
       case "selectAllSmart":
-        commands.inline(selectCurrentCodeBlock) || commands.inline(selectCurrentDocument);
+        commands.inline(selectRichScope);
         break;
       default:
         break;
@@ -1196,8 +1345,9 @@ function EditorSurface({
   const [loading, getEditor] = useInstance();
 
   const emitMarkdownChange = (nextMarkdown: string) => {
-    lastKnownMarkdownRef.current = nextMarkdown;
-    onChangeRef.current(nextMarkdown);
+    const normalizedMarkdown = normalizeRichSerializedSpaces(nextMarkdown);
+    lastKnownMarkdownRef.current = normalizedMarkdown;
+    onChangeRef.current(normalizedMarkdown);
   };
 
   const updateFrontmatterContent = (content: string) => {
@@ -1395,7 +1545,9 @@ function EditorSurface({
 
     return editor.action((ctx) => {
       const view = ctx.get(editorViewCtx);
+      const commands = ctx.get(commandsCtx);
       editorViewRef.current = view;
+      clearNativeSelection(view);
       refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current);
       const baselineBody = ctx.get(serializerCtx)(view.state.doc);
       const normalizedBaselineBody = frontmatterRef.current ? normalizeRichFrontmatterBody(baselineBody) : baselineBody;
@@ -1564,6 +1716,10 @@ function EditorSurface({
         const languageButton = target?.closest<HTMLButtonElement>(".language-button") ?? null;
         const isPlainArrowDown = event.key === "ArrowDown" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
         const isPlainArrowUp = event.key === "ArrowUp" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+        const isPlainTab = event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey;
+        const key = event.key.toLowerCase();
+        const isUndo = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && key === "z";
+        const isRedo = (event.ctrlKey || event.metaKey) && !event.altKey && (key === "y" || (event.shiftKey && key === "z"));
 
         if (wikiSuggestRef.current && !event.ctrlKey && !event.metaKey && !event.altKey) {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -1627,6 +1783,26 @@ function EditorSurface({
             return;
           }
 
+          return;
+        }
+
+        if ((isUndo || isRedo) && !codeBlock) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          runRichHistoryWithEditorScroll(view, () => {
+            commands.call(isUndo ? undoCommand.key : redoCommand.key);
+          });
+          view.focus();
+          return;
+        }
+
+        if (isPlainTab && !codeBlock && !target?.closest(".milkdown-table-block")) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          handleRichTab(event.shiftKey)(view.state, view.dispatch, view);
+          view.focus();
           return;
         }
 
@@ -1814,10 +1990,11 @@ function EditorSurface({
 
         const isSelectAll = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "a";
         if (isSelectAll) {
-          const handled = selectCurrentCodeBlock(view.state, view.dispatch, view);
-          if (!handled) return;
           event.preventDefault();
           event.stopPropagation();
+          event.stopImmediatePropagation();
+          selectRichScope(view.state, view.dispatch, view);
+          return;
         }
       };
       const handleKeyUp = (event: KeyboardEvent) => {
@@ -1997,6 +2174,7 @@ function EditorSurface({
         document.removeEventListener("pointerdown", handleDocumentPointerDown, { capture: true });
         setActiveTableBlock(null);
         clearActiveImageSource(view.dom);
+        clearNativeSelection(view);
         if (editorViewRef.current === view) editorViewRef.current = null;
       };
     });
@@ -2075,6 +2253,7 @@ function EditorSurface({
       .use(history)
       .use(nestedEnterShortcut)
       .use(smartSelectAllShortcut)
+      .use(richTabShortcut)
       .use(markdownLinkNavigationShortcut)
       .use(wikiLinkDecorations)
       .use(listener);

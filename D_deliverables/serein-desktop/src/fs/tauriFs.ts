@@ -93,6 +93,10 @@ export function readVaultIndexFiles(root: string) {
   return invoke<VaultIndexResponse>("read_vault_index_files", { root });
 }
 
+export function searchVaultTagFiles(root: string, query: string, limit: number) {
+  return invoke<VaultIndexResponse>("search_vault_tag_files", { root, query, limit });
+}
+
 export function createVaultEntry(root: string, relativePath: string, kind: "file" | "directory") {
   return invoke<string>("create_vault_entry", { root, relativePath, kind });
 }

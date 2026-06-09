@@ -1,3 +1,4 @@
+mod clipboard;
 mod commands;
 mod fs_ops;
 mod global_hotkey;
@@ -14,6 +15,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::configure_global_reveal_shortcut,
+            commands::desktop_read_clipboard_text,
+            commands::desktop_write_clipboard_text,
             commands::initial_open_file,
             commands::read_markdown_file,
             commands::reveal_window,
@@ -25,6 +28,7 @@ pub fn run() {
             commands::init_vault,
             commands::read_vault_directory,
             commands::read_vault_index_files,
+            commands::search_vault_tag_files,
             commands::create_vault_entry,
             commands::rename_vault_entry,
             commands::delete_vault_entry,

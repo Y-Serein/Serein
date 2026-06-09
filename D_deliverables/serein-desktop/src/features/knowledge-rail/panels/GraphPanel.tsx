@@ -12,6 +12,7 @@ type GraphPanelProps = {
   graphTag: string;
   graphIsolatedOnly: boolean;
   graphShowUnresolved: boolean;
+  tagFeaturesEnabled: boolean;
   tags: VaultTagSummary[];
   globalGraph: GlobalGraph;
   localGraph: LocalGraph;
@@ -29,6 +30,7 @@ export function GraphPanel({
   graphTag,
   graphIsolatedOnly,
   graphShowUnresolved,
+  tagFeaturesEnabled,
   tags,
   globalGraph,
   localGraph,
@@ -40,10 +42,12 @@ export function GraphPanel({
   return (
     <div className="knowledge-section graph-workbench" role="tabpanel">
       <div className="graph-toolbar">
-        <select value={graphTag} onChange={(event) => onGraphTagChange(event.target.value)} aria-label={t.knowledge.filterByTag}>
-          <option value="">{t.knowledge.allTags}</option>
-          {tags.map((item) => <option key={item.tag} value={item.tag}>#{item.tag} ({item.count})</option>)}
-        </select>
+        {tagFeaturesEnabled ? (
+          <select value={graphTag} onChange={(event) => onGraphTagChange(event.target.value)} aria-label={t.knowledge.filterByTag}>
+            <option value="">{t.knowledge.allTags}</option>
+            {tags.map((item) => <option key={item.tag} value={item.tag}>#{item.tag} ({item.count})</option>)}
+          </select>
+        ) : null}
         <label>
           <input type="checkbox" checked={graphIsolatedOnly} onChange={(event) => onGraphIsolatedOnlyChange(event.target.checked)} />
           {t.knowledge.isolatedOnly}

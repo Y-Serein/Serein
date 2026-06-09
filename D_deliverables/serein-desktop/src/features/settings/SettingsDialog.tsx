@@ -44,6 +44,7 @@ type SettingsDialogProps = {
   uiScale: number;
   zoomWithWheel: boolean;
   showEditorStatusOverlay: boolean;
+  tagFeaturesEnabled: boolean;
   showFrontmatterTagRow: boolean;
   editorLeftGap: number;
   sidebarWidth: number;
@@ -76,6 +77,7 @@ type SettingsDialogProps = {
   onUiScaleChange: (value: number) => void;
   onZoomWithWheelChange: (value: boolean) => void;
   onShowEditorStatusOverlayChange: (value: boolean) => void;
+  onTagFeaturesEnabledChange: (value: boolean) => void;
   onShowFrontmatterTagRowChange: (value: boolean) => void;
   onEditorLeftGapChange: (value: number) => void;
   onSidebarWidthChange: (value: number) => void;
@@ -115,6 +117,7 @@ export function SettingsDialog({
   uiScale,
   zoomWithWheel,
   showEditorStatusOverlay,
+  tagFeaturesEnabled,
   showFrontmatterTagRow,
   editorLeftGap,
   sidebarWidth,
@@ -147,6 +150,7 @@ export function SettingsDialog({
   onUiScaleChange,
   onZoomWithWheelChange,
   onShowEditorStatusOverlayChange,
+  onTagFeaturesEnabledChange,
   onShowFrontmatterTagRowChange,
   onEditorLeftGapChange,
   onSidebarWidthChange,
@@ -371,6 +375,10 @@ export function SettingsDialog({
                 <label className="settings-check">
                   <input type="checkbox" checked={normalizeWindowsImagePaths} onChange={(event) => onNormalizeWindowsImagePathsChange(event.target.checked)} />
                   {t.settings.normalizeWindowsImagePaths}
+                </label>
+                <label className="settings-check">
+                  <input type="checkbox" checked={tagFeaturesEnabled} onChange={(event) => onTagFeaturesEnabledChange(event.target.checked)} />
+                  {t.settings.tagFeaturesEnabled}
                 </label>
                 <label className="settings-check">
                   <input type="checkbox" checked={showFrontmatterTagRow} onChange={(event) => onShowFrontmatterTagRowChange(event.target.checked)} />

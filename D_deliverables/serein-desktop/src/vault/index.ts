@@ -309,6 +309,30 @@ export function createDraftIndexedFile(index: VaultIndex | null, path: string | 
   };
 }
 
+export function upsertVaultIndexFile(index: VaultIndex | null, root: string, file: VaultIndexFileResponse): VaultIndex {
+  const normalizedPath = normalizeFilePath(file.path);
+  const normalizedFile = {
+    ...file,
+    path: normalizedPath,
+    relativePath: normalizeVaultPath(file.relativePath),
+  };
+  const existingFiles = index?.files
+    .filter((item) => normalizeFilePath(item.path) !== normalizedPath)
+    .map((item) => ({
+      path: item.path,
+      relativePath: item.relativePath,
+      fileName: item.fileName,
+      fileExt: item.fileExt,
+      content: item.content,
+    })) ?? [];
+
+  return buildVaultIndex(root, {
+    files: [...existingFiles, normalizedFile],
+    truncated: index?.truncated ?? false,
+    skippedFiles: index?.skippedFiles ?? 0,
+  });
+}
+
 export function createLocalGraph(index: VaultIndex | null, path: string | null | undefined, draftFile?: VaultIndexedFile | null): LocalGraph {
   const currentFile = draftFile ?? findIndexedFile(index, path);
   if (!index || !currentFile) return { nodes: [], edges: [] };
@@ -470,29 +494,32 @@ export function listVaultTags(index: VaultIndex | null, draftFile?: VaultIndexed
 export function searchVaultIndex(
   index: VaultIndex | null,
   query: string,
-  options: { tag?: string | null; limit?: number; draftFile?: VaultIndexedFile | null } = {},
+  options: { tag?: string | null; limit?: number; draftFile?: VaultIndexedFile | null; includeTags?: boolean } = {},
 ): VaultSearchResult[] {
   if (!index) return [];
   const search = parseVaultSearchQuery(query);
   const cleanQuery = search.query.toLowerCase();
   const tag = options.tag?.trim();
+  const includeTags = options.includeTags ?? true;
   const limit = Math.max(1, Math.min(options.limit ?? SEARCH_RESULT_LIMIT, 200));
 
   if (!cleanQuery && !tag) return [];
 
   const results: VaultSearchResult[] = [];
-  for (const file of filesWithDraft(index, options.draftFile)) {
+  const files = filesWithDraft(index, options.draftFile);
+  for (const file of files) {
     if (tag && !file.tags.includes(tag)) continue;
     const title = file.title.toLowerCase();
     const relativePath = file.relativePath.toLowerCase();
     const tags = file.tags.map((item) => item.toLowerCase());
-    const content = file.content.toLowerCase();
+    const searchableContent = searchContentForFile(file, includeTags);
+    const content = searchableContent.toLowerCase();
     const matchType: VaultSearchResult["matchType"] | null = cleanQuery
       ? matchesSearchMode(search.mode, "title") && title.includes(cleanQuery)
         ? "title"
         : matchesSearchMode(search.mode, "path") && relativePath.includes(cleanQuery)
           ? "path"
-          : matchesSearchMode(search.mode, "tag") && tags.some((item) => item.includes(cleanQuery))
+          : includeTags && matchesSearchMode(search.mode, "tag") && tags.some((item) => item.includes(cleanQuery))
             ? "tag"
             : matchesSearchMode(search.mode, "content") && content.includes(cleanQuery)
               ? "content"
@@ -505,7 +532,7 @@ export function searchVaultIndex(
       relativePath: file.relativePath,
       title: file.title,
       matchType,
-      snippet: createSearchSnippet(file, cleanQuery, matchType),
+      snippet: createSearchSnippet(file, cleanQuery, matchType, searchableContent),
     });
     if (results.length >= limit) break;
   }
@@ -534,6 +561,11 @@ function parseVaultSearchQuery(query: string): { mode: VaultSearchMode; query: s
 
 function matchesSearchMode(mode: VaultSearchMode, target: VaultSearchResult["matchType"]) {
   return mode === "all" || mode === target;
+}
+
+function searchContentForFile(file: VaultIndexedFile, includeTags: boolean) {
+  if (includeTags) return file.content;
+  return splitYamlFrontmatter(file.content)?.body ?? file.content;
 }
 
 export function resolveVaultLinkTarget(
@@ -689,7 +721,7 @@ function parseVaultFile(file: VaultIndexFileResponse): ParsedVaultFile {
   const title = extractFirstLineTitle(body) ?? stripExtension(file.fileName);
   const properties = frontmatter?.properties ?? [];
   const aliases = yamlPropertyValues(properties, "aliases");
-  const propertyTags = yamlPropertyValues(properties, "tags").map((tag) => tag.replace(/^#/, ""));
+  const propertyTags = activeFrontmatterTags(properties);
 
   return {
     path: file.path,
@@ -701,7 +733,7 @@ function parseVaultFile(file: VaultIndexFileResponse): ParsedVaultFile {
     properties,
     aliases,
     headings: extractHeadings(file.content),
-    tags: uniqueSorted([...extractTags(file.content), ...propertyTags]),
+    tags: uniqueSorted(propertyTags),
     rawLinks: extractRawLinks(file.content, normalizeVaultPath(file.relativePath)),
   };
 }
@@ -721,20 +753,10 @@ function extractHeadings(markdown: string): VaultHeading[] {
     });
 }
 
-function extractTags(markdown: string): string[] {
-  const tags = new Set<string>();
-  const linkedRanges = extractLinkedRanges(markdown);
-  const tagPattern = /(^|[\s([{])#([A-Za-z0-9_/-]+)/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = tagPattern.exec(markdown)) !== null) {
-    const tagStart = match.index + match[1].length;
-    const tagEnd = tagStart + match[2].length + 1;
-    if (rangeIntersects(linkedRanges, tagStart, tagEnd)) continue;
-    tags.add(match[2]);
-  }
-
-  return [...tags].sort((left, right) => left.localeCompare(right));
+function activeFrontmatterTags(properties: VaultProperty[]) {
+  const status = properties.find((property) => property.key.toLowerCase() === "status")?.value.trim().toLowerCase();
+  if (status !== "active") return [];
+  return yamlPropertyValues(properties, "tags").map((tag) => tag.replace(/^#/, ""));
 }
 
 function uniqueSorted(values: string[]) {
@@ -1134,19 +1156,24 @@ function slugHeading(text: string) {
     .replace(/\s+/g, "-");
 }
 
-function createSearchSnippet(file: VaultIndexedFile, query: string, matchType: VaultSearchResult["matchType"]) {
+function createSearchSnippet(
+  file: VaultIndexedFile,
+  query: string,
+  matchType: VaultSearchResult["matchType"],
+  content = file.content,
+) {
   if (!query) return file.tags.length ? file.tags.map((tag) => `#${tag}`).join(", ") : file.relativePath;
   if (matchType === "title") return file.title;
   if (matchType === "path") return file.relativePath;
   if (matchType === "tag") return file.tags.map((tag) => `#${tag}`).join(", ");
 
-  const lowerContent = file.content.toLowerCase();
+  const lowerContent = content.toLowerCase();
   const index = lowerContent.indexOf(query);
   if (index < 0) return file.relativePath;
   const start = Math.max(0, index - 56);
-  const end = Math.min(file.content.length, index + query.length + 72);
-  const snippet = file.content.slice(start, end).replace(/\s+/g, " ").trim();
-  return `${start > 0 ? "..." : ""}${snippet}${end < file.content.length ? "..." : ""}`;
+  const end = Math.min(content.length, index + query.length + 72);
+  const snippet = content.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "..." : ""}${snippet}${end < content.length ? "..." : ""}`;
 }
 
 function findUnlinkedMentions(files: VaultIndexedFile[], currentFile: VaultIndexedFile): VaultUnlinkedMention[] {

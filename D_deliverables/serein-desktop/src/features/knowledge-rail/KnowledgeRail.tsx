@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { Pin, PinOff } from "lucide-react";
 import type { KnowledgePanelTab, VaultIndexStatus } from "../../app/store/appStore";
@@ -35,6 +35,7 @@ type KnowledgeRailProps = {
   localGraph: LocalGraph;
   lineCount: number;
   textStats: { words: number; characters: number };
+  tagFeaturesEnabled: boolean;
   floatingPanelPosition?: { x: number; y: number };
   onTabChange: (tab: KnowledgePanelTab) => void;
   onToggleFloating: () => void;
@@ -63,6 +64,7 @@ export function KnowledgeRail({
   localGraph,
   lineCount,
   textStats,
+  tagFeaturesEnabled,
   floatingPanelPosition,
   onTabChange,
   onToggleFloating,
@@ -75,12 +77,19 @@ export function KnowledgeRail({
   const [graphTag, setGraphTag] = useState("");
   const [graphIsolatedOnly, setGraphIsolatedOnly] = useState(false);
   const [graphShowUnresolved, setGraphShowUnresolved] = useState(true);
-  const tags = useMemo(() => listVaultTags(vaultIndex, activeIndexedFile), [activeIndexedFile, vaultIndex]);
+  const tags = useMemo(() => (
+    tagFeaturesEnabled ? listVaultTags(vaultIndex, activeIndexedFile) : []
+  ), [activeIndexedFile, tagFeaturesEnabled, vaultIndex]);
   const globalGraph = useMemo(() => createGlobalGraph(vaultIndex, {
-    tag: graphTag || null,
+    tag: tagFeaturesEnabled ? graphTag || null : null,
     isolatedOnly: graphIsolatedOnly,
     showUnresolved: graphShowUnresolved,
-  }), [graphIsolatedOnly, graphShowUnresolved, graphTag, vaultIndex]);
+  }), [graphIsolatedOnly, graphShowUnresolved, graphTag, tagFeaturesEnabled, vaultIndex]);
+  useEffect(() => {
+    if (tagFeaturesEnabled) return;
+    if (graphTag) setGraphTag("");
+    if (tab === "tags") onTabChange("backlinks");
+  }, [graphTag, onTabChange, tab, tagFeaturesEnabled]);
   const indexMessages = [
     vaultIndexStatus === "indexing" ? t.knowledge.indexing : null,
     vaultIndexStatus === "error" ? vaultIndexError : null,
@@ -112,7 +121,7 @@ export function KnowledgeRail({
           { id: "outgoing", label: t.knowledge.outgoing },
           { id: "properties", label: t.knowledge.properties },
           { id: "graph", label: t.knowledge.graph },
-          { id: "tags", label: t.knowledge.tags },
+          ...(tagFeaturesEnabled ? [{ id: "tags" as const, label: t.knowledge.tags }] : []),
         ]}
         onChange={onTabChange}
       />
@@ -176,6 +185,7 @@ export function KnowledgeRail({
           graphTag={graphTag}
           graphIsolatedOnly={graphIsolatedOnly}
           graphShowUnresolved={graphShowUnresolved}
+          tagFeaturesEnabled={tagFeaturesEnabled}
           tags={tags}
           globalGraph={globalGraph}
           localGraph={localGraph}
@@ -186,7 +196,7 @@ export function KnowledgeRail({
         />
       ) : null}
 
-      {tab === "tags" ? (
+      {tagFeaturesEnabled && tab === "tags" ? (
         <TagsPanel
           t={t}
           tags={tags}
@@ -205,7 +215,9 @@ export function KnowledgeRail({
         <span>{textStats.words} {t.knowledge.words}</span>
         <span>{textStats.characters} {t.knowledge.characters}</span>
         <span>{activeResolvedLinks.length}/{activeOutgoingLinks.length} {t.knowledge.links}</span>
-        <span>{activeIndexedFile?.tags.length ? activeIndexedFile.tags.map((tag) => `#${tag}`).join(", ") : t.knowledge.none}</span>
+        {tagFeaturesEnabled ? (
+          <span>{activeIndexedFile?.tags.length ? activeIndexedFile.tags.map((tag) => `#${tag}`).join(", ") : t.knowledge.none}</span>
+        ) : null}
         {currentPath ? null : <span>{t.knowledge.currentFileNotIndexed}</span>}
       </footer>
     </section>

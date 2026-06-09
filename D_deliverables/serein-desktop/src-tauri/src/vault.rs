@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Read,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -24,6 +25,8 @@ const TRASH_DIR: &str = "trash";
 const INDEX_FILE_LIMIT: usize = 2000;
 const INDEX_FILE_SIZE_LIMIT: u64 = 1024 * 1024;
 const INDEX_TOTAL_CONTENT_LIMIT: u64 = 32 * 1024 * 1024;
+const TAG_SEARCH_SCAN_FILE_LIMIT: usize = 50_000;
+const TAG_SEARCH_FRONTMATTER_BYTES: u64 = 64 * 1024;
 
 pub fn init_vault(root: String, app_data_root: PathBuf) -> Result<VaultInitResponse, String> {
     let root_path = fs::canonicalize(&root)
@@ -203,6 +206,57 @@ pub fn read_vault_index_files(root: String) -> Result<VaultIndexResponse, String
     })
 }
 
+pub fn search_vault_tag_files(
+    root: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<VaultIndexResponse, String> {
+    let clean_query = query.trim().trim_start_matches('@').trim().to_lowercase();
+    if clean_query.is_empty() {
+        return Ok(VaultIndexResponse {
+            files: Vec::new(),
+            truncated: false,
+            skipped_files: 0,
+            indexed_bytes: 0,
+        });
+    }
+
+    let root_path = fs::canonicalize(&root)
+        .map_err(|error| format!("Failed to read vault root: {error}"))?;
+
+    if !root_path.is_dir() {
+        return Err("Vault root is not a directory.".to_string());
+    }
+
+    let mut files = Vec::new();
+    let mut truncated = false;
+    let mut skipped_files = 0;
+    let mut indexed_bytes = 0;
+    let mut scanned_files = 0;
+    let result_limit = limit.unwrap_or(80).clamp(1, 200);
+
+    collect_vault_tag_files(
+        &root_path,
+        &root_path,
+        &clean_query,
+        result_limit,
+        &mut files,
+        &mut truncated,
+        &mut skipped_files,
+        &mut indexed_bytes,
+        &mut scanned_files,
+    )?;
+
+    files.sort_by(|left, right| left.relative_path.to_lowercase().cmp(&right.relative_path.to_lowercase()));
+
+    Ok(VaultIndexResponse {
+        files,
+        truncated,
+        skipped_files,
+        indexed_bytes,
+    })
+}
+
 pub fn create_vault_entry(root: String, relative_path: String, kind: String) -> Result<String, String> {
     let target = resolve_vault_path(&root, &relative_path, false)?;
     if target.exists() {
@@ -301,10 +355,46 @@ fn collect_vault_index_files(
         return Ok(());
     }
 
-    let entries = fs::read_dir(directory)
-        .map_err(|error| format!("Failed to read vault index directory: {error}"))?;
+    let read_dir_entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(_) => {
+            *skipped_files += 1;
+            return Ok(());
+        }
+    };
+    let mut entries: Vec<(PathBuf, fs::FileType, String)> = Vec::new();
+    for entry in read_dir_entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                *skipped_files += 1;
+                continue;
+            }
+        };
+        let entry_path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => {
+                *skipped_files += 1;
+                continue;
+            }
+        };
+        let name = entry_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_string();
+        entries.push((entry_path, file_type, name));
+    }
+    entries.sort_by(|left, right| {
+        let left_dir = left.1.is_dir();
+        let right_dir = right.1.is_dir();
+        right_dir
+            .cmp(&left_dir)
+            .then_with(|| left.2.to_lowercase().cmp(&right.2.to_lowercase()))
+    });
 
-    for entry in entries {
+    for (entry_path, file_type, name) in entries {
         if *truncated {
             break;
         }
@@ -313,16 +403,6 @@ fn collect_vault_index_files(
             *truncated = true;
             break;
         }
-
-        let entry = entry.map_err(|error| format!("Failed to read vault index entry: {error}"))?;
-        let entry_path = entry.path();
-        let file_type = entry.file_type()
-            .map_err(|error| format!("Failed to read vault index entry type: {error}"))?;
-        let name = entry_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("")
-            .to_string();
 
         if file_type.is_dir() {
             if should_skip_directory(&name) {
@@ -345,8 +425,13 @@ fn collect_vault_index_files(
             continue;
         }
 
-        let metadata = entry.metadata()
-            .map_err(|error| format!("Failed to read vault index file metadata: {error}"))?;
+        let metadata = match fs::metadata(&entry_path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                *skipped_files += 1;
+                continue;
+            }
+        };
         if metadata.len() > limits.per_file_bytes {
             *skipped_files += 1;
             continue;
@@ -380,6 +465,278 @@ fn collect_vault_index_files(
     }
 
     Ok(())
+}
+
+fn collect_vault_tag_files(
+    root: &Path,
+    directory: &Path,
+    query: &str,
+    result_limit: usize,
+    files: &mut Vec<VaultIndexFile>,
+    truncated: &mut bool,
+    skipped_files: &mut usize,
+    indexed_bytes: &mut u64,
+    scanned_files: &mut usize,
+) -> Result<(), String> {
+    if *truncated || files.len() >= result_limit {
+        *truncated = true;
+        return Ok(());
+    }
+
+    if *scanned_files >= TAG_SEARCH_SCAN_FILE_LIMIT {
+        *truncated = true;
+        return Ok(());
+    }
+
+    let read_dir_entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(_) => {
+            *skipped_files += 1;
+            return Ok(());
+        }
+    };
+
+    let mut entries: Vec<(PathBuf, fs::FileType, String)> = Vec::new();
+    for entry in read_dir_entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                *skipped_files += 1;
+                continue;
+            }
+        };
+        let entry_path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => {
+                *skipped_files += 1;
+                continue;
+            }
+        };
+        let name = entry_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_string();
+        entries.push((entry_path, file_type, name));
+    }
+
+    entries.sort_by(|left, right| {
+        let left_dir = left.1.is_dir();
+        let right_dir = right.1.is_dir();
+        right_dir
+            .cmp(&left_dir)
+            .then_with(|| left.2.to_lowercase().cmp(&right.2.to_lowercase()))
+    });
+
+    for (entry_path, file_type, name) in entries {
+        if *truncated || files.len() >= result_limit {
+            *truncated = true;
+            break;
+        }
+
+        if file_type.is_dir() {
+            if should_skip_directory(&name) {
+                continue;
+            }
+
+            collect_vault_tag_files(
+                root,
+                &entry_path,
+                query,
+                result_limit,
+                files,
+                truncated,
+                skipped_files,
+                indexed_bytes,
+                scanned_files,
+            )?;
+            continue;
+        }
+
+        if !file_type.is_file() || !is_supported_text_path(&entry_path) {
+            continue;
+        }
+
+        *scanned_files += 1;
+        if *scanned_files > TAG_SEARCH_SCAN_FILE_LIMIT {
+            *truncated = true;
+            break;
+        }
+
+        let metadata = match fs::metadata(&entry_path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                *skipped_files += 1;
+                continue;
+            }
+        };
+        if metadata.len() > INDEX_FILE_SIZE_LIMIT {
+            *skipped_files += 1;
+            continue;
+        }
+
+        let frontmatter_prefix = match read_file_prefix(&entry_path, TAG_SEARCH_FRONTMATTER_BYTES) {
+            Ok(content) => content,
+            Err(_) => {
+                *skipped_files += 1;
+                continue;
+            }
+        };
+        if !frontmatter_active_tags_match(&frontmatter_prefix, query) {
+            continue;
+        }
+
+        let content = match fs::read_to_string(&entry_path) {
+            Ok(content) => content,
+            Err(_) => {
+                *skipped_files += 1;
+                continue;
+            }
+        };
+        *indexed_bytes = indexed_bytes.saturating_add(metadata.len());
+
+        files.push(VaultIndexFile {
+            path: entry_path.to_string_lossy().to_string(),
+            relative_path: entry_path
+                .strip_prefix(root)
+                .ok()
+                .map(to_slash_path)
+                .unwrap_or_else(|| name.clone()),
+            file_name: name,
+            file_ext: normalized_extension(&entry_path).unwrap_or_else(|| "md".to_string()),
+            content,
+        });
+    }
+
+    Ok(())
+}
+
+fn read_file_prefix(path: &Path, max_bytes: u64) -> Result<String, String> {
+    let file = fs::File::open(path)
+        .map_err(|error| format!("Failed to open vault tag search file: {error}"))?;
+    let mut reader = file.take(max_bytes);
+    let mut content = String::new();
+    reader
+        .read_to_string(&mut content)
+        .map_err(|error| format!("Failed to read vault tag search file: {error}"))?;
+    Ok(content)
+}
+
+fn frontmatter_active_tags_match(markdown_prefix: &str, query: &str) -> bool {
+    let Some(frontmatter) = frontmatter_content(markdown_prefix) else {
+        return false;
+    };
+    let properties = parse_simple_yaml_properties(&frontmatter);
+    let status = properties
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("status"))
+        .map(|(_, values)| values.join(" ").trim().to_lowercase());
+    if status.as_deref() != Some("active") {
+        return false;
+    }
+
+    properties
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("tags"))
+        .flat_map(|(_, values)| values.iter())
+        .any(|tag| tag.trim_start_matches('#').to_lowercase().contains(query))
+}
+
+fn frontmatter_content(markdown_prefix: &str) -> Option<String> {
+    let normalized = markdown_prefix
+        .trim_start_matches('\u{feff}')
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    let lines: Vec<&str> = normalized.lines().collect();
+    let mut start_index = 0;
+    while start_index < lines.len() && lines[start_index].trim().is_empty() {
+        start_index += 1;
+    }
+    let opening = frontmatter_fence_marker(lines.get(start_index)?.trim())?;
+
+    for index in start_index + 1..lines.len() {
+        if frontmatter_fence_marker(lines[index].trim()) == Some(opening) {
+            return Some(lines[start_index + 1..index].join("\n"));
+        }
+    }
+
+    None
+}
+
+fn frontmatter_fence_marker(line: &str) -> Option<&str> {
+    match line {
+        "---" | "***" | "___" => Some(line),
+        _ => None,
+    }
+}
+
+fn parse_simple_yaml_properties(content: &str) -> Vec<(String, Vec<String>)> {
+    let mut properties: Vec<(String, Vec<String>)> = Vec::new();
+    let mut current_list_key: Option<String> = None;
+    let mut current_list_values: Vec<String> = Vec::new();
+
+    let flush_list = |properties: &mut Vec<(String, Vec<String>)>, key: &mut Option<String>, values: &mut Vec<String>| {
+        if let Some(current_key) = key.take() {
+            properties.push((current_key, std::mem::take(values)));
+        }
+    };
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(item) = trimmed.strip_prefix("- ") {
+            if current_list_key.is_some() {
+                current_list_values.push(clean_yaml_value(item));
+                continue;
+            }
+        }
+
+        flush_list(&mut properties, &mut current_list_key, &mut current_list_values);
+        let Some((key, raw_value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let clean_key = key.trim();
+        if clean_key.is_empty() || !clean_key.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
+            continue;
+        }
+
+        let value = raw_value.trim();
+        if value.is_empty() {
+            current_list_key = Some(clean_key.to_string());
+            continue;
+        }
+
+        properties.push((clean_key.to_string(), split_yaml_values(value)));
+    }
+
+    flush_list(&mut properties, &mut current_list_key, &mut current_list_values);
+    properties
+}
+
+fn split_yaml_values(value: &str) -> Vec<String> {
+    let clean = value.trim().trim_start_matches('[').trim_end_matches(']');
+    if clean.is_empty() {
+        return Vec::new();
+    }
+
+    clean
+        .split(',')
+        .map(clean_yaml_value)
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn clean_yaml_value(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim()
+        .to_string()
 }
 
 #[derive(Clone, Copy)]
@@ -707,6 +1064,75 @@ mod tests {
         assert_eq!(skipped_files, 1);
         assert!(indexed_bytes <= 10);
         assert!(files.len() < 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn vault_index_reads_unopened_nested_active_tag_file() {
+        let root = temp_dir("index-nested-tag");
+        let nested = root.join("C_context").join("test");
+        fs::create_dir_all(&nested).expect("create nested vault fixture");
+        fs::write(root.join("home.md"), "# Home").expect("write home");
+        fs::write(
+            nested.join("new.md"),
+            "---\ntags: [remark 备注]\naliases: [remark]\nstatus: active\n---\n\n# new\n",
+        )
+        .expect("write nested tag file");
+
+        let response = read_vault_index_files(root.to_string_lossy().to_string()).expect("read vault index");
+        assert!(response.files.iter().any(|file| file.relative_path == "C_context/test/new.md"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn vault_tag_search_reads_unopened_nested_active_tag_file() {
+        let root = temp_dir("tag-search-nested");
+        let nested = root.join("C_context").join("test");
+        fs::create_dir_all(&nested).expect("create nested vault fixture");
+        fs::write(
+            nested.join("new.md"),
+            "---\ntags: [remark 备注]\naliases: [remark]\nstatus: active\n---\n\n# new\n",
+        )
+        .expect("write nested active tag file");
+        fs::write(
+            nested.join("inactive.md"),
+            "---\ntags: [remark]\nstatus: inactive\n---\n\n# inactive\n",
+        )
+        .expect("write nested inactive tag file");
+
+        let response = search_vault_tag_files(root.to_string_lossy().to_string(), "remark".to_string(), Some(20))
+            .expect("search active tag files");
+
+        assert_eq!(response.files.len(), 1);
+        assert_eq!(response.files[0].relative_path, "C_context/test/new.md");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_index_skips_unreadable_directories_without_dropping_readable_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_dir("index-unreadable-dir");
+        let readable = root.join("C_context").join("test");
+        let unreadable = root.join("A_unreadable");
+        fs::create_dir_all(&readable).expect("create readable nested vault fixture");
+        fs::create_dir_all(&unreadable).expect("create unreadable directory");
+        fs::write(
+            readable.join("new.md"),
+            "---\ntags: [remark 备注]\naliases: [remark]\nstatus: active\n---\n\n# new\n",
+        )
+        .expect("write nested tag file");
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).expect("make unreadable");
+
+        let response = read_vault_index_files(root.to_string_lossy().to_string()).expect("read vault index");
+
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o755)).expect("restore permissions");
+        assert!(response.files.iter().any(|file| file.relative_path == "C_context/test/new.md"));
+        assert!(response.skipped_files >= 1);
+
         let _ = fs::remove_dir_all(root);
     }
 

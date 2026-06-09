@@ -19,6 +19,7 @@ import type {
   SaveFileExt,
   ThemeStyle,
   UIDensity,
+  VaultIndexFileResponse,
   VaultTreeEntry,
   VaultWorkspaceState,
   WindowState,
@@ -50,6 +51,7 @@ import { WorkspaceRibbon } from "./features/shell/WorkspaceRibbon";
 import { WorkspaceEditorStatusBar } from "./features/shell/WorkspaceStatusBar";
 import { VaultSidebar } from "./features/vault-sidebar/VaultSidebar";
 import { WindowChrome } from "./features/window-chrome/WindowChrome";
+import { readDesktopClipboardText, writeDesktopClipboardText } from "./services/clipboard";
 import {
   configureGlobalRevealShortcut,
   createVaultEntry,
@@ -65,6 +67,7 @@ import {
   readVaultDirectory,
   renameVaultEntry,
   revealWindow,
+  searchVaultTagFiles,
   writeExportFile,
   writeMarkdownFile,
   writeVaultWorkspaceState,
@@ -110,9 +113,11 @@ import {
   planVaultLinkRewrite,
   resolveVaultLinkTarget,
   rewriteVaultLinksInMarkdown,
+  searchVaultIndex,
   suggestedVaultLinkPath,
+  upsertVaultIndexFile,
 } from "./vault/index";
-import type { VaultIndexedFile, VaultLink, VaultUnlinkedMention } from "./vault";
+import type { VaultIndex, VaultIndexedFile, VaultLink, VaultSearchResult, VaultUnlinkedMention } from "./vault";
 import { buildVaultIndexAsync } from "./vault/buildIndexAsync";
 import {
   applyLineEnding,
@@ -164,11 +169,6 @@ function elementFromNode(node: Node | null) {
   return node instanceof Element ? node : node?.parentElement ?? null;
 }
 
-function isCodeMirrorEditorTarget(target: EventTarget | null) {
-  return target instanceof HTMLElement
-    && Boolean(target.closest(".milkdown-code-block .cm-editor"));
-}
-
 function selectRichCodeBlockDom(target: EventTarget | null) {
   const selection = window.getSelection();
   if (!selection) return false;
@@ -214,6 +214,19 @@ function selectionIsInsideElement(selection: Selection | null, element: HTMLElem
   const startElement = elementFromNode(range.startContainer);
   const endElement = elementFromNode(range.endContainer);
   return Boolean(startElement && endElement && element.contains(startElement) && element.contains(endElement));
+}
+
+function clearWindowSelection() {
+  window.getSelection()?.removeAllRanges();
+}
+
+function clearWindowSelectionSoon() {
+  clearWindowSelection();
+  window.requestAnimationFrame(() => {
+    clearWindowSelection();
+    window.requestAnimationFrame(clearWindowSelection);
+  });
+  window.setTimeout(clearWindowSelection, 80);
 }
 
 function isEditorTextControlTarget(target: EventTarget | null) {
@@ -291,13 +304,13 @@ function runNativeTextEditCommand(control: HTMLInputElement | HTMLTextAreaElemen
   if (command === "copy" || command === "cut") {
     const { start, end } = textControlSelection(control);
     if (start === end) return true;
-    writeClipboardText(control.value.slice(start, end));
+    writeDesktopClipboardText(control.value.slice(start, end));
     if (command === "cut") replaceTextControlSelection(control, "");
     return true;
   }
 
   if (command === "paste") {
-    readClipboardText().then((text) => {
+    readDesktopClipboardText().then((text) => {
       if (text) replaceTextControlSelection(control, text);
     });
     return true;
@@ -425,20 +438,6 @@ function contextMenuPosition(event: { clientX: number; clientY: number }) {
   };
 }
 
-function writeClipboardText(text: string) {
-  if (!text || !navigator.clipboard?.writeText) return;
-  navigator.clipboard.writeText(text).catch(() => undefined);
-}
-
-async function readClipboardText() {
-  if (!navigator.clipboard?.readText) return "";
-  try {
-    return await navigator.clipboard.readText();
-  } catch {
-    return "";
-  }
-}
-
 function codeMirrorSelectedText(view: CodeMirrorView) {
   return view.state.selection.ranges
     .filter((range) => !range.empty)
@@ -476,7 +475,7 @@ function runCodeMirrorClipboardCommand(
   if (capturedRange) {
     const text = view.state.sliceDoc(capturedRange.from, capturedRange.to);
     if (!text) return false;
-    writeClipboardText(text);
+    writeDesktopClipboardText(text);
     if (command === "cut") {
       view.dispatch({
         changes: { from: capturedRange.from, to: capturedRange.to, insert: "" },
@@ -490,7 +489,7 @@ function runCodeMirrorClipboardCommand(
 
   const textFromState = codeMirrorSelectedText(view);
   if (textFromState) {
-    writeClipboardText(textFromState);
+    writeDesktopClipboardText(textFromState);
     if (command === "cut") {
       view.dispatch(view.state.replaceSelection(""));
       view.focus();
@@ -694,6 +693,35 @@ function relativePathFromRoot(root: string, path: string) {
   return normalizedPath.slice(normalizedRoot.length + 1);
 }
 
+function vaultIndexOverrideKey(root: string, path: string) {
+  return `${normalizeFilePath(root)}\n${normalizeFilePath(path)}`;
+}
+
+function applyVaultIndexOverrides(
+  index: VaultIndex | null,
+  root: string,
+  overrides: Iterable<VaultIndexFileResponse>,
+) {
+  let nextIndex = index;
+  for (const file of overrides) {
+    if (relativePathFromRoot(root, file.path) === null) continue;
+    nextIndex = upsertVaultIndexFile(nextIndex, root, file);
+  }
+  return nextIndex;
+}
+
+function deleteVaultIndexOverrides(
+  overrides: Map<string, VaultIndexFileResponse>,
+  root: string,
+  path: string,
+) {
+  for (const [key, file] of overrides) {
+    if (relativePathFromRoot(root, file.path) !== null && isSameOrChildPath(file.path, path)) {
+      overrides.delete(key);
+    }
+  }
+}
+
 function ensureExportExtension(path: string, format: "html" | "pdf") {
   const extension = pathExtension(path);
   if (format === "html" && (extension === "html" || extension === "htm")) return path;
@@ -798,6 +826,8 @@ export default function App() {
     setZoomWithWheel,
     showEditorStatusOverlay,
     setShowEditorStatusOverlay,
+    tagFeaturesEnabled,
+    setTagFeaturesEnabled,
     showFrontmatterTagRow,
     setShowFrontmatterTagRow,
     richCommand,
@@ -848,6 +878,9 @@ export default function App() {
   const richCommandIdRef = useRef(0);
   const vaultIndexRefreshIdRef = useRef(0);
   const scheduledVaultIndexRefreshRef = useRef<{ idleId: number | null; timeoutId: number | null } | null>(null);
+  const vaultIndexFileOverridesRef = useRef<Map<string, VaultIndexFileResponse>>(new Map());
+  const vaultTagSearchCacheRef = useRef<Map<string, VaultSearchResult[]>>(new Map());
+  const vaultTagSearchPendingRef = useRef<Map<string, Promise<VaultSearchResult[]>>>(new Map());
   const persistedSettingsJsonRef = useRef<string | null>(null);
   const latestSettingsToPersistRef = useRef<AppSettings | null>(null);
   const windowStateSaveTimeoutRef = useRef<number | null>(null);
@@ -887,12 +920,18 @@ export default function App() {
   const activeIndexedFile = useMemo(() => (
     createDraftIndexedFile(vaultIndex, activeNote.filePath, deferredActiveMarkdown) ?? persistedActiveIndexedFile
   ), [activeNote.filePath, deferredActiveMarkdown, persistedActiveIndexedFile, vaultIndex]);
+  const activeIndexedFileForTagFeatures = useMemo(() => {
+    if (tagFeaturesEnabled || !activeIndexedFile) return activeIndexedFile;
+    return { ...activeIndexedFile, tags: [] };
+  }, [activeIndexedFile, tagFeaturesEnabled]);
   const activeBacklinks = useMemo(() => getBacklinks(vaultIndex, activeNote.filePath), [activeNote.filePath, vaultIndex]);
   const activeOutgoingLinks = activeIndexedFile?.outgoingLinks ?? [];
   const activeResolvedLinks = activeOutgoingLinks.filter((link) => link.targetPath);
   const activeUnresolvedLinks = activeOutgoingLinks.filter((link) => !link.targetPath);
   const localGraph = useMemo(() => createLocalGraph(vaultIndex, activeNote.filePath, activeIndexedFile), [activeIndexedFile, activeNote.filePath, vaultIndex]);
-  const vaultTags = useMemo(() => listVaultTags(vaultIndex, activeIndexedFile), [activeIndexedFile, vaultIndex]);
+  const vaultTags = useMemo(() => (
+    tagFeaturesEnabled ? listVaultTags(vaultIndex, activeIndexedFile) : []
+  ), [activeIndexedFile, tagFeaturesEnabled, vaultIndex]);
   const wikiLinkSuggestions = useMemo(() => {
     if (!vaultIndex) return [];
     const baseNameCounts = new Map<string, number>();
@@ -916,12 +955,12 @@ export default function App() {
   const centerGraph = useMemo(() => {
     if (!centerGraphOpen) return createGlobalGraph(null);
     return createGlobalGraph(vaultIndex, {
-      tag: centerGraphTag || null,
+      tag: tagFeaturesEnabled ? centerGraphTag || null : null,
       isolatedOnly: centerGraphIsolatedOnly,
       showUnresolved: centerGraphShowUnresolved,
       maxNodes: 180,
     });
-  }, [centerGraphIsolatedOnly, centerGraphOpen, centerGraphShowUnresolved, centerGraphTag, vaultIndex]);
+  }, [centerGraphIsolatedOnly, centerGraphOpen, centerGraphShowUnresolved, centerGraphTag, tagFeaturesEnabled, vaultIndex]);
   const shortcutConflicts = useMemo(() => findShortcutConflicts(shortcuts), [shortcuts]);
   const globalRevealShortcut = useMemo(() => {
     const shortcut = shortcuts.find((item) => item.id === "app.revealWindow");
@@ -947,6 +986,14 @@ export default function App() {
     window.addEventListener("focusin", handleFocusIn);
     return () => window.removeEventListener("focusin", handleFocusIn);
   }, []);
+
+  useEffect(() => {
+    if (tagFeaturesEnabled) return;
+    if (centerGraphTag) setCenterGraphTag("");
+    if (knowledgePanelTab === "tags") setKnowledgePanelTab("backlinks");
+    vaultTagSearchCacheRef.current.clear();
+    vaultTagSearchPendingRef.current.clear();
+  }, [centerGraphTag, knowledgePanelTab, setKnowledgePanelTab, tagFeaturesEnabled]);
 
   useEffect(() => {
     if (!vaultIndex || !activeNote.filePath || !activeIndexedFile) {
@@ -1442,6 +1489,8 @@ export default function App() {
       setVaultIndex(null);
       setVaultIndexStatus("idle");
       setVaultIndexError(null);
+      vaultTagSearchCacheRef.current.clear();
+      vaultTagSearchPendingRef.current.clear();
       return;
     }
 
@@ -1453,7 +1502,11 @@ export default function App() {
     try {
       const response = await readVaultIndexFiles(root);
       if (vaultIndexRefreshIdRef.current !== refreshId) return;
-      const nextIndex = await buildVaultIndexAsync(root, response);
+      const nextIndex = applyVaultIndexOverrides(
+        await buildVaultIndexAsync(root, response),
+        root,
+        vaultIndexFileOverridesRef.current.values(),
+      );
       if (vaultIndexRefreshIdRef.current !== refreshId) return;
       setVaultIndex(nextIndex);
       setVaultIndexStatus("ready");
@@ -1466,12 +1519,10 @@ export default function App() {
     }
   }, [t.errors.vaultIndexFailed, vaultRoot]);
 
-  const scheduleVaultIndexRefresh = useCallback((root: string) => {
+  const cancelScheduledVaultIndexRefresh = useCallback(() => {
     const idleWindow = window as Window & {
-      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
       cancelIdleCallback?: (handle: number) => void;
     };
-
     const scheduled = scheduledVaultIndexRefreshRef.current;
     if (scheduled?.idleId !== null && scheduled?.idleId !== undefined) {
       idleWindow.cancelIdleCallback?.(scheduled.idleId);
@@ -1479,6 +1530,15 @@ export default function App() {
     if (scheduled?.timeoutId !== null && scheduled?.timeoutId !== undefined) {
       window.clearTimeout(scheduled.timeoutId);
     }
+    scheduledVaultIndexRefreshRef.current = null;
+  }, []);
+
+  const scheduleVaultIndexRefresh = useCallback((root: string) => {
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+    };
+
+    cancelScheduledVaultIndexRefresh();
 
     const run = () => {
       scheduledVaultIndexRefreshRef.current = null;
@@ -1493,13 +1553,20 @@ export default function App() {
 
     const timeoutId = window.setTimeout(run, 1200);
     scheduledVaultIndexRefreshRef.current = { idleId: null, timeoutId };
-  }, [refreshVaultIndex]);
+  }, [cancelScheduledVaultIndexRefresh, refreshVaultIndex]);
+
+  const ensureVaultIndexForSearch = useCallback((options: { force?: boolean } = {}) => {
+    if (!vaultRoot || vaultIndexStatus === "indexing") return;
+    if (!options.force && vaultIndexStatus === "ready" && vaultIndex) return;
+    cancelScheduledVaultIndexRefresh();
+    void refreshVaultIndex(vaultRoot);
+  }, [cancelScheduledVaultIndexRefresh, refreshVaultIndex, vaultIndex, vaultIndexStatus, vaultRoot]);
 
   const applyOpenedFile = useCallback((file: Awaited<ReturnType<typeof readMarkdownFile>>, options: { standalone?: boolean } = {}) => {
     const nextNote = createFileNote(file);
     const useVaultContext = Boolean(vaultRoot) && !options.standalone;
 
-    window.getSelection()?.removeAllRanges();
+    clearWindowSelectionSoon();
     editorCommandSelectionRef.current = null;
     editorCommandCodeMirrorSelectionRef.current = null;
 
@@ -1514,7 +1581,21 @@ export default function App() {
     });
     setActiveNoteId(nextNote.id);
     setLastOpenedFile(nextNote.filePath ?? null);
-    if (useVaultContext) {
+    if (useVaultContext && vaultRoot) {
+      const relativePath = nextNote.filePath ? relativePathFromRoot(vaultRoot, nextNote.filePath) : null;
+      if (relativePath !== null) {
+        const indexFile = {
+          path: file.path,
+          relativePath,
+          fileName: file.fileName,
+          fileExt: file.fileExt,
+          content: file.content,
+        };
+        if (vaultIndexStatus !== "ready") {
+          setVaultIndex(upsertVaultIndexFile(null, vaultRoot, indexFile));
+        }
+      }
+
       persistVaultPatch({
         lastOpenedFile: nextNote.filePath ?? null,
         recentFiles: pushRecentFile(vaultWorkspace.recentFiles, nextNote.filePath ?? null),
@@ -1522,7 +1603,7 @@ export default function App() {
     }
     setSaveError(null);
     setSaveStatus("saved");
-  }, [activeNote, persistVaultPatch, vaultRoot, vaultWorkspace.recentFiles]);
+  }, [activeNote, persistVaultPatch, setVaultIndex, vaultIndexStatus, vaultRoot, vaultWorkspace.recentFiles]);
 
   const openMarkdownFile = useCallback(async (path: string, options: {
     skipUnsavedCheck?: boolean;
@@ -1569,6 +1650,14 @@ export default function App() {
       uiScale,
     });
 
+    vaultIndexFileOverridesRef.current.clear();
+    vaultTagSearchCacheRef.current.clear();
+    vaultTagSearchPendingRef.current.clear();
+    cancelScheduledVaultIndexRefresh();
+    vaultIndexRefreshIdRef.current += 1;
+    setVaultIndex(null);
+    setVaultIndexStatus("idle");
+    setVaultIndexError(null);
     setVaultRoot(initialized.root);
     setVaultWorkspace(workspace);
     setSelectedVaultDir(workspace.selectedDir);
@@ -1597,18 +1686,19 @@ export default function App() {
         setVaultError(t.errors.restoreLastFileFailed);
       });
     }
-    void loadVaultDirectory("", initialized.root).then(() => {
-      scheduleVaultIndexRefresh(initialized.root);
-    });
+    void loadVaultDirectory("", initialized.root);
   }, [
+    cancelScheduledVaultIndexRefresh,
     editorLeftGap,
     loadVaultDirectory,
     openMarkdownFile,
     rightPanelVisible,
     rightPanelWidth,
-    scheduleVaultIndexRefresh,
     sidebarVisible,
     sidebarWidth,
+    setVaultIndex,
+    setVaultIndexError,
+    setVaultIndexStatus,
     t.errors.restoreLastFileFailed,
     uiScale,
   ]);
@@ -1635,6 +1725,9 @@ export default function App() {
     restoredVaultRef.current = true;
     restoredStandaloneFileRef.current = true;
 
+    vaultIndexFileOverridesRef.current.clear();
+    vaultTagSearchCacheRef.current.clear();
+    vaultTagSearchPendingRef.current.clear();
     setVaultRoot(demo.root);
     setDemoVaultMode(true);
     setVaultTree(demo.tree);
@@ -1714,6 +1807,17 @@ export default function App() {
     if (vaultRoot) {
       const savedVaultRelativePath = relativePathFromRoot(vaultRoot, file.path);
       if (savedVaultRelativePath !== null) {
+        const indexFile = {
+          path: file.path,
+          relativePath: savedVaultRelativePath,
+          fileName: file.fileName,
+          fileExt: file.fileExt,
+          content: markdownToSave,
+        };
+        vaultIndexFileOverridesRef.current.set(vaultIndexOverrideKey(vaultRoot, file.path), indexFile);
+        vaultTagSearchCacheRef.current.clear();
+        vaultTagSearchPendingRef.current.clear();
+        setVaultIndex((currentIndex) => upsertVaultIndexFile(currentIndex, vaultRoot, indexFile));
         if (!isExistingFileSave) {
           await loadVaultDirectory(parentVaultDir(savedVaultRelativePath));
         }
@@ -1723,7 +1827,7 @@ export default function App() {
     setSavedAt(new Date());
     setSaveError(null);
     setSaveStatus("saved");
-  }, [defaultSaveExt, editorMode, loadVaultDirectory, persistVaultPatch, scheduleVaultIndexRefresh, vaultRoot, vaultWorkspace.recentFiles]);
+  }, [defaultSaveExt, editorMode, loadVaultDirectory, persistVaultPatch, scheduleVaultIndexRefresh, setVaultIndex, vaultRoot, vaultWorkspace.recentFiles]);
 
   const syncActiveNoteFromDisk = useCallback(async () => {
     if (demoVaultMode || !activeNote?.filePath) return;
@@ -1773,6 +1877,8 @@ export default function App() {
       setSaveStatus("idle");
       setToastMessage(t.status.externalFileReloaded);
       if (vaultRoot) {
+        vaultTagSearchCacheRef.current.clear();
+        vaultTagSearchPendingRef.current.clear();
         await loadVaultDirectory(selectedVaultDir);
         await refreshVaultIndex(vaultRoot);
       }
@@ -2209,6 +2315,9 @@ export default function App() {
     }
 
     try {
+      deleteVaultIndexOverrides(vaultIndexFileOverridesRef.current, vaultRoot, entry.path);
+      vaultTagSearchCacheRef.current.clear();
+      vaultTagSearchPendingRef.current.clear();
       await loadVaultDirectory(parentVaultDir(entry.relativePath));
       await refreshVaultIndex(vaultRoot);
       if (activeNote.filePath && normalizeFilePath(activeNote.filePath) === oldEntryPath) {
@@ -2264,6 +2373,9 @@ export default function App() {
 
     deleteVaultEntry(vaultRoot, entry.relativePath)
       .then(async () => {
+        deleteVaultIndexOverrides(vaultIndexFileOverridesRef.current, vaultRoot, entry.path);
+        vaultTagSearchCacheRef.current.clear();
+        vaultTagSearchPendingRef.current.clear();
         await loadVaultDirectory(parentVaultDir(entry.relativePath));
         await refreshVaultIndex(vaultRoot);
         if (isSameOrChildPath(activeNote.filePath, entry.path)) {
@@ -2312,12 +2424,12 @@ export default function App() {
     const end = textarea.selectionEnd;
     if (command === "copy" || command === "cut") {
       if (start === end) return;
-      writeClipboardText(textarea.value.slice(start, end));
+      writeDesktopClipboardText(textarea.value.slice(start, end));
       if (command === "cut") replacePlainEditorSelection("");
       return;
     }
 
-    readClipboardText().then((text) => {
+    readDesktopClipboardText().then((text) => {
       if (text) replacePlainEditorSelection(text);
     });
   }, [replacePlainEditorSelection]);
@@ -2457,6 +2569,45 @@ export default function App() {
     setSidebarSearchFocusSignal((signal) => signal + 1);
   }, [setLeftPanelTab, setSidebarVisible]);
 
+  const openQuickOpen = useCallback(() => {
+    setPaletteMode("quickOpen");
+  }, []);
+
+  const requestVaultIndexForSearch = useCallback(() => {
+    ensureVaultIndexForSearch({ force: true });
+  }, [ensureVaultIndexForSearch]);
+
+  const searchVaultTagsForQuery = useCallback(async (query: string): Promise<VaultSearchResult[]> => {
+    if (!tagFeaturesEnabled || !vaultRoot) return [];
+    const cleanQuery = query.trim();
+    const cleanTagQuery = cleanQuery.startsWith("@") ? cleanQuery.slice(1).trim() : "";
+    if (cleanTagQuery.length < 2) return [];
+
+    const cacheKey = `${normalizeFilePath(vaultRoot)}\n${cleanTagQuery.toLocaleLowerCase()}`;
+    const cached = vaultTagSearchCacheRef.current.get(cacheKey);
+    if (cached) return cached;
+
+    const pending = vaultTagSearchPendingRef.current.get(cacheKey);
+    if (pending) return pending;
+
+    const searchPromise = (async () => {
+      const response = await searchVaultTagFiles(vaultRoot, cleanTagQuery, 60);
+      const tagIndex = await buildVaultIndexAsync(vaultRoot, response);
+      const results = searchVaultIndex(tagIndex, `@${cleanTagQuery}`, { limit: 60 });
+      vaultTagSearchCacheRef.current.set(cacheKey, results);
+      return results;
+    })();
+
+    vaultTagSearchPendingRef.current.set(cacheKey, searchPromise);
+    try {
+      return await searchPromise;
+    } finally {
+      if (vaultTagSearchPendingRef.current.get(cacheKey) === searchPromise) {
+        vaultTagSearchPendingRef.current.delete(cacheKey);
+      }
+    }
+  }, [tagFeaturesEnabled, vaultRoot]);
+
   const handleFind = useCallback(() => {
     openSidebarSearch(selectedTextForSearch());
   }, [openSidebarSearch, selectedTextForSearch]);
@@ -2496,8 +2647,8 @@ export default function App() {
     "app.openQuickOpen": {
       id: "app.openQuickOpen",
       label: t.commandLabels["app.openQuickOpen"],
-      enabled: Boolean(vaultIndex?.files.length),
-      run: () => setPaletteMode("quickOpen"),
+      enabled: Boolean(vaultRoot),
+      run: openQuickOpen,
     },
     "app.openCommandPalette": {
       id: "app.openCommandPalette",
@@ -2582,6 +2733,7 @@ export default function App() {
     handleOpenVault,
     handleSave,
     handleSaveAs,
+    openQuickOpen,
     runEditorCommand,
     runEditCommand,
     handleSelectAll,
@@ -2592,6 +2744,7 @@ export default function App() {
     t,
     theme,
     vaultIndex,
+    vaultRoot,
   ]);
 
   useEffect(() => {
@@ -2723,6 +2876,9 @@ export default function App() {
         restoredVaultRef.current = true;
         restoredStandaloneFileRef.current = true;
         vaultIndexRefreshIdRef.current += 1;
+        vaultIndexFileOverridesRef.current.clear();
+        vaultTagSearchCacheRef.current.clear();
+        vaultTagSearchPendingRef.current.clear();
         setVaultRoot(null);
         setVaultTree(null);
         setVaultError(null);
@@ -2833,6 +2989,7 @@ export default function App() {
       uiScale,
       zoomWithWheel,
       showEditorStatusOverlay,
+      tagFeaturesEnabled,
       showFrontmatterTagRow,
       defaultSaveExt,
       defaultNewNoteName: normalizeDefaultNewNoteName(defaultNewNoteName),
@@ -2859,6 +3016,7 @@ export default function App() {
     rightPanelWidth,
     rightPanelVisible,
     selectedVaultDir,
+    tagFeaturesEnabled,
     showFrontmatterTagRow,
     showImageSourceOnFocus,
     showEditorStatusOverlay,
@@ -3157,7 +3315,7 @@ export default function App() {
       const isDefaultFindKey = key === "Ctrl+F" || key === "Meta+F";
       const isFindCommand = shortcut?.commandId === "edit.find" || (isDefaultFindKey && !shortcut);
 
-      if ((key === "Ctrl+A" || key === "Meta+A") && isCodeMirrorEditorTarget(event.target)) return;
+      if ((key === "Ctrl+A" || key === "Meta+A") && isEditorTarget(event.target)) return;
 
       if ((key === "Ctrl+A" || key === "Meta+A") && selectRichCodeBlockDom(event.target)) {
         event.preventDefault();
@@ -3774,6 +3932,9 @@ export default function App() {
 
   const clearVaultState = useCallback(async (options: { skipUnsavedCheck?: boolean } = {}) => {
     if (!options.skipUnsavedCheck && !await confirmDiscardUnsavedChanges()) return;
+    clearWindowSelectionSoon();
+    editorCommandSelectionRef.current = null;
+    editorCommandCodeMirrorSelectionRef.current = null;
     setVaultRoot(null);
     setVaultTree(null);
     setVaultError(null);
@@ -3784,6 +3945,9 @@ export default function App() {
     setSelectedVaultDir("");
     setLastOpenedFile(null);
     setExpandedDirs(new Set([""]));
+    vaultIndexFileOverridesRef.current.clear();
+    vaultTagSearchCacheRef.current.clear();
+    vaultTagSearchPendingRef.current.clear();
     const emptyNote = createEmptyNote();
     setNotes([emptyNote]);
     setActiveNoteId(emptyNote.id);
@@ -3944,6 +4108,9 @@ export default function App() {
 
   const handleCloseWorkspaceLeaf = useCallback(async () => {
     if (!await confirmDiscardUnsavedChanges()) return;
+    clearWindowSelectionSoon();
+    editorCommandSelectionRef.current = null;
+    editorCommandCodeMirrorSelectionRef.current = null;
     const nextNote = createEmptyNote();
     setNotes([nextNote]);
     setActiveNoteId(nextNote.id);
@@ -4008,7 +4175,7 @@ export default function App() {
         }}
         onCreateNote={() => dispatchCommand("file.new")}
         onOpenVault={() => dispatchCommand("file.openVault")}
-        onOpenQuickOpen={() => setPaletteMode("quickOpen")}
+        onOpenQuickOpen={openQuickOpen}
         onOpenCommandPalette={() => setPaletteMode("command")}
         onOpenSettings={() => {
           setSettingsSection("general");
@@ -4032,9 +4199,11 @@ export default function App() {
           vaultRoot={vaultRoot}
           vaultTree={vaultTree}
           vaultIndex={vaultIndex}
+          vaultIndexStatus={vaultIndexStatus}
           activeIndexedFile={activeIndexedFile}
           vaultError={vaultError}
           vaultRecoveryBlocked={vaultRecoveryBlocked}
+          tagFeaturesEnabled={tagFeaturesEnabled}
           expandedDirs={expandedDirs}
           selectedVaultDir={selectedVaultDir}
           activeFilePath={activeNote.filePath ?? null}
@@ -4052,6 +4221,8 @@ export default function App() {
             });
           }}
           onVaultError={setVaultError}
+          onRequestVaultIndex={requestVaultIndexForSearch}
+          onSearchVaultTags={searchVaultTagsForQuery}
           onVaultDirectoryClick={handleVaultDirectoryClick}
           onRenameVaultEntry={handleRenameVaultEntry}
           onDeleteVaultEntry={handleDeleteVaultEntry}
@@ -4096,6 +4267,7 @@ export default function App() {
             graph={centerGraph}
             activeFilePath={activeNote.filePath ?? null}
             tags={vaultTags}
+            tagFeaturesEnabled={tagFeaturesEnabled}
             selectedTag={centerGraphTag}
             isolatedOnly={centerGraphIsolatedOnly}
             showUnresolved={centerGraphShowUnresolved}
@@ -4159,7 +4331,7 @@ export default function App() {
           vaultIndexStatus={vaultIndexStatus}
           vaultIndexError={vaultIndexError}
           activeNote={activeNote}
-          activeIndexedFile={activeIndexedFile}
+          activeIndexedFile={activeIndexedFileForTagFeatures}
           activeBacklinks={activeBacklinks}
           activeOutgoingLinks={activeOutgoingLinks}
           activeResolvedLinks={activeResolvedLinks}
@@ -4168,6 +4340,7 @@ export default function App() {
           localGraph={localGraph}
           lineCount={lineCount}
           textStats={textStats}
+          tagFeaturesEnabled={tagFeaturesEnabled}
           onTabChange={setKnowledgePanelTab}
           onToggleFloating={() => setKnowledgePanelFloating((floating) => !floating)}
           onFloatingPointerDown={handleFloatingPanelPointerDown}
@@ -4188,7 +4361,7 @@ export default function App() {
           vaultIndexStatus={vaultIndexStatus}
           vaultIndexError={vaultIndexError}
           activeNote={activeNote}
-          activeIndexedFile={activeIndexedFile}
+          activeIndexedFile={activeIndexedFileForTagFeatures}
           activeBacklinks={activeBacklinks}
           activeOutgoingLinks={activeOutgoingLinks}
           activeResolvedLinks={activeResolvedLinks}
@@ -4198,6 +4371,7 @@ export default function App() {
           lineCount={lineCount}
           textStats={textStats}
           floatingPanelPosition={floatingPanelPosition}
+          tagFeaturesEnabled={tagFeaturesEnabled}
           onTabChange={setKnowledgePanelTab}
           onToggleFloating={() => setKnowledgePanelFloating((floating) => !floating)}
           onFloatingPointerDown={handleFloatingPanelPointerDown}
@@ -4214,10 +4388,15 @@ export default function App() {
         title={paletteMode === "command" ? t.palette.commandPalette : t.palette.quickOpen}
         placeholder={paletteMode === "command" ? t.palette.commandPlaceholder : t.palette.quickOpenPlaceholder}
         emptyText={t.palette.noResults}
+        indexingText={t.knowledge.indexing}
         vaultIndex={vaultIndex}
+        vaultIndexStatus={vaultIndexStatus}
         activeIndexedFile={activeIndexedFile}
         commands={commands}
         onClose={() => setPaletteMode(null)}
+        tagFeaturesEnabled={tagFeaturesEnabled}
+        onRequestVaultIndex={requestVaultIndexForSearch}
+        onSearchVaultTags={searchVaultTagsForQuery}
         onOpenFile={(path) => {
           setPaletteMode(null);
           openMarkdownFile(path).catch((error) => {
@@ -4256,6 +4435,7 @@ export default function App() {
         uiScale={uiScale}
         zoomWithWheel={zoomWithWheel}
         showEditorStatusOverlay={showEditorStatusOverlay}
+        tagFeaturesEnabled={tagFeaturesEnabled}
         showFrontmatterTagRow={showFrontmatterTagRow}
         editorLeftGap={editorLeftGap}
         sidebarWidth={sidebarWidth}
@@ -4288,6 +4468,7 @@ export default function App() {
         onUiScaleChange={(value) => setUiScale(clampUiScale(value))}
         onZoomWithWheelChange={setZoomWithWheel}
         onShowEditorStatusOverlayChange={setShowEditorStatusOverlay}
+        onTagFeaturesEnabledChange={setTagFeaturesEnabled}
         onShowFrontmatterTagRowChange={setShowFrontmatterTagRow}
         onEditorLeftGapChange={(value) => setEditorLeftGap(clampEditorLeftGap(value))}
         onSidebarWidthChange={(value) => setSidebarWidth(clampSidebarWidth(value))}
