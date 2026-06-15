@@ -7,7 +7,7 @@ import type { VaultTreeEntry } from "../../app/types";
 import type { Note } from "../../domain/model";
 import type { OutlineItem } from "../../shared/markdown";
 import type { VaultIndex, VaultIndexedFile, VaultSearchResult } from "../../vault";
-import { searchVaultIndex } from "../../vault";
+import { searchVaultIndexAsync } from "../../vault";
 import { Button, IconButton, SegmentedTabs, cx } from "../../shared/ui";
 
 type TextBundle = (typeof appText)[AppLanguage];
@@ -266,19 +266,13 @@ export function VaultSidebar({
   const selectedSearchResultRef = useRef<HTMLButtonElement | null>(null);
   const requestedSearchIndexKeyRef = useRef("");
   const tagSearchRequestIdRef = useRef(0);
+  const [searchResults, setSearchResults] = useState<VaultSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [tagSearchResults, setTagSearchResults] = useState<VaultSearchResult[]>([]);
   const [tagSearchLoading, setTagSearchLoading] = useState(false);
   const normalizedSearchQuery = searchQuery.trim();
   const searchPrefix = ["@", "/", "#", ":"].includes(normalizedSearchQuery[0]) ? normalizedSearchQuery[0] : "";
   const tagSearchDisabled = searchPrefix === "@" && !tagFeaturesEnabled;
-  const searchResults = useMemo(
-    () => tagSearchDisabled ? [] : searchVaultIndex(vaultIndex, searchQuery, {
-      limit: 60,
-      draftFile: activeIndexedFile,
-      includeTags: tagFeaturesEnabled,
-    }),
-    [activeIndexedFile, searchQuery, tagFeaturesEnabled, tagSearchDisabled, vaultIndex],
-  );
   const effectiveSearchQuery = searchPrefix ? normalizedSearchQuery.slice(1).trim() : normalizedSearchQuery;
   const hasSidebarSearchIntent = effectiveSearchQuery.length > 0;
   const effectiveSearchResults = searchResults.length ? searchResults : tagSearchResults;
@@ -355,6 +349,52 @@ export function VaultSidebar({
   }, [effectiveSearchResults.length, searchQuery]);
 
   useEffect(() => {
+    if (tagSearchDisabled || tab !== "search" || !vaultIndex || !hasSidebarSearchIntent) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    let cancelled = false;
+    setSearchLoading(true);
+    const timeoutId = window.setTimeout(() => {
+      searchVaultIndexAsync(vaultIndex, searchQuery, {
+        limit: 60,
+        draftFile: activeIndexedFile,
+        includeTags: tagFeaturesEnabled,
+        signal: controller.signal,
+      })
+        .then((results) => {
+          if (cancelled) return;
+          setSearchResults(results);
+        })
+        .catch((error) => {
+          if (cancelled || controller.signal.aborted) return;
+          console.warn("Vault search failed", error);
+          setSearchResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSearchLoading(false);
+        });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    activeIndexedFile,
+    hasSidebarSearchIntent,
+    searchQuery,
+    tab,
+    tagFeaturesEnabled,
+    tagSearchDisabled,
+    vaultIndex,
+  ]);
+
+  useEffect(() => {
     if (tab !== "search" || !vaultMode || !hasSidebarSearchIntent) {
       requestedSearchIndexKeyRef.current = "";
       return;
@@ -364,7 +404,7 @@ export function VaultSidebar({
 
     const requestKey = `${vaultRoot ?? ""}\n${normalizedSearchQuery}`;
     if (requestedSearchIndexKeyRef.current === requestKey) return;
-    if (vaultIndexStatus === "ready" && vaultIndex && searchResults.length > 0) return;
+    if (vaultIndexStatus === "ready" && vaultIndex) return;
 
     requestedSearchIndexKeyRef.current = requestKey;
     onRequestVaultIndex();
@@ -373,7 +413,6 @@ export function VaultSidebar({
     normalizedSearchQuery,
     onRequestVaultIndex,
     searchPrefix,
-    searchResults.length,
     tab,
     vaultIndex,
     vaultIndexStatus,
@@ -630,7 +669,7 @@ export function VaultSidebar({
                   <span>{highlightedSearchText(result.relativePath, highlightedQuery)}</span>
                   <small>{highlightedSearchText(result.snippet, highlightedQuery)}</small>
                 </button>
-              )) : hasSidebarSearchIntent && vaultMode && (vaultIndexStatus === "indexing" || tagSearchLoading) ? (
+              )) : hasSidebarSearchIntent && vaultMode && (vaultIndexStatus === "indexing" || searchLoading || tagSearchLoading) ? (
                 <p className="muted">{t.knowledge.indexing}</p>
               ) : !hasSidebarSearchIntent ? (
                 !vaultMode ? <p className="muted">{t.knowledge.openVaultForGraph}</p> : null

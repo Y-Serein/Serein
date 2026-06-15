@@ -1,5 +1,5 @@
 import type { MouseEvent as ReactMouseEvent, RefObject } from "react";
-import { Maximize2, Minus, PanelLeft, PanelRight, Search, X } from "lucide-react";
+import { Maximize2, Minus, PanelLeft, PanelRight, X } from "lucide-react";
 import type { CommandDefinition, EditorMode, SaveStatus } from "../../app/types";
 import { APP_NAME } from "../../app/metadata";
 import { getShortcutForCommand, menuGroups } from "../../command/shortcuts";
@@ -98,9 +98,11 @@ export function WindowChrome({
         ref={menuBarRef}
         className="menu-bar command-bar"
         aria-label={t.aria.appMenu}
+        onMouseDown={onChromeMouseDown}
+        onDoubleClick={onChromeDoubleClick}
+        onMouseLeave={() => onOpenMenu(null)}
       >
         <div className="command-bar-left">
-          <Search size={15} aria-hidden="true" />
           <nav className="main-menu" aria-label={t.aria.mainMenu}>
             {menuGroups.map((group) => (
               <div key={group.id} className="menu-root">
@@ -142,7 +144,10 @@ export function WindowChrome({
                             event.stopPropagation();
                           }}
                           onClick={() => {
-                            if (item.commandId) onDispatchCommand(item.commandId);
+                            if (item.commandId) {
+                              onDispatchCommand(item.commandId);
+                              onOpenMenu(null);
+                            }
                           }}
                         >
                           <span>{item.commandId ? (t.commandLabels[item.commandId as keyof typeof t.commandLabels] ?? item.label) : item.label}</span>

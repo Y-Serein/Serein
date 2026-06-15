@@ -1,6 +1,7 @@
 import type { SaveFileExt } from "../app/types";
 
 export type OutlineItem = { level: 1 | 2 | 3 | 4 | 5 | 6; text: string };
+export type MarkdownHeading = OutlineItem & { start: number; end: number };
 
 export type MarkdownProperty = {
   key: string;
@@ -23,13 +24,13 @@ function stripAtxClosing(text: string) {
   return text.replace(/\s+#{1,}\s*$/, "").trim();
 }
 
-function extractMarkdownHeadings(markdown: string) {
-  let offset = 0;
+export function extractMarkdownHeadings(markdown: string): MarkdownHeading[] {
+  let offset = yamlFrontmatterBodyStart(markdown);
   let previousLine: { text: string; start: number; end: number } | null = null;
   let inFence = false;
-  const headings: Array<{ level: 1 | 2 | 3 | 4 | 5 | 6; text: string; start: number; end: number }> = [];
+  const headings: MarkdownHeading[] = [];
 
-  for (const line of markdown.split("\n")) {
+  for (const line of markdown.slice(offset).split("\n")) {
     const lineStart = offset;
     const lineEnd = offset + line.length;
     const fenceMatch = line.match(/^\s{0,3}(```+|~~~+)/);
@@ -77,6 +78,30 @@ function extractMarkdownHeadings(markdown: string) {
   }
 
   return headings;
+}
+
+function yamlFrontmatterBodyStart(markdown: string) {
+  const lines = markdown.split("\n");
+  const leadingBlankLineCount = countLeadingBlankLines(lines);
+  const openingFence = frontmatterFenceMarker(lines[leadingBlankLineCount]?.replace(/^\uFEFF/, "") ?? "");
+  if (!openingFence) return 0;
+
+  for (let index = leadingBlankLineCount + 1; index < lines.length; index += 1) {
+    const closingFence = frontmatterFenceMarker(lines[index]);
+    if (!closingFence) continue;
+
+    const content = lines.slice(leadingBlankLineCount + 1, index).join("\n");
+    const properties = parseYamlProperties(content);
+    if ((leadingBlankLineCount > 0 || openingFence !== "---" || closingFence !== "---") && properties.length === 0) continue;
+
+    let bodyStart = 0;
+    for (let lineIndex = 0; lineIndex <= index; lineIndex += 1) {
+      bodyStart += lines[lineIndex].length + (lineIndex < lines.length - 1 ? 1 : 0);
+    }
+    return bodyStart;
+  }
+
+  return 0;
 }
 
 export function extractOutline(markdown: string) {

@@ -1,6 +1,6 @@
 [package]
 name = "serein-desktop"
-version = "1.0.2"
+version = "1.0.3"
 description = "Serein desktop Markdown writing application"
 authors = ["Serein"]
 edition = "2021"

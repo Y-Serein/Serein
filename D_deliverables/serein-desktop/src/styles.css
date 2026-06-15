@@ -581,7 +581,7 @@ button:active:not(:disabled) {
 
 .menu-popover {
   position: absolute;
-  top: calc(100% + 4px);
+  top: 100%;
   left: 0;
   z-index: 30;
   width: 226px;
@@ -631,14 +631,14 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   min-height: 0;
-  border-right: 1px solid var(--line);
+  border-right: 0;
   background: var(--surface-panel);
-  padding: 9px 5px;
+  padding: 7px 5px;
 }
 
 .ribbon-group {
   display: grid;
-  gap: 7px;
+  gap: 5px;
 }
 
 .ribbon-group.bottom {
@@ -646,12 +646,12 @@ button:disabled {
 }
 
 .ribbon-button {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
   transition:
     background-color var(--motion-fast) var(--ease-standard),
     color var(--motion-fast) var(--ease-standard),
@@ -661,16 +661,16 @@ button:disabled {
 
 .ribbon-button:hover,
 .ribbon-button.active {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: color-mix(in srgb, var(--ink) 86%, var(--accent));
 }
 
 .ribbon-button:hover {
-  transform: translateY(-1px);
+  transform: none;
 }
 
 .ribbon-button.active {
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: none;
 }
 
 .workspace-statusbar {
@@ -827,17 +827,17 @@ button:disabled {
   z-index: 3;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-  gap: 1px;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 42%, transparent);
+  gap: 2px;
+  border-bottom: 0;
   background: var(--surface-panel);
-  padding: 7px 9px;
+  padding: 5px 7px;
 }
 
 .sidebar-tabs button {
-  height: 27px;
+  height: 25px;
   min-width: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 3px;
   background: transparent;
   color: var(--muted);
   overflow: hidden;
@@ -853,12 +853,12 @@ button:disabled {
 
 .sidebar-tabs button.selected,
 .sidebar-tabs button:hover {
-  background: var(--paper-soft);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
   color: var(--ink);
 }
 
 .sidebar-tabs button:hover {
-  transform: translateY(-1px);
+  transform: none;
 }
 
 .sidebar-plugin-panel {
@@ -1305,17 +1305,17 @@ button:disabled {
 }
 
 .workspace-row:hover {
-  background: color-mix(in srgb, var(--paper-soft) 64%, transparent);
-  transform: translateX(1px);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  transform: none;
 }
 
 .workspace-row.selected {
-  background: color-mix(in srgb, var(--paper-soft) 74%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
 .workspace-row.active {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 82%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--accent) 72%, transparent);
 }
 
 .workspace-name {
@@ -1335,8 +1335,12 @@ button:disabled {
 .workspace-disclosure {
   color: color-mix(in srgb, var(--muted) 78%, var(--ink));
   font-size: calc(11px * var(--ui-scale, 1));
-  font-weight: 800;
+  font-weight: 500;
   text-align: center;
+}
+
+.workspace-disclosure svg {
+  stroke-width: 1.55;
 }
 
 .workspace-label {
@@ -1483,7 +1487,7 @@ button:disabled {
   width: 100%;
   min-height: 100%;
   margin: 0;
-  padding: 32px clamp(20px, 3vw, 42px) 72px;
+  padding: 22px clamp(18px, 2.4vw, 34px) 60px;
 }
 
 .workspace-center.split .milkdown .ProseMirror {
@@ -1512,7 +1516,7 @@ button:disabled {
   min-width: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 38%, transparent);
   background: color-mix(in srgb, var(--surface-panel-muted) 72%, var(--surface-panel));
-  padding: 4px 7px 0;
+  padding: 2px 6px 0;
 }
 
 .workspace-tab {
@@ -1521,7 +1525,7 @@ button:disabled {
   align-items: center;
   gap: 7px;
   max-width: min(360px, 60%);
-  height: 28px;
+  height: 24px;
   border: 1px solid transparent;
   border-bottom-color: transparent;
   border-radius: 4px 4px 0 0;
@@ -1566,8 +1570,8 @@ button:disabled {
 
 .workspace-tab .ui-icon-button {
   grid-column: 4;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border: 0;
   background: transparent;
 }
@@ -1842,17 +1846,17 @@ button:disabled {
 .knowledge-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 34%, transparent);
+  gap: 2px;
+  border-bottom: 0;
   background: color-mix(in srgb, var(--surface-panel) 86%, transparent);
-  padding: 7px 9px;
+  padding: 5px 7px;
 }
 
 .knowledge-tabs button {
-  height: 26px;
+  height: 25px;
   min-width: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 3px;
   background: transparent;
   color: var(--muted);
   font-size: calc(12px * var(--ui-scale, 1));
@@ -1864,7 +1868,7 @@ button:disabled {
 
 .knowledge-tabs button.selected,
 .knowledge-tabs button:hover {
-  background: var(--paper-soft);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
   color: var(--ink);
 }
 
@@ -1907,16 +1911,16 @@ button:disabled {
 .markdown-editor,
 .editor-loading {
   display: block;
-  width: calc(100% - var(--editor-left-gap, 48px) - 24px);
+  width: calc(100% - var(--editor-effective-left-gap, var(--editor-left-gap, 48px)) - 18px);
   max-width: none;
   min-height: calc(100vh - var(--chrome-height));
   min-width: 0;
-  margin: 0 24px 0 var(--editor-left-gap, 48px);
+  margin: 0 18px 0 var(--editor-effective-left-gap, var(--editor-left-gap, 48px));
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--ink);
-  padding: 46px clamp(30px, 4vw, 68px) 88px;
+  padding: 24px clamp(24px, 3vw, 48px) 72px;
 }
 
 .markdown-editor {
@@ -1937,23 +1941,23 @@ button:disabled {
 
 .editor-empty-state {
   display: grid;
-  width: calc(100% - var(--editor-left-gap, 48px) - 24px);
+  width: calc(100% - var(--editor-effective-left-gap, var(--editor-left-gap, 48px)) - 18px);
   min-height: calc(100vh - var(--chrome-height));
-  margin: 0 24px 0 var(--editor-left-gap, 48px);
+  margin: 0 18px 0 var(--editor-effective-left-gap, var(--editor-left-gap, 48px));
   place-items: center;
   color: color-mix(in srgb, var(--muted) 86%, transparent);
   font: 15px/1.5 var(--font-ui);
 }
 
 .milkdown {
-  width: calc(100% - var(--editor-left-gap, 48px) - 24px);
+  width: calc(100% - var(--editor-effective-left-gap, var(--editor-left-gap, 48px)) - 18px);
   max-width: none;
   min-height: calc(100vh - var(--chrome-height));
   min-width: 0;
-  margin: 0 24px 0 var(--editor-left-gap, 48px);
+  margin: 0 18px 0 var(--editor-effective-left-gap, var(--editor-left-gap, 48px));
   overflow-wrap: break-word;
   word-break: normal;
-  padding: 46px clamp(30px, 4vw, 68px) 88px;
+  padding: 24px clamp(24px, 3vw, 48px) 72px;
   font: var(--editor-font-size, 16px) / var(--editor-line-height, 1.6) var(--font-doc);
   font-kerning: normal;
   text-rendering: auto;
@@ -1968,7 +1972,7 @@ button:disabled {
 }
 
 .serein-rich-editor.show-frontmatter-row .milkdown .ProseMirror > :first-child {
-  margin-top: 18px;
+  margin-top: 8px;
 }
 
 .serein-rich-editor.show-frontmatter-row .milkdown .ProseMirror > p:first-child:empty:has(+ *),
@@ -1981,15 +1985,15 @@ button:disabled {
 
 .serein-rich-editor.show-frontmatter-row .milkdown .ProseMirror > p:first-child:empty + :is(h1, h2, h3, p),
 .serein-rich-editor.show-frontmatter-row .milkdown .ProseMirror > p:first-child:has(> br.ProseMirror-trailingBreak:only-child) + :is(h1, h2, h3, p) {
-  margin-top: 18px;
+  margin-top: 8px;
 }
 
 .serein-frontmatter-panel {
-  width: calc(100% - var(--editor-left-gap, 48px) - 24px);
+  width: calc(100% - var(--editor-effective-left-gap, var(--editor-left-gap, 48px)) - 18px);
   max-width: none;
   min-width: 0;
-  margin: 0 24px 0 var(--editor-left-gap, 48px);
-  padding: 10px clamp(30px, 4vw, 68px) 0;
+  margin: 0 18px 0 var(--editor-effective-left-gap, var(--editor-left-gap, 48px));
+  padding: 4px clamp(24px, 3vw, 48px) 0;
   color: var(--muted);
   font: calc(12px * var(--ui-scale, 1)) / 1.45 var(--font-ui);
 }
@@ -1999,14 +2003,14 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   width: min(920px, 100%);
-  min-height: 22px;
+  min-height: 18px;
   gap: 8px;
 }
 
 .serein-frontmatter-inline-input {
   min-width: 0;
   width: 100%;
-  height: 22px;
+  height: 18px;
   overflow: hidden;
   appearance: none;
   border: 0;
@@ -2018,7 +2022,7 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
   caret-color: var(--accent);
-  font: 540 calc(13px * var(--ui-scale, 1)) / 22px var(--font-ui);
+  font: 540 calc(12px * var(--ui-scale, 1)) / 18px var(--font-ui);
   font-kerning: normal;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
@@ -2459,7 +2463,7 @@ button:disabled {
   width: 100%;
   max-width: 100%;
   flex-direction: column;
-  margin: 14px 0 10px;
+  margin: 10px 0 6px;
   color: var(--ink);
   font-family: var(--font-mono);
   font-size: var(--editor-code-font-size);
@@ -2467,84 +2471,132 @@ button:disabled {
   font-size-adjust: .52;
 }
 
-.milkdown-code-block .codemirror-host {
+.milkdown-code-block .serein-code-host {
   order: 1;
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
+  margin: 0;
   overflow: hidden;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--accent) 4%, var(--paper-soft));
+  border-radius: 0;
+  background: transparent;
 }
 
-.milkdown-code-block .cm-editor {
+.milkdown-code-block .serein-code-content {
   box-sizing: border-box;
+  display: block;
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  background: transparent;
+  min-height: 28px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--code-surface, var(--paper-soft)) 52%, var(--paper));
   color: var(--ink);
+  caret-color: var(--accent);
   font-family: inherit;
   font-size: inherit;
   font-variant-ligatures: none;
   letter-spacing: 0;
   line-height: inherit;
-}
-
-.milkdown-code-block .cm-editor.cm-focused {
-  outline: 0;
-}
-
-.milkdown-code-block .cm-scroller {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  font-family: inherit;
-}
-
-.milkdown-code-block .cm-content {
-  box-sizing: border-box;
-  max-width: 100%;
-  min-width: 0;
-  min-height: 36px;
-  padding: 13px 18px;
-  caret-color: var(--accent);
+  padding: 8px 11px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   word-break: normal;
-  font-family: inherit;
-  font-size: inherit;
-  line-height: inherit;
+  outline: 0;
 }
 
-.milkdown-code-block .cm-line {
-  padding: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: inherit;
-  line-height: inherit;
-}
-
-.milkdown-code-block .cm-selectionBackground,
-.milkdown-code-block .cm-content ::selection {
+.milkdown-code-block .serein-code-content::selection {
   background: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 
-.milkdown-code-block .cm-activeLine {
-  background: transparent;
+.milkdown-code-block .serein-code-token {
+  font: inherit;
+}
+
+.milkdown-code-block .tok-keyword,
+.milkdown-code-block .tok-operatorKeyword,
+.milkdown-code-block .tok-modifier,
+.milkdown-code-block .tok-atom {
+  color: color-mix(in srgb, var(--accent-cool) 82%, #2456a8);
+}
+
+.milkdown-code-block .tok-string,
+.milkdown-code-block .tok-string2 {
+  color: color-mix(in srgb, #2f8f68 86%, var(--ink));
+}
+
+.milkdown-code-block .tok-number,
+.milkdown-code-block .tok-bool,
+.milkdown-code-block .tok-literal {
+  color: color-mix(in srgb, #8b5fbd 82%, var(--ink));
+}
+
+.milkdown-code-block .tok-comment,
+.milkdown-code-block .tok-meta {
+  color: color-mix(in srgb, var(--muted) 84%, transparent);
+  font-style: italic;
+}
+
+.milkdown-code-block .tok-variableName.tok-definition,
+.milkdown-code-block .tok-variableName2,
+.milkdown-code-block .tok-propertyName,
+.milkdown-code-block .tok-propertyName.tok-definition,
+.milkdown-code-block .tok-labelName,
+.milkdown-code-block .tok-variableName {
+  color: color-mix(in srgb, #9b5f2e 78%, var(--ink));
+}
+
+.milkdown-code-block .tok-typeName,
+.milkdown-code-block .tok-className,
+.milkdown-code-block .tok-namespace,
+.milkdown-code-block .tok-macroName {
+  color: color-mix(in srgb, #287f9f 80%, var(--ink));
+}
+
+.milkdown-code-block .tok-punctuation,
+.milkdown-code-block .tok-operator {
+  color: color-mix(in srgb, var(--muted) 72%, var(--ink));
+}
+
+.milkdown-code-block .tok-heading,
+.milkdown-code-block .tok-strong {
+  color: color-mix(in srgb, var(--accent) 78%, var(--ink));
+  font-weight: 700;
+}
+
+.milkdown-code-block .tok-emphasis {
+  font-style: italic;
+}
+
+.milkdown-code-block .tok-link,
+.milkdown-code-block .tok-url {
+  color: var(--accent-cool);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.milkdown-code-block .tok-inserted {
+  color: color-mix(in srgb, #2f8f68 90%, var(--ink));
+}
+
+.milkdown-code-block .tok-deleted {
+  color: color-mix(in srgb, var(--accent) 76%, var(--ink));
+}
+
+.milkdown-code-block .tok-invalid {
+  color: var(--accent);
+  text-decoration: underline wavy color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
 .milkdown-code-block .tools {
   position: relative;
   order: 2;
   display: flex;
-  width: 180px;
+  width: 156px;
   height: 0;
   align-self: flex-end;
   justify-content: flex-end;
+  margin-right: 18px;
   margin-top: 0;
   opacity: 0;
   overflow: visible;
@@ -2558,9 +2610,10 @@ button:disabled {
 }
 
 .milkdown-code-block:focus-within .tools,
+.milkdown-code-block.serein-code-block-active .tools,
 .milkdown-code-block.selected .tools {
   height: 20px;
-  margin-top: 3px;
+  margin-top: 2px;
   opacity: 1;
   pointer-events: auto;
   visibility: visible;
@@ -2615,39 +2668,13 @@ button:disabled {
   display: none;
 }
 
-.milkdown-code-block .list-wrapper {
+.milkdown-code-block .language-list-wrapper {
   width: 232px;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
   border-radius: 6px;
   background: color-mix(in srgb, var(--paper) 94%, white);
   box-shadow: 0 18px 42px rgb(51 49 38 / 14%), 0 2px 8px rgb(51 49 38 / 8%);
   padding: 7px;
-}
-
-.milkdown-code-block .search-box {
-  display: none;
-}
-
-.milkdown-code-block .search-icon,
-.milkdown-code-block .clear-icon {
-  display: none;
-}
-
-.milkdown-code-block .search-input {
-  width: 100%;
-  height: 30px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  outline: 0;
-  background: var(--paper-soft);
-  color: var(--ink);
-  padding: 0 9px;
-  font: 13px/1.2 var(--font-mono);
-}
-
-.milkdown-code-block .search-input:focus {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .milkdown-code-block .language-list {
@@ -2733,10 +2760,8 @@ button:disabled {
 
 .milkdown blockquote .milkdown-code-block,
 .milkdown blockquote .milkdown-table-block,
-.milkdown blockquote .codemirror-host,
-.milkdown blockquote .cm-editor,
-.milkdown blockquote .cm-scroller,
-.milkdown blockquote .cm-content {
+.milkdown blockquote .serein-code-host,
+.milkdown blockquote .serein-code-content {
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
@@ -4319,6 +4344,8 @@ button:disabled {
 
 /* Final workbench overrides for the feature-sliced shell. */
 .desktop-shell {
+  --titlebar-height: 26px;
+  --topbar-height: 27px;
   --bg: var(--surface-bg);
   --panel: var(--surface-panel);
   --paper: var(--surface-panel);
@@ -4333,6 +4360,7 @@ button:disabled {
   --editor-surface: var(--surface-panel);
   --editor-paper: var(--surface-panel);
   --code-surface: var(--surface-panel-muted);
+  --editor-effective-left-gap: max(18px, calc(var(--editor-left-gap, 42px) - 18px));
   --chrome-height: calc(var(--titlebar-height) + var(--topbar-height));
   gap: var(--rail-gap);
   padding: 0 var(--rail-gap) var(--rail-gap);
@@ -4502,24 +4530,43 @@ button:disabled {
 }
 
 .command-bar {
-  height: calc(var(--topbar-height) - 10px);
-  margin: 4px 10px 6px;
-  padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--line-subtle) 54%, transparent);
-  border-radius: var(--radius-panel);
-  background: var(--surface-panel-raised);
-  box-shadow: 0 8px 22px color-mix(in srgb, var(--surface-bg) 36%, transparent);
+  height: var(--topbar-height);
+  margin: 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .command-bar-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 0;
   min-width: 0;
 }
 
 .command-bar-left > svg {
   color: var(--text-muted);
+}
+
+.menu-status .ui-button {
+  min-height: 21px;
+  border-color: transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text-secondary) 74%, var(--text-primary));
+  padding: 0 6px;
+  font-size: calc(12px * var(--ui-scale, 1));
+  font-weight: 460;
+}
+
+.menu-status .ui-button-icon {
+  color: color-mix(in srgb, var(--text-muted) 86%, transparent);
+}
+
+.menu-status .ui-button-ghost:hover {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 .left-rail,
@@ -4594,17 +4641,25 @@ button:disabled {
   padding: 0;
 }
 
+.workspace-ribbon svg,
+.left-rail svg,
+.right-rail svg,
+.workspace-tab svg,
+.ui-icon-button svg {
+  stroke-width: 1.65;
+}
+
 .ui-button-soft,
 .ui-icon-button {
-  border-color: var(--line-subtle);
-  background: var(--surface-panel-muted);
+  border-color: transparent;
+  background: transparent;
 }
 
 .ui-button-ghost:hover,
 .ui-icon-button:hover,
 .ui-segmented-tabs button:hover,
 .menu-root-button:hover {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 .ui-button-primary {
@@ -4650,7 +4705,7 @@ button:disabled {
 
 .sidebar-tabs,
 .knowledge-tabs {
-  margin: 10px;
+  margin: 6px 8px;
 }
 
 .workspace-root,
@@ -4713,9 +4768,9 @@ button:disabled {
 }
 
 .ribbon-button.new-note-fab {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--line-subtle));
-  background: var(--surface-panel);
-  box-shadow: var(--shadow-soft);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .panel-mode-button {
@@ -4750,13 +4805,13 @@ button:disabled {
 }
 
 .command-bar {
-  border-color: color-mix(in srgb, var(--line-subtle) 34%, transparent);
-  box-shadow: 0 7px 20px color-mix(in srgb, var(--surface-bg) 28%, transparent);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .workspace-ribbon {
   border-right: 0;
-  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--line-subtle) 16%, transparent);
+  box-shadow: none;
 }
 
 .left-rail,
@@ -4767,17 +4822,15 @@ button:disabled {
 }
 
 .left-rail {
-  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--line-subtle) 14%, transparent);
+  box-shadow: none;
 }
 
 .right-rail {
-  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--line-subtle) 14%, transparent);
+  box-shadow: none;
 }
 
 .workspace-center {
-  box-shadow:
-    inset 1px 0 0 color-mix(in srgb, var(--line-subtle) 8%, transparent),
-    inset -1px 0 0 color-mix(in srgb, var(--line-subtle) 8%, transparent);
+  box-shadow: none;
 }
 
 .workspace-tabbar,
@@ -4795,7 +4848,7 @@ button:disabled {
 .workspace-graph-toolbar,
 .index-status,
 .knowledge-summary {
-  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--line-subtle) 14%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--line-subtle) 7%, transparent);
 }
 
 .workspace-statusbar {

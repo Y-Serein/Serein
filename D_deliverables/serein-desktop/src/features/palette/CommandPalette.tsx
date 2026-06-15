@@ -4,7 +4,7 @@ import { Command, FileText, Search } from "lucide-react";
 import type { VaultIndexStatus } from "../../app/store/appStore";
 import type { CommandDefinition } from "../../app/types";
 import type { VaultIndex, VaultIndexedFile, VaultSearchResult } from "../../vault";
-import { searchVaultIndex } from "../../vault";
+import { searchVaultIndexAsync } from "../../vault";
 import { Button, cx } from "../../shared/ui";
 
 type PaletteMode = "quickOpen" | "command";
@@ -65,6 +65,8 @@ export function CommandPalette({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const requestedFileSearchIndexKeyRef = useRef("");
   const tagSearchRequestIdRef = useRef(0);
+  const [fileResults, setFileResults] = useState<VaultSearchResult[]>([]);
+  const [fileSearchLoading, setFileSearchLoading] = useState(false);
   const [tagFileResults, setTagFileResults] = useState<VaultSearchResult[]>([]);
   const [tagSearchLoading, setTagSearchLoading] = useState(false);
 
@@ -74,15 +76,8 @@ export function CommandPalette({
     window.requestAnimationFrame(() => inputRef.current?.focus());
   }, [open, mode]);
 
-  const fileResults = useMemo(() => {
+  const defaultFileResults = useMemo(() => {
     if (mode !== "quickOpen") return [];
-    if (!tagFeaturesEnabled && query.trim().startsWith("@")) return [];
-    const searched = searchVaultIndex(vaultIndex, query, {
-      limit: 60,
-      draftFile: activeIndexedFile,
-      includeTags: tagFeaturesEnabled,
-    });
-    if (query.trim()) return searched;
     return vaultIndex?.files.slice(0, 60).map((file) => ({
       path: file.path,
       relativePath: file.relativePath,
@@ -90,8 +85,63 @@ export function CommandPalette({
       matchType: "path" as const,
       snippet: file.relativePath,
     })) ?? [];
-  }, [activeIndexedFile, mode, query, tagFeaturesEnabled, vaultIndex]);
-  const effectiveFileResults = fileResults.length ? fileResults : tagFileResults;
+  }, [mode, vaultIndex]);
+  const cleanQuickOpenQuery = query.trim();
+  const effectiveFileResults = cleanQuickOpenQuery
+    ? fileResults.length ? fileResults : tagFileResults
+    : defaultFileResults;
+
+  useEffect(() => {
+    if (
+      !open
+      || mode !== "quickOpen"
+      || !cleanQuickOpenQuery
+      || !vaultIndex
+      || (!tagFeaturesEnabled && cleanQuickOpenQuery.startsWith("@"))
+    ) {
+      setFileResults([]);
+      setFileSearchLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    let cancelled = false;
+    setFileSearchLoading(true);
+    const timeoutId = window.setTimeout(() => {
+      searchVaultIndexAsync(vaultIndex, query, {
+        limit: 60,
+        draftFile: activeIndexedFile,
+        includeTags: tagFeaturesEnabled,
+        signal: controller.signal,
+      })
+        .then((results) => {
+          if (cancelled) return;
+          setFileResults(results);
+        })
+        .catch((error) => {
+          if (cancelled || controller.signal.aborted) return;
+          console.warn("Vault quick-open search failed", error);
+          setFileResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setFileSearchLoading(false);
+        });
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    activeIndexedFile,
+    cleanQuickOpenQuery,
+    mode,
+    open,
+    query,
+    tagFeaturesEnabled,
+    vaultIndex,
+  ]);
 
   useEffect(() => {
     const cleanQuery = query.trim();
@@ -104,12 +154,11 @@ export function CommandPalette({
 
     const requestKey = `${vaultIndex?.root ?? ""}\n${cleanQuery}`;
     if (requestedFileSearchIndexKeyRef.current === requestKey) return;
-    if (vaultIndexStatus === "ready" && vaultIndex && fileResults.length > 0) return;
+    if (vaultIndexStatus === "ready" && vaultIndex) return;
 
     requestedFileSearchIndexKeyRef.current = requestKey;
     onRequestVaultIndex();
   }, [
-    fileResults.length,
     mode,
     onRequestVaultIndex,
     open,
@@ -232,7 +281,7 @@ export function CommandPalette({
                   <small>{file.relativePath}</small>
                 </span>
               </button>
-            )) : <p className="palette-empty">{vaultIndexStatus === "indexing" || tagSearchLoading ? indexingText : emptyText}</p>
+            )) : <p className="palette-empty">{vaultIndexStatus === "indexing" || fileSearchLoading || tagSearchLoading ? indexingText : emptyText}</p>
           ) : (
             commandResults.length ? commandResults.map((command, index) => (
               <button

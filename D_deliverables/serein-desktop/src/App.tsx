@@ -1,4 +1,3 @@
-import { EditorView as CodeMirrorView } from "@codemirror/view";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { X } from "lucide-react";
@@ -149,10 +148,6 @@ type ContextMenuState = {
   entry?: VaultTreeEntry;
   filePath?: string;
 };
-type CodeMirrorSelectionRange = {
-  from: number;
-  to: number;
-};
 type SourceLocationTarget = {
   line: number;
   text: string | null;
@@ -167,25 +162,6 @@ function isEditorTarget(target: EventTarget | null) {
 
 function elementFromNode(node: Node | null) {
   return node instanceof Element ? node : node?.parentElement ?? null;
-}
-
-function selectRichCodeBlockDom(target: EventTarget | null) {
-  const selection = window.getSelection();
-  if (!selection) return false;
-  const anchorElement = selection.anchorNode instanceof HTMLElement
-    ? selection.anchorNode
-    : selection.anchorNode?.parentElement;
-  const eventElement = target instanceof HTMLElement ? target : null;
-  const codeBlock = eventElement?.closest<HTMLElement>(".milkdown-code-block .cm-content, .milkdown-code-block, .milkdown pre code, .milkdown pre")
-    ?? anchorElement?.closest<HTMLElement>(".milkdown-code-block .cm-content, .milkdown-code-block, .milkdown pre code, .milkdown pre");
-
-  if (!codeBlock) return false;
-
-  const range = document.createRange();
-  range.selectNodeContents(codeBlock);
-  selection.removeAllRanges();
-  selection.addRange(range);
-  return true;
 }
 
 function isFormTarget(target: EventTarget | null) {
@@ -231,7 +207,7 @@ function clearWindowSelectionSoon() {
 
 function isEditorTextControlTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
-    && Boolean(target.closest(".markdown-editor, .ProseMirror, .milkdown-code-block .cm-editor"));
+    && Boolean(target.closest(".markdown-editor, .ProseMirror"));
 }
 
 function nativeTextControlFromTarget(target: EventTarget | null) {
@@ -438,21 +414,6 @@ function contextMenuPosition(event: { clientX: number; clientY: number }) {
   };
 }
 
-function codeMirrorSelectedText(view: CodeMirrorView) {
-  return view.state.selection.ranges
-    .filter((range) => !range.empty)
-    .map((range) => view.state.sliceDoc(range.from, range.to))
-    .join("\n");
-}
-
-function normalizedCodeMirrorRange(range: CodeMirrorSelectionRange | null | undefined) {
-  if (!range || range.from === range.to) return null;
-  return {
-    from: Math.min(range.from, range.to),
-    to: Math.max(range.from, range.to),
-  };
-}
-
 function shellContextMenuTarget(target: EventTarget | null): ContextMenuState["target"] | null {
   const element = target instanceof Element ? target : null;
   if (!element) return null;
@@ -461,43 +422,6 @@ function shellContextMenuTarget(target: EventTarget | null): ContextMenuState["t
   if (element.closest(".editor-surface, .markdown-editor, .milkdown, .ProseMirror, textarea")) return "editor";
   if (element.closest(".workspace-leaf.markdown-leaf, .workspace-center")) return "workspace";
   return null;
-}
-
-function runCodeMirrorClipboardCommand(
-  codeMirror: HTMLElement,
-  command: "cut" | "copy",
-  storedCodeMirrorRange?: CodeMirrorSelectionRange | null,
-) {
-  const view = CodeMirrorView.findFromDOM(codeMirror);
-  if (!view) return false;
-
-  const capturedRange = normalizedCodeMirrorRange(storedCodeMirrorRange);
-  if (capturedRange) {
-    const text = view.state.sliceDoc(capturedRange.from, capturedRange.to);
-    if (!text) return false;
-    writeDesktopClipboardText(text);
-    if (command === "cut") {
-      view.dispatch({
-        changes: { from: capturedRange.from, to: capturedRange.to, insert: "" },
-        selection: { anchor: capturedRange.from },
-        userEvent: "delete.cut",
-      });
-      view.focus();
-    }
-    return true;
-  }
-
-  const textFromState = codeMirrorSelectedText(view);
-  if (textFromState) {
-    writeDesktopClipboardText(textFromState);
-    if (command === "cut") {
-      view.dispatch(view.state.replaceSelection(""));
-      view.focus();
-    }
-    return true;
-  }
-
-  return false;
 }
 
 function quoteCssFontFamily(fontFamily: string) {
@@ -865,9 +789,6 @@ export default function App() {
   const editorSurfaceRef = useRef<HTMLElement | null>(null);
   const plainEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const lastFocusedNativeTextControlRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
-  const editorCommandFocusRef = useRef<HTMLElement | null>(null);
-  const editorCommandSelectionRef = useRef<Range | null>(null);
-  const editorCommandCodeMirrorSelectionRef = useRef<CodeMirrorSelectionRange | null>(null);
   const saveBeforeContinueRef = useRef<(() => Promise<boolean>) | null>(null);
   const restoredVaultRef = useRef(false);
   const restoredStandaloneFileRef = useRef(false);
@@ -1567,8 +1488,6 @@ export default function App() {
     const useVaultContext = Boolean(vaultRoot) && !options.standalone;
 
     clearWindowSelectionSoon();
-    editorCommandSelectionRef.current = null;
-    editorCommandCodeMirrorSelectionRef.current = null;
 
     setNotes((currentNotes) => {
       if (useVaultContext || options.standalone) return [nextNote];
@@ -2485,31 +2404,6 @@ export default function App() {
       return;
     }
 
-    if (command === "cut" || command === "copy") {
-      const selection = window.getSelection();
-      const anchorElement = elementFromNode(selection?.anchorNode ?? null);
-      const selectedCodeMirror = anchorElement?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
-      const storedCodeMirror = editorCommandFocusRef.current?.closest<HTMLElement>(".milkdown-code-block .cm-editor") ?? null;
-      const codeMirror = selectedCodeMirror ?? (storedCodeMirror && document.contains(storedCodeMirror) ? storedCodeMirror : null);
-      if (codeMirror && editorSurfaceRef.current?.contains(codeMirror)) {
-        const handled = runCodeMirrorClipboardCommand(
-          codeMirror,
-          command,
-          editorCommandCodeMirrorSelectionRef.current,
-        );
-        const currentCodeMirrorSelection = CodeMirrorView.findFromDOM(codeMirror)?.state.selection.main;
-        const hasCodeMirrorSelection = Boolean(
-          editorCommandCodeMirrorSelectionRef.current
-          || (currentCodeMirrorSelection && !currentCodeMirrorSelection.empty),
-        );
-        if (handled || hasCodeMirrorSelection) {
-          editorCommandSelectionRef.current = null;
-          editorCommandCodeMirrorSelectionRef.current = null;
-          return;
-        }
-      }
-    }
-
     runEditorCommand(command);
   }, [editorMode, nativeTextControlForEditCommand, runEditorCommand, runPlainEditCommand]);
 
@@ -2543,18 +2437,6 @@ export default function App() {
     }
 
     const selection = window.getSelection();
-    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const codeMirror = activeElement?.closest<HTMLElement>(".milkdown-code-block .cm-editor")
-      ?? elementFromNode(selection?.anchorNode ?? null)?.closest<HTMLElement>(".milkdown-code-block .cm-editor")
-      ?? null;
-    if (codeMirror && editorSurfaceRef.current?.contains(codeMirror)) {
-      const view = CodeMirrorView.findFromDOM(codeMirror);
-      const range = view?.state.selection.main;
-      if (view && range && !range.empty) {
-        return normalizeSearchSeedText(view.state.sliceDoc(range.from, range.to));
-      }
-    }
-
     if (selectionIsInsideElement(selection, editorSurfaceRef.current)) {
       return normalizeSearchSeedText(selection?.toString());
     }
@@ -2784,33 +2666,12 @@ export default function App() {
 
   const openShellContextMenu = useCallback((event: { clientX: number; clientY: number; target: EventTarget | null }) => {
     setOpenMenuId(null);
-    const eventElement = event.target instanceof Element ? event.target : null;
     const target = shellContextMenuTarget(event.target);
     if (!target) {
       setContextMenu(null);
       return;
     }
 
-    editorCommandFocusRef.current = eventElement?.closest<HTMLElement>(".milkdown-code-block .cm-editor, .markdown-editor, .ProseMirror") ?? null;
-    editorCommandSelectionRef.current = null;
-    editorCommandCodeMirrorSelectionRef.current = null;
-    const selection = window.getSelection();
-    const codeMirror = editorCommandFocusRef.current?.closest<HTMLElement>(".milkdown-code-block .cm-editor")
-      ?? elementFromNode(selection?.anchorNode ?? null)?.closest<HTMLElement>(".milkdown-code-block .cm-editor")
-      ?? null;
-    if (codeMirror && editorSurfaceRef.current?.contains(codeMirror)) {
-      const view = CodeMirrorView.findFromDOM(codeMirror);
-      const range = view?.state.selection.main;
-      if (range && !range.empty) {
-        editorCommandCodeMirrorSelectionRef.current = { from: range.from, to: range.to };
-      }
-    } else if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
-      const range = selection.getRangeAt(0);
-      const rangeElement = elementFromNode(range.commonAncestorContainer);
-      if (rangeElement && editorSurfaceRef.current?.contains(rangeElement)) {
-        editorCommandSelectionRef.current = range.cloneRange();
-      }
-    }
     setContextMenu({
       ...contextMenuPosition(event),
       target,
@@ -2819,8 +2680,6 @@ export default function App() {
 
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
-    editorCommandSelectionRef.current = null;
-    editorCommandCodeMirrorSelectionRef.current = null;
   }, []);
 
   const handleShellContextMenu = useCallback((event: ReactMouseEvent<HTMLElement>) => {
@@ -2833,8 +2692,6 @@ export default function App() {
     event.preventDefault();
     event.stopPropagation();
     setOpenMenuId(null);
-    editorCommandSelectionRef.current = null;
-    editorCommandCodeMirrorSelectionRef.current = null;
     setContextMenu({
       ...contextMenuPosition(event),
       target: entry.kind === "directory" ? "directory" : "file",
@@ -2847,8 +2704,6 @@ export default function App() {
     event.preventDefault();
     event.stopPropagation();
     setOpenMenuId(null);
-    editorCommandSelectionRef.current = null;
-    editorCommandCodeMirrorSelectionRef.current = null;
     setContextMenu({
       ...contextMenuPosition(event),
       target: "document",
@@ -3316,12 +3171,6 @@ export default function App() {
       const isFindCommand = shortcut?.commandId === "edit.find" || (isDefaultFindKey && !shortcut);
 
       if ((key === "Ctrl+A" || key === "Meta+A") && isEditorTarget(event.target)) return;
-
-      if ((key === "Ctrl+A" || key === "Meta+A") && selectRichCodeBlockDom(event.target)) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
 
       if (isFindCommand) {
         event.preventDefault();
@@ -3933,8 +3782,6 @@ export default function App() {
   const clearVaultState = useCallback(async (options: { skipUnsavedCheck?: boolean } = {}) => {
     if (!options.skipUnsavedCheck && !await confirmDiscardUnsavedChanges()) return;
     clearWindowSelectionSoon();
-    editorCommandSelectionRef.current = null;
-    editorCommandCodeMirrorSelectionRef.current = null;
     setVaultRoot(null);
     setVaultTree(null);
     setVaultError(null);
@@ -4109,8 +3956,6 @@ export default function App() {
   const handleCloseWorkspaceLeaf = useCallback(async () => {
     if (!await confirmDiscardUnsavedChanges()) return;
     clearWindowSelectionSoon();
-    editorCommandSelectionRef.current = null;
-    editorCommandCodeMirrorSelectionRef.current = null;
     const nextNote = createEmptyNote();
     setNotes([nextNote]);
     setActiveNoteId(nextNote.id);

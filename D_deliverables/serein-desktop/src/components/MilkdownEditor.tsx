@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { defaultHighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
-import { languages as codeMirrorLanguages } from "@codemirror/language-data";
-import { EditorView as CodeMirrorView } from "@codemirror/view";
+import { LanguageDescription } from "@codemirror/language";
+import type { LanguageSupport } from "@codemirror/language";
+import { languages as codeBlockLanguageData } from "@codemirror/language-data";
+import { classHighlighter, highlightTree } from "@lezer/highlight";
 import { commandsCtx, defaultValueCtx, Editor, editorViewCtx, rootCtx, serializerCtx } from "@milkdown/kit/core";
 import { imageInlineComponent } from "@milkdown/kit/component/image-inline";
 import { tableBlock, tableBlockConfig } from "@milkdown/kit/component/table-block";
@@ -111,7 +112,7 @@ type WikiSuggestState = {
   selectedIndex: number;
 };
 
-const codeBlockLanguages = codeMirrorLanguages.map((language) => {
+const codeBlockLanguages = codeBlockLanguageData.map((language) => {
   if (language.name !== "Shell") return language;
   return LanguageDescription.of({
     name: "bash",
@@ -120,6 +121,64 @@ const codeBlockLanguages = codeMirrorLanguages.map((language) => {
     load: () => language.load(),
   });
 });
+
+const codeBlockLanguageByName = new Map<string, LanguageDescription>();
+codeBlockLanguages.forEach((language) => {
+  codeBlockLanguageByName.set(language.name.toLocaleLowerCase(), language);
+  language.alias.forEach((alias) => {
+    codeBlockLanguageByName.set(alias.toLocaleLowerCase(), language);
+  });
+});
+
+const loadedCodeBlockLanguages = new Map<string, LanguageSupport | null>();
+const loadingCodeBlockLanguages = new Map<string, Promise<LanguageSupport | null>>();
+
+function codeBlockLanguageDescription(languageName: string) {
+  return codeBlockLanguageByName.get(languageName.trim().toLocaleLowerCase()) ?? null;
+}
+
+function codeBlockLanguageKey(languageName: string) {
+  return codeBlockLanguageDescription(languageName)?.name.toLocaleLowerCase() ?? "";
+}
+
+function loadedCodeBlockLanguageSupport(languageName: string) {
+  const key = codeBlockLanguageKey(languageName);
+  if (!key) return null;
+  return loadedCodeBlockLanguages.get(key);
+}
+
+function requestCodeBlockLanguage(languageName: string, onLoaded: () => void) {
+  const language = codeBlockLanguageDescription(languageName);
+  if (!language) return;
+
+  const key = language.name.toLocaleLowerCase();
+  if (loadedCodeBlockLanguages.has(key) || loadingCodeBlockLanguages.has(key)) return;
+
+  const promise = (language.support ? Promise.resolve(language.support) : language.load())
+    .then((support) => support ?? null)
+    .catch((error: unknown) => {
+      console.warn("Failed to load code block language", error);
+      return null;
+    });
+
+  loadingCodeBlockLanguages.set(key, promise);
+  promise.then((support) => {
+    loadingCodeBlockLanguages.delete(key);
+    loadedCodeBlockLanguages.set(key, support);
+    onLoaded();
+  });
+}
+
+function collectCodeBlockLanguages(state: { doc: { descendants: (callback: (node: { type: { name: string }; attrs: Record<string, unknown> }) => boolean | void) => void } }) {
+  const languages = new Set<string>();
+  state.doc.descendants((node) => {
+    if (node.type.name !== "code_block") return true;
+    const languageName = String(node.attrs.language ?? "").trim();
+    if (languageName) languages.add(languageName);
+    return false;
+  });
+  return languages;
+}
 
 const tableButtonIcons = {
   add_row: '<svg viewBox="0 0 16 16"><path d="M3 3.5h10M3 8h10M3 12.5h10M8 5.5v5M5.5 8h5"/></svg>',
@@ -319,25 +378,61 @@ function centerProseMirrorSelection(view: EditorView, scroller: HTMLElement | nu
   }
 }
 
+function codeBlockDomAtSelection(view: EditorView) {
+  const { $from } = view.state.selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type.name !== "code_block") continue;
+    const dom = view.nodeDOM($from.before(depth));
+    return dom instanceof HTMLElement ? dom.closest<HTMLElement>(".milkdown-code-block") : null;
+  }
+  return null;
+}
+
+const richHistoryScrollJobs = new WeakMap<EditorView, { frames: number[]; timers: number[] }>();
+
+function clearRichHistoryScrollJob(view: EditorView) {
+  const job = richHistoryScrollJobs.get(view);
+  if (!job) return;
+  job.frames.forEach((frame) => window.cancelAnimationFrame(frame));
+  job.timers.forEach((timer) => window.clearTimeout(timer));
+  richHistoryScrollJobs.delete(view);
+}
+
 function runRichHistoryWithEditorScroll(view: EditorView, runHistory: () => void) {
   const scroller = editorScrollerForElement(view.dom);
   const scrollTopBefore = scroller?.scrollTop ?? 0;
-  const wasSelectionVisible = proseMirrorSelectionVisible(view, scroller);
 
-  runHistory();
-  if (wasSelectionVisible && scroller) {
+  const stabilizeSelectionScroll = () => {
+    if (!scroller) return;
+
     scroller.scrollTop = scrollTopBefore;
-  } else {
-    centerProseMirrorSelection(view, scroller);
-  }
+    if (proseMirrorSelectionVisible(view, scroller)) return;
 
-  window.requestAnimationFrame(() => {
-    if (wasSelectionVisible && scroller) {
-      scroller.scrollTop = scrollTopBefore;
-    } else {
-      centerProseMirrorSelection(view, scroller);
-    }
+    centerProseMirrorSelection(view, scroller);
+  };
+
+  clearRichHistoryScrollJob(view);
+  runHistory();
+  stabilizeSelectionScroll();
+
+  const frames: number[] = [];
+  const timers: number[] = [];
+  const scheduleFrame = (callback: () => void) => {
+    const frame = window.requestAnimationFrame(callback);
+    frames.push(frame);
+  };
+  const scheduleTimer = (delay: number) => {
+    const timer = window.setTimeout(stabilizeSelectionScroll, delay);
+    timers.push(timer);
+  };
+
+  scheduleFrame(() => {
+    stabilizeSelectionScroll();
+    scheduleFrame(stabilizeSelectionScroll);
   });
+  scheduleTimer(50);
+  scheduleTimer(120);
+  richHistoryScrollJobs.set(view, { frames, timers });
 }
 
 function refreshLocalImagePreviews(root: HTMLElement, imagePreviewMap: Record<string, string>) {
@@ -789,6 +884,71 @@ const wikiLinkDecorations = $prose(() => new Plugin({
   },
 }));
 
+const codeBlockHighlightPluginKey = new PluginKey("SEREIN_CODE_BLOCK_HIGHLIGHT");
+
+function codeBlockHighlightDecorations(state: Parameters<NonNullable<Plugin["props"]["decorations"]>>[0]) {
+  const decorations: Decoration[] = [];
+
+  state.doc.descendants((node, pos) => {
+    if (node.type.name !== "code_block") return true;
+
+    const languageName = String(node.attrs.language ?? "");
+    const support = loadedCodeBlockLanguageSupport(languageName);
+    if (!support) return false;
+
+    const code = node.textContent;
+    if (!code) return false;
+
+    try {
+      const tree = support.language.parser.parse(code);
+      highlightTree(tree, classHighlighter, (from, to, classes) => {
+        if (from >= to) return;
+        decorations.push(Decoration.inline(pos + 1 + from, pos + 1 + to, {
+          class: `serein-code-token ${classes}`,
+        }));
+      });
+    } catch (error) {
+      console.warn("Failed to highlight code block", error);
+    }
+
+    return false;
+  });
+
+  return DecorationSet.create(state.doc, decorations);
+}
+
+const codeBlockSyntaxHighlight = $prose(() => new Plugin({
+  key: codeBlockHighlightPluginKey,
+  state: {
+    init: () => 0,
+    apply: (tr, value: number) => (tr.getMeta(codeBlockHighlightPluginKey) ? value + 1 : value),
+  },
+  props: {
+    decorations: codeBlockHighlightDecorations,
+  },
+  view: (view) => {
+    let destroyed = false;
+    const requestLanguages = () => {
+      collectCodeBlockLanguages(view.state).forEach((languageName) => {
+        requestCodeBlockLanguage(languageName, () => {
+          if (destroyed) return;
+          view.dispatch(view.state.tr.setMeta(codeBlockHighlightPluginKey, true));
+        });
+      });
+    };
+
+    requestLanguages();
+    return {
+      update: (nextView, previousState) => {
+        if (nextView.state.doc !== previousState.doc) requestLanguages();
+      },
+      destroy: () => {
+        destroyed = true;
+      },
+    };
+  },
+}));
+
 function findCodeBlockPos(view: EditorView, codeBlockDom: HTMLElement) {
   let found: number | null = null;
   view.state.doc.descendants((node, pos) => {
@@ -801,6 +961,24 @@ function findCodeBlockPos(view: EditorView, codeBlockDom: HTMLElement) {
     return true;
   });
   return found;
+}
+
+function refreshActiveCodeBlock(view: EditorView, fallbackTarget?: EventTarget | null) {
+  const targetCodeBlock = fallbackTarget instanceof Element
+    ? fallbackTarget.closest<HTMLElement>(".milkdown-code-block")
+    : null;
+  const activeCodeBlock = codeBlockDomAtSelection(view) ?? targetCodeBlock;
+
+  view.dom.querySelectorAll<HTMLElement>(".milkdown-code-block.serein-code-block-active").forEach((node) => {
+    if (node !== activeCodeBlock) node.classList.remove("serein-code-block-active");
+  });
+  activeCodeBlock?.classList.add("serein-code-block-active");
+}
+
+function clearActiveCodeBlock(view: EditorView) {
+  view.dom.querySelectorAll<HTMLElement>(".milkdown-code-block.serein-code-block-active").forEach((node) => {
+    node.classList.remove("serein-code-block-active");
+  });
 }
 
 function findTablePos(view: EditorView, tableBlockDom: HTMLElement) {
@@ -874,25 +1052,58 @@ function updateCodeBlockLanguage(view: EditorView, codeBlockDom: HTMLElement, la
   return true;
 }
 
-function activeCodeMirrorLine(codeBlockDom: HTMLElement) {
-  const cm = CodeMirrorView.findFromDOM(codeBlockDom);
-  if (cm) {
-    const line = cm.state.doc.lineAt(cm.state.selection.main.head);
-    return {
-      isLastLine: line.number === cm.state.doc.lines,
-      isBlank: line.text.trim() === "",
-    };
+function activeCodeBlockLine(view: EditorView, codeBlockDom: HTMLElement) {
+  const pos = findCodeBlockPos(view, codeBlockDom);
+  const selection = view.state.selection;
+  const node = pos === null ? null : view.state.doc.nodeAt(pos);
+  if (pos === null || !node || node.type.name !== "code_block") {
+    return { isLastLine: false, isBlank: false, blankLinesBefore: 0, hasNonBlankBefore: false };
   }
 
-  const activeLine = document.getSelection()?.anchorNode instanceof Node
-    ? document.getSelection()?.anchorNode?.parentElement?.closest<HTMLElement>(".cm-line")
-    : null;
-  const lines = [...codeBlockDom.querySelectorAll<HTMLElement>(".cm-line")];
+  const text = node.textContent;
+  const offset = Math.min(Math.max(selection.head - (pos + 1), 0), text.length);
+  const lineNumber = text.slice(0, offset).split("\n").length;
+  const lines = text.split("\n");
+  const lineText = lines[lineNumber - 1] ?? "";
+  const previousLines = lines.slice(0, lineNumber - 1);
+  let blankLinesBefore = 0;
+  for (let index = previousLines.length - 1; index >= 0; index -= 1) {
+    if (previousLines[index]?.trim()) break;
+    blankLinesBefore += 1;
+  }
 
   return {
-    isLastLine: Boolean(activeLine && lines[lines.length - 1] === activeLine),
-    isBlank: (activeLine?.textContent ?? "").trim() === "",
+    isLastLine: lineNumber === lines.length,
+    isBlank: lineText.trim() === "",
+    blankLinesBefore,
+    hasNonBlankBefore: previousLines.some((line) => Boolean(line.trim())),
   };
+}
+
+function isImeKeyboardEvent(event: KeyboardEvent) {
+  return event.isComposing || event.key === "Process" || event.keyCode === 229;
+}
+
+function shouldExitCodeBlockOnEnter(view: EditorView, codeBlockDom: HTMLElement) {
+  const line = activeCodeBlockLine(view, codeBlockDom);
+  return line.isLastLine && line.isBlank && line.hasNonBlankBefore && line.blankLinesBefore >= 2;
+}
+
+function turnEmptyCodeBlockIntoParagraph(view: EditorView, codeBlockDom: HTMLElement) {
+  const pos = findCodeBlockPos(view, codeBlockDom);
+  const node = pos === null ? null : view.state.doc.nodeAt(pos);
+  const paragraph = view.state.schema.nodes.paragraph;
+  if (pos === null || !node || node.type.name !== "code_block" || !paragraph) return false;
+  if (node.textContent.length > 0) return false;
+
+  const selection = view.state.selection;
+  if (!selection.empty || selection.from !== pos + 1) return false;
+
+  const tr = view.state.tr.replaceWith(pos, pos + node.nodeSize, paragraph.create());
+  tr.setSelection(TextSelection.near(tr.doc.resolve(pos)));
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
 }
 
 function activeTableCell(target: HTMLElement | null) {
@@ -933,11 +1144,14 @@ function isTrailingParagraphAfterTable(view: EditorView) {
 }
 
 function currentLanguageText(button: HTMLButtonElement) {
-  return button.getAttribute("data-language-draft") ?? button.textContent?.trim() ?? "";
+  return button.getAttribute("data-language-draft")
+    ?? button.getAttribute("data-language-value")
+    ?? button.textContent?.trim()
+    ?? "";
 }
 
 function beginLanguageEdit(button: HTMLButtonElement, initialValue?: string) {
-  const value = initialValue ?? button.textContent?.trim() ?? "";
+  const value = initialValue ?? button.getAttribute("data-language-value") ?? button.textContent?.trim() ?? "";
   button.setAttribute("data-language-draft", value);
   button.setAttribute("data-language-fresh", "true");
 }
@@ -979,11 +1193,36 @@ function focusLanguagePickerItem(codeBlockDom: HTMLElement, direction: 1 | -1) {
   return true;
 }
 
+function selectionInsideCodeBlock(view: EditorView, codeBlockDom: HTMLElement) {
+  const pos = findCodeBlockPos(view, codeBlockDom);
+  const node = pos === null ? null : view.state.doc.nodeAt(pos);
+  if (pos === null || !node || node.type.name !== "code_block") return false;
+
+  const from = pos + 1;
+  const to = pos + node.nodeSize - 1;
+  return view.state.selection.from >= from && view.state.selection.to <= to;
+}
+
+function focusCodeBlockContent(view: EditorView, codeBlockDom: HTMLElement) {
+  const pos = findCodeBlockPos(view, codeBlockDom);
+  const node = pos === null ? null : view.state.doc.nodeAt(pos);
+  if (pos === null || !node || node.type.name !== "code_block") {
+    view.focus();
+    return false;
+  }
+
+  view.focus();
+  if (selectionInsideCodeBlock(view, codeBlockDom)) return true;
+
+  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos + 1)).scrollIntoView());
+  return true;
+}
+
 function commitLanguageDraft(view: EditorView, codeBlockDom: HTMLElement, button: HTMLButtonElement) {
   updateCodeBlockLanguage(view, codeBlockDom, currentLanguageText(button));
   finishLanguageEdit(button);
   closeLanguagePicker(button);
-  CodeMirrorView.findFromDOM(codeBlockDom)?.focus();
+  focusCodeBlockContent(view, codeBlockDom);
 }
 
 function focusCodeBlockFromLanguageControl(view: EditorView, codeBlockDom: HTMLElement, button: HTMLButtonElement) {
@@ -991,18 +1230,87 @@ function focusCodeBlockFromLanguageControl(view: EditorView, codeBlockDom: HTMLE
   finishLanguageEdit(button);
   closeLanguagePicker(button);
 
-  const codeMirror = CodeMirrorView.findFromDOM(codeBlockDom);
-  if (!codeMirror) {
-    view.focus();
-    return false;
+  return focusCodeBlockContent(view, codeBlockDom);
+}
+
+function lineStartOffsets(text: string, from: number, to: number) {
+  const first = text.lastIndexOf("\n", Math.max(from - 1, 0)) + 1;
+  const effectiveTo = to > from && text[to - 1] === "\n" ? to - 1 : to;
+  const last = text.lastIndexOf("\n", Math.max(effectiveTo - 1, 0)) + 1;
+  const starts: number[] = [];
+
+  for (let offset = first; offset <= last;) {
+    starts.push(offset);
+    const next = text.indexOf("\n", offset);
+    if (next === -1) break;
+    offset = next + 1;
   }
 
-  const selection = codeMirror.state.selection.main;
-  codeMirror.focus();
-  codeMirror.dispatch({
-    selection: { anchor: selection.anchor, head: selection.head },
-    scrollIntoView: true,
-  });
+  return starts;
+}
+
+function handleCodeBlockTab(view: EditorView, codeBlockDom: HTMLElement, outdent: boolean) {
+  const pos = findCodeBlockPos(view, codeBlockDom);
+  const node = pos === null ? null : view.state.doc.nodeAt(pos);
+  if (pos === null || !node || node.type.name !== "code_block") return false;
+
+  const base = pos + 1;
+  const text = node.textContent;
+  const selection = view.state.selection;
+  const fromOffset = Math.min(Math.max(selection.from - base, 0), text.length);
+  const toOffset = Math.min(Math.max(selection.to - base, 0), text.length);
+  const edits: Array<{ position: number; remove: number; insert: string }> = [];
+
+  if (!outdent && selection.empty) {
+    edits.push({ position: fromOffset, remove: 0, insert: "  " });
+  } else {
+    const starts = lineStartOffsets(text, fromOffset, toOffset);
+    if (!outdent) {
+      starts.forEach((position) => edits.push({ position, remove: 0, insert: "  " }));
+    } else {
+      starts.forEach((position) => {
+        const prefix = text.slice(position, position + 2);
+        const remove = prefix.startsWith("\t")
+          ? 1
+          : prefix.startsWith("  ")
+            ? 2
+            : prefix.startsWith(" ")
+              ? 1
+              : 0;
+        if (remove) edits.push({ position, remove, insert: "" });
+      });
+    }
+  }
+
+  if (!edits.length) return true;
+
+  let nextFrom = fromOffset;
+  let nextTo = toOffset;
+  edits
+    .slice()
+    .sort((left, right) => left.position - right.position)
+    .forEach((edit) => {
+      const delta = edit.insert.length - edit.remove;
+      if (edit.position < fromOffset) nextFrom += delta;
+      if (edit.position < toOffset || edit.position === toOffset) nextTo += delta;
+      if (selection.empty && edit.position === fromOffset) {
+        nextFrom = fromOffset + edit.insert.length;
+        nextTo = nextFrom;
+      }
+    });
+
+  let tr = view.state.tr;
+  edits
+    .slice()
+    .sort((left, right) => right.position - left.position)
+    .forEach((edit) => {
+      tr = edit.insert
+        ? tr.insertText(edit.insert, base + edit.position, base + edit.position + edit.remove)
+        : tr.delete(base + edit.position, base + edit.position + edit.remove);
+    });
+
+  tr = tr.setSelection(TextSelection.create(tr.doc, base + Math.max(nextFrom, 0), base + Math.max(nextTo, 0)));
+  view.dispatch(tr.scrollIntoView());
   return true;
 }
 
@@ -1709,17 +2017,27 @@ function EditorSurface({
         window.cancelAnimationFrame(activeImageFrame);
         activeImageFrame = window.requestAnimationFrame(refreshActiveImageFromSelection);
       };
+      let activeCodeBlockFrame = 0;
+      const scheduleActiveCodeBlockRefresh = (fallbackTarget?: EventTarget | null) => {
+        window.cancelAnimationFrame(activeCodeBlockFrame);
+        activeCodeBlockFrame = window.requestAnimationFrame(() => refreshActiveCodeBlock(view, fallbackTarget));
+      };
       const handleKeyDown = (event: KeyboardEvent) => {
         const target = event.target instanceof HTMLElement ? event.target : null;
-        const codeBlock = target?.closest<HTMLElement>(".milkdown-code-block") ?? null;
-        const isCodeMirrorTarget = Boolean(codeBlock && target?.closest(".cm-editor"));
+        const targetCodeBlock = target?.closest<HTMLElement>(".milkdown-code-block") ?? null;
+        const selectionCodeBlock = codeBlockDomAtSelection(view);
+        const codeBlock = targetCodeBlock ?? selectionCodeBlock;
         const languageButton = target?.closest<HTMLButtonElement>(".language-button") ?? null;
+        const languagePickerItem = target?.closest<HTMLElement>(".language-list-item[data-language]") ?? null;
+        const isCodeBlockControlTarget = Boolean(languageButton || languagePickerItem || target?.closest(".language-picker"));
+        const isCodeBlockContentTarget = Boolean(selectionCodeBlock && !isCodeBlockControlTarget);
         const isPlainArrowDown = event.key === "ArrowDown" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
         const isPlainArrowUp = event.key === "ArrowUp" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
         const isPlainTab = event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey;
         const key = event.key.toLowerCase();
         const isUndo = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && key === "z";
         const isRedo = (event.ctrlKey || event.metaKey) && !event.altKey && (key === "y" || (event.shiftKey && key === "z"));
+        if (codeBlock) scheduleActiveCodeBlockRefresh(event.target);
 
         if (wikiSuggestRef.current && !event.ctrlKey && !event.metaKey && !event.altKey) {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -1747,7 +2065,7 @@ function EditorSurface({
 
         if (
           isPlainArrowUp
-          && !isCodeMirrorTarget
+          && !isCodeBlockContentTarget
           && frontmatterRef.current
           && showFrontmatterTagRowRef.current
           && selectionIsInFirstTextBlock(view)
@@ -1758,9 +2076,36 @@ function EditorSurface({
           return;
         }
 
-        if (isCodeMirrorTarget && codeBlock) {
+        if (isUndo || isRedo) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          runRichHistoryWithEditorScroll(view, () => {
+            commands.call(isUndo ? undoCommand.key : redoCommand.key);
+          });
+          view.focus();
+          return;
+        }
+
+        if (isCodeBlockContentTarget && codeBlock) {
+          if (isImeKeyboardEvent(event)) return;
+
+          if (isPlainTab) {
+            event.preventDefault();
+            event.stopPropagation();
+            handleCodeBlockTab(view, codeBlock, event.shiftKey);
+            return;
+          }
+
+          if (event.key === "Backspace" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+            if (!turnEmptyCodeBlockIntoParagraph(view, codeBlock)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+
           if (isPlainArrowDown) {
-            const { isLastLine } = activeCodeMirrorLine(codeBlock);
+            const { isLastLine } = activeCodeBlockLine(view, codeBlock);
             if (!isLastLine) return;
 
             const languageControl = codeBlock.querySelector<HTMLButtonElement>(".language-button");
@@ -1774,8 +2119,7 @@ function EditorSurface({
           }
 
           if (event.key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-            const { isLastLine, isBlank } = activeCodeMirrorLine(codeBlock);
-            if (!isLastLine || !isBlank) return;
+            if (!shouldExitCodeBlockOnEnter(view, codeBlock)) return;
 
             event.preventDefault();
             event.stopPropagation();
@@ -1783,17 +2127,6 @@ function EditorSurface({
             return;
           }
 
-          return;
-        }
-
-        if ((isUndo || isRedo) && !codeBlock) {
-          event.preventDefault();
-          event.stopPropagation();
-          event.stopImmediatePropagation();
-          runRichHistoryWithEditorScroll(view, () => {
-            commands.call(isUndo ? undoCommand.key : redoCommand.key);
-          });
-          view.focus();
           return;
         }
 
@@ -1895,8 +2228,7 @@ function EditorSurface({
             event.stopPropagation();
             finishLanguageEdit(languageButton);
             closeLanguagePicker(languageButton);
-            const cm = CodeMirrorView.findFromDOM(codeBlock);
-            cm?.focus();
+            focusCodeBlockContent(view, codeBlock);
             return;
           }
 
@@ -1917,27 +2249,6 @@ function EditorSurface({
           }
         }
 
-        const languageSearchInput = target?.closest<HTMLInputElement>(".search-input") ?? null;
-        if (codeBlock && languageSearchInput) {
-          const button = codeBlock.querySelector<HTMLButtonElement>(".language-button");
-          if (!button) return;
-
-          if (isPlainArrowDown) {
-            event.preventDefault();
-            event.stopPropagation();
-            focusLanguagePickerItem(codeBlock, 1);
-            return;
-          }
-
-          if (event.key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-            event.preventDefault();
-            event.stopPropagation();
-            commitLanguageDraft(view, codeBlock, button);
-            return;
-          }
-        }
-
-        const languagePickerItem = target?.closest<HTMLElement>(".language-list-item[data-language]") ?? null;
         if (codeBlock && languagePickerItem) {
           if (isPlainArrowDown) {
             event.preventDefault();
@@ -1957,7 +2268,7 @@ function EditorSurface({
             event.preventDefault();
             event.stopPropagation();
             languagePickerItem.click();
-            CodeMirrorView.findFromDOM(codeBlock)?.focus();
+            focusCodeBlockContent(view, codeBlock);
             return;
           }
         }
@@ -1999,7 +2310,8 @@ function EditorSurface({
       };
       const handleKeyUp = (event: KeyboardEvent) => {
         const target = event.target instanceof HTMLElement ? event.target : null;
-        if (target?.closest(".milkdown-code-block .cm-editor")) return;
+        scheduleActiveCodeBlockRefresh(event.target);
+        if (codeBlockDomAtSelection(view) || target?.closest(".milkdown-code-block")) return;
 
         scheduleActiveTableRefresh();
         scheduleActiveImageRefresh();
@@ -2030,7 +2342,8 @@ function EditorSurface({
       };
       const handleInput = (event: Event) => {
         const target = event.target instanceof HTMLElement ? event.target : null;
-        if (target?.closest(".milkdown-code-block .cm-editor")) return;
+        scheduleActiveCodeBlockRefresh(event.target);
+        if (codeBlockDomAtSelection(view) || target?.closest(".milkdown-code-block")) return;
 
         scheduleActiveTableRefresh();
         scheduleActiveImageRefresh();
@@ -2058,7 +2371,8 @@ function EditorSurface({
         const target = event.target instanceof Element ? event.target : null;
         setActiveTableFromTarget(target);
         setActiveImageFromTarget(target);
-        if (target?.closest(".milkdown-code-block .cm-editor")) {
+        if (target?.closest(".milkdown-code-block")) {
+          scheduleActiveCodeBlockRefresh(event.target);
           closeWikiSuggest();
           return;
         }
@@ -2096,13 +2410,15 @@ function EditorSurface({
         if (event.target instanceof HTMLElement && event.target.closest(".wiki-suggest-popover")) return;
         if (view.dom.contains(event.target as Node)) return;
         setActiveTableBlock(null);
+        clearActiveCodeBlock(view);
         clearActiveImageSource(view.dom);
         closeWikiSuggest();
         if (!convertExpandedLink()) convertTypedMarkdownInline(view);
       };
       const handleFocusOut = (event: FocusEvent) => {
         const target = event.target instanceof HTMLElement ? event.target : null;
-        if (target?.closest(".milkdown-code-block .cm-editor")) return;
+        scheduleActiveCodeBlockRefresh(event.relatedTarget);
+        if (target?.closest(".milkdown-code-block")) return;
 
         window.setTimeout(() => {
           if (!document.activeElement?.closest(".wiki-suggest-popover")) closeWikiSuggest();
@@ -2114,6 +2430,7 @@ function EditorSurface({
         const target = event.target instanceof Element ? event.target : null;
         setActiveTableFromTarget(target);
         setActiveImageFromTarget(target);
+        scheduleActiveCodeBlockRefresh(event.target);
         const languageButton = target?.closest<HTMLButtonElement>(".language-button");
         if (languageButton) {
           finishLanguageEdit(languageButton);
@@ -2140,7 +2457,8 @@ function EditorSurface({
         scheduleLinkExpandRefresh();
       };
       const handleSelectionChange = () => {
-        if (document.activeElement?.closest(".milkdown-code-block .cm-editor")) return;
+        scheduleActiveCodeBlockRefresh();
+        if (codeBlockDomAtSelection(view) || document.activeElement?.closest(".milkdown-code-block")) return;
 
         scheduleLinkExpandRefresh();
         scheduleActiveTableRefresh();
@@ -2161,6 +2479,7 @@ function EditorSurface({
         window.cancelAnimationFrame(linkExpandFrame);
         window.cancelAnimationFrame(activeTableFrame);
         window.cancelAnimationFrame(activeImageFrame);
+        window.cancelAnimationFrame(activeCodeBlockFrame);
         window.cancelAnimationFrame(wikiSuggestFrame);
         view.dom.removeEventListener("keydown", handleKeyDown, { capture: true });
         view.dom.removeEventListener("keyup", handleKeyUp, { capture: true });
@@ -2173,6 +2492,7 @@ function EditorSurface({
         document.removeEventListener("selectionchange", handleSelectionChange);
         document.removeEventListener("pointerdown", handleDocumentPointerDown, { capture: true });
         setActiveTableBlock(null);
+        clearActiveCodeBlock(view);
         clearActiveImageSource(view.dom);
         clearNativeSelection(view);
         if (editorViewRef.current === view) editorViewRef.current = null;
@@ -2188,14 +2508,7 @@ function EditorSurface({
         ctx.set(remarkGFMPlugin.options.key, { singleTilde: false });
         ctx.update(codeBlockConfig.key, (defaultConfig) => ({
           ...defaultConfig,
-          extensions: [
-            syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-          ],
           languages: codeBlockLanguages,
-          expandIcon: "",
-          searchIcon: "",
-          clearSearchIcon: "",
-          searchPlaceholder: "",
           noResultText: "No result",
           copyText: "",
           copyIcon: "",
@@ -2246,7 +2559,7 @@ function EditorSurface({
       })
       .use(commonmark)
       .use(sereinGfm)
-      .use([codeBlockConfig, sereinCodeBlockView])
+      .use([codeBlockConfig, sereinCodeBlockView, codeBlockSyntaxHighlight])
       .use(imageInlineComponent)
       .use(tableBlock)
       .use(upload)

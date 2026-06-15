@@ -2,6 +2,7 @@ import type { VaultIndexFileResponse, VaultIndexResponse } from "../app/types";
 import type { MarkdownProperty } from "../shared/markdown.js";
 import {
   extractFirstLineTitle,
+  extractMarkdownHeadings,
   normalizeFilePath,
   parentVaultDir,
   pathFileName,
@@ -132,6 +133,22 @@ export type VaultSearchResult = {
 };
 
 type VaultSearchMode = VaultSearchResult["matchType"] | "all";
+
+type VaultSearchOptions = {
+  tag?: string | null;
+  limit?: number;
+  draftFile?: VaultIndexedFile | null;
+  includeTags?: boolean;
+};
+
+type VaultSearchContext = {
+  search: { mode: VaultSearchMode; query: string };
+  cleanQuery: string;
+  tag: string | undefined;
+  includeTags: boolean;
+  limit: number;
+  files: VaultIndexedFile[];
+};
 
 export type VaultLinkRewriteReplacement = {
   kind: "wiki" | "markdown";
@@ -494,50 +511,103 @@ export function listVaultTags(index: VaultIndex | null, draftFile?: VaultIndexed
 export function searchVaultIndex(
   index: VaultIndex | null,
   query: string,
-  options: { tag?: string | null; limit?: number; draftFile?: VaultIndexedFile | null; includeTags?: boolean } = {},
+  options: VaultSearchOptions = {},
 ): VaultSearchResult[] {
-  if (!index) return [];
+  const context = createVaultSearchContext(index, query, options);
+  if (!context) return [];
+
+  const results: VaultSearchResult[] = [];
+  for (const file of context.files) {
+    const result = searchVaultFile(file, context);
+    if (!result) continue;
+    results.push(result);
+    if (results.length >= context.limit) break;
+  }
+
+  return results;
+}
+
+export async function searchVaultIndexAsync(
+  index: VaultIndex | null,
+  query: string,
+  options: VaultSearchOptions & { signal?: AbortSignal } = {},
+): Promise<VaultSearchResult[]> {
+  const context = createVaultSearchContext(index, query, options);
+  if (!context) return [];
+
+  const results: VaultSearchResult[] = [];
+  let lastYieldAt = Date.now();
+  for (let fileIndex = 0; fileIndex < context.files.length; fileIndex += 1) {
+    if (options.signal?.aborted) return [];
+
+    const result = searchVaultFile(context.files[fileIndex], context);
+    if (result) {
+      results.push(result);
+      if (results.length >= context.limit) break;
+    }
+
+    const now = Date.now();
+    if (fileIndex % 25 === 24 && now - lastYieldAt >= 8) {
+      await yieldToMainThread();
+      lastYieldAt = Date.now();
+    }
+  }
+
+  return options.signal?.aborted ? [] : results;
+}
+
+function createVaultSearchContext(index: VaultIndex | null, query: string, options: VaultSearchOptions): VaultSearchContext | null {
+  if (!index) return null;
   const search = parseVaultSearchQuery(query);
   const cleanQuery = search.query.toLowerCase();
   const tag = options.tag?.trim();
   const includeTags = options.includeTags ?? true;
   const limit = Math.max(1, Math.min(options.limit ?? SEARCH_RESULT_LIMIT, 200));
 
-  if (!cleanQuery && !tag) return [];
+  if (!cleanQuery && !tag) return null;
 
-  const results: VaultSearchResult[] = [];
-  const files = filesWithDraft(index, options.draftFile);
-  for (const file of files) {
-    if (tag && !file.tags.includes(tag)) continue;
-    const title = file.title.toLowerCase();
-    const relativePath = file.relativePath.toLowerCase();
-    const tags = file.tags.map((item) => item.toLowerCase());
-    const searchableContent = searchContentForFile(file, includeTags);
-    const content = searchableContent.toLowerCase();
-    const matchType: VaultSearchResult["matchType"] | null = cleanQuery
-      ? matchesSearchMode(search.mode, "title") && title.includes(cleanQuery)
-        ? "title"
-        : matchesSearchMode(search.mode, "path") && relativePath.includes(cleanQuery)
-          ? "path"
-          : includeTags && matchesSearchMode(search.mode, "tag") && tags.some((item) => item.includes(cleanQuery))
-            ? "tag"
-            : matchesSearchMode(search.mode, "content") && content.includes(cleanQuery)
-              ? "content"
-              : null
-      : "tag";
+  return {
+    search,
+    cleanQuery,
+    tag,
+    includeTags,
+    limit,
+    files: filesWithDraft(index, options.draftFile),
+  };
+}
 
-    if (!matchType) continue;
-    results.push({
-      path: file.path,
-      relativePath: file.relativePath,
-      title: file.title,
-      matchType,
-      snippet: createSearchSnippet(file, cleanQuery, matchType, searchableContent),
-    });
-    if (results.length >= limit) break;
-  }
+function searchVaultFile(file: VaultIndexedFile, context: VaultSearchContext): VaultSearchResult | null {
+  const { search, cleanQuery, tag, includeTags } = context;
+  if (tag && !file.tags.includes(tag)) return null;
 
-  return results;
+  const title = file.title.toLowerCase();
+  const relativePath = file.relativePath.toLowerCase();
+  const tags = file.tags.map((item) => item.toLowerCase());
+  let searchableContent = "";
+  const matchType: VaultSearchResult["matchType"] | null = cleanQuery
+    ? matchesSearchMode(search.mode, "title") && title.includes(cleanQuery)
+      ? "title"
+      : matchesSearchMode(search.mode, "path") && relativePath.includes(cleanQuery)
+        ? "path"
+        : includeTags && matchesSearchMode(search.mode, "tag") && tags.some((item) => item.includes(cleanQuery))
+          ? "tag"
+          : matchesSearchMode(search.mode, "content") && (searchableContent = searchContentForFile(file, includeTags)).toLowerCase().includes(cleanQuery)
+            ? "content"
+            : null
+    : "tag";
+
+  if (!matchType) return null;
+  return {
+    path: file.path,
+    relativePath: file.relativePath,
+    title: file.title,
+    matchType,
+    snippet: createSearchSnippet(file, cleanQuery, matchType, searchableContent),
+  };
+}
+
+function yieldToMainThread() {
+  return new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
 }
 
 function filesWithDraft(index: VaultIndex, draftFile?: VaultIndexedFile | null) {
@@ -739,18 +809,11 @@ function parseVaultFile(file: VaultIndexFileResponse): ParsedVaultFile {
 }
 
 function extractHeadings(markdown: string): VaultHeading[] {
-  return markdown
-    .split(/\r?\n/)
-    .map((line) => line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/))
-    .filter((match): match is RegExpMatchArray => Boolean(match))
-    .map((match) => {
-      const text = match[2].trim();
-      return {
-        level: match[1].length,
-        text,
-        slug: slugHeading(text),
-      };
-    });
+  return extractMarkdownHeadings(markdown).map(({ level, text }) => ({
+    level,
+    text,
+    slug: slugHeading(text),
+  }));
 }
 
 function activeFrontmatterTags(properties: VaultProperty[]) {

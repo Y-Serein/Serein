@@ -19,6 +19,8 @@ import {
 import {
   composeMarkdownWithFrontmatter,
   createYamlFrontmatter,
+  extractOutline,
+  getHeadingOffsets,
   normalizeWikiLinkEscapes,
   parseYamlFrontmatterProperties,
   setYamlPropertyValue,
@@ -223,6 +225,38 @@ test("extracts YAML properties, aliases, and frontmatter tags", () => {
 
   const home = index.filesByRelativePath.get("home.md");
   assert.equal(home.outgoingLinks[0].targetPath, `${root}/meta.md`);
+});
+
+test("uses shared heading parser for vault index headings", () => {
+  const index = buildVaultIndex(root, {
+    truncated: false,
+    skippedFiles: 0,
+    files: [
+      file("headings.md", [
+        "---",
+        "tags: [work]",
+        "status: active",
+        "---",
+        "# First",
+        "",
+        "```",
+        "## Ignored",
+        "```",
+        "",
+        "Setext Title",
+        "---",
+        "",
+        "### Third ###",
+      ].join("\n")),
+    ],
+  });
+
+  const headings = index.filesByRelativePath.get("headings.md")?.headings;
+  assert.deepEqual(headings, [
+    { level: 1, text: "First", slug: "first" },
+    { level: 2, text: "Setext Title", slug: "setext-title" },
+    { level: 3, text: "Third", slug: "third" },
+  ]);
 });
 
 test("splits and composes YAML frontmatter for rich editor rendering", () => {
@@ -584,6 +618,29 @@ test("matches wiki-style heading aliases when jumping to a heading", () => {
 
   assert.equal(findHeadingIndex(markdown, "test"), 1);
   assert.equal(findHeadingIndex(markdown, "test|显示文字"), 1);
+});
+
+test("ignores YAML frontmatter when extracting outline headings", () => {
+  const markdown = [
+    "---",
+    "tags: [work]",
+    "status: active",
+    "---",
+    "# First",
+    "",
+    "## Second",
+  ].join("\n");
+
+  assert.deepEqual(extractOutline(markdown), [
+    { level: 1, text: "First" },
+    { level: 2, text: "Second" },
+  ]);
+  assert.equal(findHeadingIndex(markdown, "First"), 0);
+  assert.equal(findHeadingIndex(markdown, "Second"), 1);
+
+  const offsets = getHeadingOffsets(markdown);
+  assert.equal(markdown.slice(offsets[0].start, offsets[0].end), "# First");
+  assert.equal(markdown.slice(offsets[1].start, offsets[1].end), "## Second");
 });
 
 test("merges older workspace state with graph defaults", () => {
