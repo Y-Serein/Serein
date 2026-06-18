@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { RefObject } from "react";
 import type { AppDialog, AppDialogResult } from "../../app/store/appStore";
 import { Button } from "../../shared/ui";
@@ -11,6 +12,12 @@ type AppDialogHostProps = {
 };
 
 export function AppDialogHost({ dialog, input, inputRef, onInputChange, onClose }: AppDialogHostProps) {
+  const [remember, setRemember] = useState(false);
+
+  useEffect(() => {
+    setRemember(false);
+  }, [dialog?.id]);
+
   if (!dialog) return null;
 
   return (
@@ -50,13 +57,21 @@ export function AppDialogHost({ dialog, input, inputRef, onInputChange, onClose 
                 type="button"
                 className="app-dialog-choice"
                 autoFocus={index === 0}
-                onClick={() => onClose(choice.value)}
+                onClick={() => {
+                  onClose(dialog.rememberLabel ? { choice: choice.value, remember } : choice.value);
+                }}
               >
                 <span>{choice.label}</span>
                 {choice.description ? <small>{choice.description}</small> : null}
               </button>
             ))}
           </div>
+        ) : null}
+        {dialog.kind === "choice" && dialog.rememberLabel ? (
+          <label className="app-dialog-check">
+            <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
+            {dialog.rememberLabel}
+          </label>
         ) : null}
         <div className="app-dialog-actions">
           {dialog.cancelLabel ? (

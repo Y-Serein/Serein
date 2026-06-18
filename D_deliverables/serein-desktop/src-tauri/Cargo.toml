@@ -1,6 +1,6 @@
 [package]
 name = "serein-desktop"
-version = "1.0.3"
+version = "1.0.4"
 description = "Serein desktop Markdown writing application"
 authors = ["Serein"]
 edition = "2021"
@@ -14,7 +14,7 @@ indexmap = { version = "1.9.3", features = ["std"] }
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

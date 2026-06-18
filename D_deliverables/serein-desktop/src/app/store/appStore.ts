@@ -33,9 +33,15 @@ export type AppDialog = {
   cancelLabel?: string;
   danger?: boolean;
   choices?: Array<{ value: string; label: string; description?: string }>;
+  rememberLabel?: string;
 };
 
-export type AppDialogResult = string | boolean | null;
+export type AppDialogChoiceResult = {
+  choice: string;
+  remember: boolean;
+};
+
+export type AppDialogResult = string | boolean | AppDialogChoiceResult | null;
 
 type AppStoreState = {
   initialSettings: AppSettings;
@@ -88,6 +94,9 @@ type AppStoreState = {
   tagFeaturesEnabled: boolean;
   showFrontmatterTagRow: boolean;
   defaultSaveExt: SaveFileExt;
+  quickNoteSaveExt: SaveFileExt;
+  quickNoteShowInTaskbar: boolean;
+  closeButtonBehavior: AppSettings["closeButtonBehavior"];
   defaultNewNoteName: string;
   imageAttachmentFolder: string;
   imagePathStyle: AppSettings["imagePathStyle"];
@@ -148,6 +157,9 @@ type AppStoreActions = {
   setTagFeaturesEnabled: (value: boolean) => void;
   setShowFrontmatterTagRow: (value: boolean) => void;
   setDefaultSaveExt: (value: SaveFileExt) => void;
+  setQuickNoteSaveExt: (value: SaveFileExt) => void;
+  setQuickNoteShowInTaskbar: (value: boolean) => void;
+  setCloseButtonBehavior: (value: AppSettings["closeButtonBehavior"]) => void;
   setDefaultNewNoteName: (value: Updater<string>) => void;
   setImageAttachmentFolder: (value: Updater<string>) => void;
   setImagePathStyle: (value: AppSettings["imagePathStyle"]) => void;
@@ -224,6 +236,9 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   tagFeaturesEnabled: initialSettings.tagFeaturesEnabled,
   showFrontmatterTagRow: initialSettings.showFrontmatterTagRow,
   defaultSaveExt: initialSettings.defaultSaveExt,
+  quickNoteSaveExt: initialSettings.quickNoteSaveExt,
+  quickNoteShowInTaskbar: initialSettings.quickNoteShowInTaskbar,
+  closeButtonBehavior: initialSettings.closeButtonBehavior,
   defaultNewNoteName: initialSettings.defaultNewNoteName,
   imageAttachmentFolder: initialSettings.imageAttachmentFolder,
   imagePathStyle: initialSettings.imagePathStyle,
@@ -281,6 +296,9 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   setTagFeaturesEnabled: (value) => set({ tagFeaturesEnabled: value }),
   setShowFrontmatterTagRow: (value) => set({ showFrontmatterTagRow: value }),
   setDefaultSaveExt: (value) => set({ defaultSaveExt: value }),
+  setQuickNoteSaveExt: (value) => set({ quickNoteSaveExt: value }),
+  setQuickNoteShowInTaskbar: (value) => set({ quickNoteShowInTaskbar: value }),
+  setCloseButtonBehavior: (value) => set({ closeButtonBehavior: value }),
   setDefaultNewNoteName: (value) => set((state) => ({ defaultNewNoteName: resolveUpdater(state.defaultNewNoteName, value) })),
   setImageAttachmentFolder: (value) => set((state) => ({ imageAttachmentFolder: resolveUpdater(state.imageAttachmentFolder, value) })),
   setImagePathStyle: (value: AppSettings["imagePathStyle"]) => set({ imagePathStyle: value }),

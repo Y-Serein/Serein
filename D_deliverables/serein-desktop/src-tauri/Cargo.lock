@@ -2697,7 +2697,7 @@ dependencies = [
 
 [[package]]
 name = "serein-desktop"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "indexmap 1.9.3",
  "serde",

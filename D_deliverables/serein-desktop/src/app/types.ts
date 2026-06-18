@@ -7,6 +7,7 @@ export type ThemeStyle = "daily" | "eye" | "ink" | "mint" | "v5" | "v6";
 export type UIDensity = "comfortable" | "compact";
 export type SaveFileExt = "md" | "txt";
 export type ImagePathStyle = "relative" | "absolute";
+export type CloseButtonBehavior = "ask" | "tray" | "exit";
 export type SettingsSection = "general" | "files" | "editor" | "image" | "markdown" | "appearance" | "shortcuts";
 export type WindowState = {
   x: number;
@@ -44,6 +45,9 @@ export type AppSettings = {
   tagFeaturesEnabled: boolean;
   showFrontmatterTagRow: boolean;
   defaultSaveExt: SaveFileExt;
+  quickNoteSaveExt: SaveFileExt;
+  quickNoteShowInTaskbar: boolean;
+  closeButtonBehavior: CloseButtonBehavior;
   defaultNewNoteName: string;
   imageAttachmentFolder: string;
   imagePathStyle: ImagePathStyle;

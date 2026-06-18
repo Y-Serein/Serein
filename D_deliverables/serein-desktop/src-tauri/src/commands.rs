@@ -46,8 +46,37 @@ pub fn configure_global_reveal_shortcut(app: AppHandle, shortcut: Option<String>
 }
 
 #[tauri::command]
+pub fn configure_global_quick_note_shortcut(
+    app: AppHandle,
+    shortcut: Option<String>,
+    show_in_taskbar: bool,
+    initial_surface: Option<global_hotkey::QuickNoteInitialSurface>,
+) -> Result<(), String> {
+    global_hotkey::configure_global_quick_note_shortcut(app, shortcut, show_in_taskbar, initial_surface)
+}
+
+#[tauri::command]
+pub fn open_quick_note_window(
+    app: AppHandle,
+    show_in_taskbar: bool,
+    initial_surface: Option<global_hotkey::QuickNoteInitialSurface>,
+) -> Result<String, String> {
+    global_hotkey::open_quick_note_window(&app, show_in_taskbar, initial_surface)
+}
+
+#[tauri::command]
 pub fn reveal_window(app: AppHandle) -> Result<(), String> {
     global_hotkey::reveal_window(&app)
+}
+
+#[tauri::command]
+pub fn hide_main_window_to_tray(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Serein window not found.".to_string())?;
+    window
+        .hide()
+        .map_err(|error| format!("Failed to hide Serein window: {error}"))
 }
 
 #[tauri::command]

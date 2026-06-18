@@ -209,6 +209,13 @@ export function readSettings(): AppSettings {
         ? parsed.showFrontmatterTagRow
         : defaultSettings.showFrontmatterTagRow,
       defaultSaveExt: parsed.defaultSaveExt === "txt" ? "txt" : "md",
+      quickNoteSaveExt: parsed.quickNoteSaveExt === "txt" ? "txt" : "md",
+      quickNoteShowInTaskbar: typeof parsed.quickNoteShowInTaskbar === "boolean"
+        ? parsed.quickNoteShowInTaskbar
+        : defaultSettings.quickNoteShowInTaskbar,
+      closeButtonBehavior: parsed.closeButtonBehavior === "tray" || parsed.closeButtonBehavior === "exit"
+        ? parsed.closeButtonBehavior
+        : defaultSettings.closeButtonBehavior,
       defaultNewNoteName: normalizeDefaultNewNoteName(parsed.defaultNewNoteName),
       imageAttachmentFolder: normalizeImageAttachmentFolder(parsed.imageAttachmentFolder),
       imagePathStyle,

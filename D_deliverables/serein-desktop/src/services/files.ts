@@ -1,10 +1,13 @@
 export {
+  configureGlobalQuickNoteShortcut,
   createVaultEntry,
   configureGlobalRevealShortcut,
   deleteVaultEntry,
   importEditorAsset,
   importEditorAssetFromPath,
+  hideMainWindowToTray,
   initVault,
+  openQuickNoteWindow,
   openExternalTarget,
   readInitialOpenFile,
   readLocalAssetDataUrl,
@@ -18,3 +21,5 @@ export {
   writeMarkdownFile,
   writeVaultWorkspaceState,
 } from "../fs/tauriFs";
+
+export type { QuickNoteInitialSurface } from "../fs/tauriFs";

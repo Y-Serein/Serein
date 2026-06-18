@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { X } from "lucide-react";
 import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   VAULT_DIRECTORY_LIMIT,
@@ -22,6 +23,7 @@ import type {
   VaultTreeEntry,
   VaultWorkspaceState,
   WindowState,
+  CloseButtonBehavior,
 } from "./app/types";
 import {
   defaultShortcutRegistry,
@@ -52,12 +54,15 @@ import { VaultSidebar } from "./features/vault-sidebar/VaultSidebar";
 import { WindowChrome } from "./features/window-chrome/WindowChrome";
 import { readDesktopClipboardText, writeDesktopClipboardText } from "./services/clipboard";
 import {
+  configureGlobalQuickNoteShortcut,
   configureGlobalRevealShortcut,
   createVaultEntry,
   deleteVaultEntry,
+  hideMainWindowToTray,
   importEditorAsset,
   importEditorAssetFromPath,
   initVault,
+  openQuickNoteWindow,
   openExternalTarget,
   readInitialOpenFile,
   readLocalAssetDataUrl,
@@ -71,6 +76,7 @@ import {
   writeMarkdownFile,
   writeVaultWorkspaceState,
 } from "./services/files";
+import type { QuickNoteInitialSurface } from "./services/files";
 import {
   clampEditorLeftGap,
   clampRightPanelWidth,
@@ -140,6 +146,12 @@ const MIN_EDITOR_FONT_SIZE = 14;
 const MAX_EDITOR_FONT_SIZE = 24;
 const MIN_CENTER_GRAPH_WIDTH = 320;
 const MAX_CENTER_GRAPH_WIDTH = 760;
+const QUICK_NOTE_SURFACE_STORAGE_KEY = "serein.quickNote.surface.v1";
+const QUICK_NOTE_MIN_WIDTH = 280;
+const QUICK_NOTE_MIN_HEIGHT = 240;
+const QUICK_NOTE_MAX_WIDTH = 1200;
+const QUICK_NOTE_MAX_HEIGHT = 1200;
+const QUICK_NOTE_MAX_POSITION = 100000;
 type PaletteMode = "quickOpen" | "command";
 type ContextMenuState = {
   x: number;
@@ -312,6 +324,45 @@ function isWindowDragBlockedTarget(target: EventTarget | null) {
 
 function isTauriRuntime() {
   return Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+}
+
+function readQuickNoteInitialSurface(): QuickNoteInitialSurface | null {
+  try {
+    const raw = window.localStorage.getItem(QUICK_NOTE_SURFACE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<QuickNoteInitialSurface>;
+    const hasPosition = parsed.x !== undefined || parsed.y !== undefined;
+    const validPosition = !hasPosition
+      || (
+        typeof parsed.x === "number"
+        && typeof parsed.y === "number"
+        && Number.isFinite(parsed.x)
+        && Number.isFinite(parsed.y)
+        && Math.abs(parsed.x) <= QUICK_NOTE_MAX_POSITION
+        && Math.abs(parsed.y) <= QUICK_NOTE_MAX_POSITION
+      );
+    if (
+      typeof parsed.width !== "number"
+      || typeof parsed.height !== "number"
+      || !Number.isFinite(parsed.width)
+      || !Number.isFinite(parsed.height)
+      || parsed.width < QUICK_NOTE_MIN_WIDTH
+      || parsed.height < QUICK_NOTE_MIN_HEIGHT
+      || parsed.width > QUICK_NOTE_MAX_WIDTH
+      || parsed.height > QUICK_NOTE_MAX_HEIGHT
+      || !validPosition
+    ) {
+      return null;
+    }
+
+    return {
+      width: parsed.width,
+      height: parsed.height,
+      ...(typeof parsed.x === "number" && typeof parsed.y === "number" ? { x: parsed.x, y: parsed.y } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function windowStatesEqual(left: WindowState | null, right: WindowState | null) {
@@ -758,6 +809,12 @@ export default function App() {
     setRichCommand,
     defaultSaveExt,
     setDefaultSaveExt,
+    quickNoteSaveExt,
+    setQuickNoteSaveExt,
+    quickNoteShowInTaskbar,
+    setQuickNoteShowInTaskbar,
+    closeButtonBehavior,
+    setCloseButtonBehavior,
     defaultNewNoteName,
     setDefaultNewNoteName,
     imageAttachmentFolder,
@@ -885,6 +942,11 @@ export default function App() {
   const shortcutConflicts = useMemo(() => findShortcutConflicts(shortcuts), [shortcuts]);
   const globalRevealShortcut = useMemo(() => {
     const shortcut = shortcuts.find((item) => item.id === "app.revealWindow");
+    if (!shortcut?.enabled) return null;
+    return shortcut.currentKeys[0] ?? null;
+  }, [shortcuts]);
+  const globalQuickNoteShortcut = useMemo(() => {
+    const shortcut = shortcuts.find((item) => item.id === "app.openQuickNote");
     if (!shortcut?.enabled) return null;
     return shortcut.currentKeys[0] ?? null;
   }, [shortcuts]);
@@ -1026,6 +1088,54 @@ export default function App() {
       });
     })
   ), [t.dialog.cancel, t.dialog.ok]);
+
+  const showCloseBehaviorDialog = useCallback(() => (
+    new Promise<{ choice: Exclude<CloseButtonBehavior, "ask">; remember: boolean } | null>((resolve) => {
+      appDialogResolverRef.current = (value) => {
+        if (
+          value
+          && typeof value === "object"
+          && "choice" in value
+          && (value.choice === "tray" || value.choice === "exit")
+        ) {
+          resolve({ choice: value.choice, remember: Boolean(value.remember) });
+          return;
+        }
+        resolve(null);
+      };
+      setAppDialog({
+        id: Date.now(),
+        kind: "choice",
+        title: t.prompts.closeBehaviorTitle,
+        message: t.prompts.closeBehaviorMessage,
+        confirmLabel: t.dialog.ok,
+        cancelLabel: t.dialog.cancel,
+        rememberLabel: t.prompts.closeBehaviorRemember,
+        choices: [
+          {
+            value: "tray",
+            label: t.prompts.closeBehaviorTray,
+            description: t.prompts.closeBehaviorTrayDescription,
+          },
+          {
+            value: "exit",
+            label: t.prompts.closeBehaviorExit,
+            description: t.prompts.closeBehaviorExitDescription,
+          },
+        ],
+      });
+    })
+  ), [
+    t.dialog.cancel,
+    t.dialog.ok,
+    t.prompts.closeBehaviorExit,
+    t.prompts.closeBehaviorExitDescription,
+    t.prompts.closeBehaviorMessage,
+    t.prompts.closeBehaviorRemember,
+    t.prompts.closeBehaviorTitle,
+    t.prompts.closeBehaviorTray,
+    t.prompts.closeBehaviorTrayDescription,
+  ]);
 
   const confirmDiscardUnsavedChanges = useCallback(async () => {
     if (!notes.some((note) => note.dirty)) return true;
@@ -1240,18 +1350,72 @@ export default function App() {
     setWindowActionPending("close");
     setOpenMenuId(null);
     setSettingsOpen(false);
+    let attemptedBehavior: CloseButtonBehavior = closeButtonBehavior;
+
+    try {
+      let behavior = closeButtonBehavior;
+      if (behavior === "ask") {
+        const selected = await showCloseBehaviorDialog();
+        if (!selected) return;
+        behavior = selected.choice;
+        attemptedBehavior = selected.choice;
+        if (selected.remember) setCloseButtonBehavior(selected.choice);
+      }
+
+      if (behavior === "tray") {
+        attemptedBehavior = "tray";
+        await flushWindowStateCapture();
+        await windowActionWithTimeout(hideMainWindowToTray(), "window hide to tray");
+        return;
+      }
+
+      attemptedBehavior = "exit";
+      if (!await confirmDiscardUnsavedChanges()) return;
+      await destroyCurrentWindow();
+    } catch (error) {
+      console.warn("Failed to close window", error);
+      setToastMessage(attemptedBehavior === "tray" ? t.status.trayMinimizeFailed : t.status.closeFailed);
+    } finally {
+      windowActionPendingRef.current = false;
+      setWindowActionPending(null);
+    }
+  }, [
+    closeButtonBehavior,
+    confirmDiscardUnsavedChanges,
+    destroyCurrentWindow,
+    flushWindowStateCapture,
+    setCloseButtonBehavior,
+    setOpenMenuId,
+    setSettingsOpen,
+    showCloseBehaviorDialog,
+    t.status.closeFailed,
+    t.status.trayMinimizeFailed,
+  ]);
+
+  const requestExitWindow = useCallback(async () => {
+    if (windowActionPendingRef.current) return;
+    windowActionPendingRef.current = true;
+    setWindowActionPending("close");
+    setOpenMenuId(null);
+    setSettingsOpen(false);
 
     try {
       if (!await confirmDiscardUnsavedChanges()) return;
       await destroyCurrentWindow();
     } catch (error) {
-      console.warn("Failed to close window", error);
+      console.warn("Failed to exit window", error);
       setToastMessage(t.status.closeFailed);
     } finally {
       windowActionPendingRef.current = false;
       setWindowActionPending(null);
     }
-  }, [confirmDiscardUnsavedChanges, destroyCurrentWindow, setOpenMenuId, setSettingsOpen, t.status.closeFailed]);
+  }, [
+    confirmDiscardUnsavedChanges,
+    destroyCurrentWindow,
+    setOpenMenuId,
+    setSettingsOpen,
+    t.status.closeFailed,
+  ]);
 
   const handleWindowAction = useCallback((action: "minimize" | "maximize" | "close") => {
     const run = async () => {
@@ -1281,6 +1445,30 @@ export default function App() {
 
     void run();
   }, [requestCloseWindow]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return undefined;
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    listen("serein-tray-exit-requested", () => {
+      if (!disposed) void requestExitWindow();
+    }).then((nextUnlisten) => {
+      if (disposed) {
+        nextUnlisten();
+        return;
+      }
+      unlisten = nextUnlisten;
+    }).catch((error) => {
+      console.warn("Tray exit listener is only available inside Tauri", error);
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [requestExitWindow]);
 
   const handleChromeDragMouseDown = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0 || event.detail > 1) return;
@@ -2455,6 +2643,19 @@ export default function App() {
     setPaletteMode("quickOpen");
   }, []);
 
+  const openQuickNote = useCallback(() => {
+    if (!isTauriRuntime()) {
+      setToastMessage(t.status.quickNoteDesktopOnly);
+      return;
+    }
+
+    openQuickNoteWindow(quickNoteShowInTaskbar, readQuickNoteInitialSurface())
+      .catch((error) => {
+        console.warn("Failed to open quick note window", error);
+        setToastMessage(`${t.status.quickNoteOpenFailed}: ${readableError(error)}`);
+      });
+  }, [quickNoteShowInTaskbar, t.status.quickNoteDesktopOnly, t.status.quickNoteOpenFailed]);
+
   const requestVaultIndexForSearch = useCallback(() => {
     ensureVaultIndexForSearch({ force: true });
   }, [ensureVaultIndexForSearch]);
@@ -2531,6 +2732,12 @@ export default function App() {
       label: t.commandLabels["app.openQuickOpen"],
       enabled: Boolean(vaultRoot),
       run: openQuickOpen,
+    },
+    "app.openQuickNote": {
+      id: "app.openQuickNote",
+      label: t.commandLabels["app.openQuickNote"],
+      enabled: true,
+      run: openQuickNote,
     },
     "app.openCommandPalette": {
       id: "app.openCommandPalette",
@@ -2616,6 +2823,7 @@ export default function App() {
     handleSave,
     handleSaveAs,
     openQuickOpen,
+    openQuickNote,
     runEditorCommand,
     runEditCommand,
     handleSelectAll,
@@ -2847,6 +3055,9 @@ export default function App() {
       tagFeaturesEnabled,
       showFrontmatterTagRow,
       defaultSaveExt,
+      quickNoteSaveExt,
+      quickNoteShowInTaskbar,
+      closeButtonBehavior,
       defaultNewNoteName: normalizeDefaultNewNoteName(defaultNewNoteName),
       imageAttachmentFolder: normalizeImageAttachmentFolder(imageAttachmentFolder),
       imagePathStyle,
@@ -2856,6 +3067,9 @@ export default function App() {
     defaultEditorModeSetting,
     defaultNewNoteName,
     defaultSaveExt,
+    quickNoteSaveExt,
+    quickNoteShowInTaskbar,
+    closeButtonBehavior,
     editorCjkFont,
     editorFontSize,
     editorLatinFont,
@@ -2920,6 +3134,27 @@ export default function App() {
       disposed = true;
     };
   }, [globalRevealShortcut, t.status.globalShortcutFailed]);
+
+  useEffect(() => {
+    const tauriWindow = window as Window & { __TAURI_INTERNALS__?: unknown };
+    if (!tauriWindow.__TAURI_INTERNALS__) return undefined;
+
+    let disposed = false;
+    const initialSurface = readQuickNoteInitialSurface();
+    configureGlobalQuickNoteShortcut(
+      globalQuickNoteShortcut,
+      quickNoteShowInTaskbar,
+      initialSurface,
+    ).catch((error) => {
+      if (!disposed) {
+        console.warn("Failed to configure global quick note shortcut", error);
+        setToastMessage(t.status.globalShortcutFailed);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [globalQuickNoteShortcut, quickNoteShowInTaskbar, t.status.globalShortcutFailed]);
 
   useEffect(() => {
     if (!toastMessage) return undefined;
@@ -3220,6 +3455,7 @@ export default function App() {
         && shortcut.commandId !== "file.new"
         && shortcut.commandId !== "app.openSettings"
         && shortcut.commandId !== "app.openQuickOpen"
+        && shortcut.commandId !== "app.openQuickNote"
         && shortcut.commandId !== "app.openCommandPalette"
       ) {
         return;
@@ -3227,6 +3463,13 @@ export default function App() {
 
       const command = commands[shortcut.commandId];
       if (!command?.enabled) return;
+
+      if (shortcut.commandId === "app.openQuickNote" && isTauriRuntime()) {
+        event.preventDefault();
+        event.stopPropagation();
+        dispatchCommand(shortcut.commandId);
+        return;
+      }
 
       event.preventDefault();
       dispatchCommand(shortcut.commandId);
@@ -3931,6 +4174,7 @@ export default function App() {
       commandMenuItem("file.open", "folder"),
       commandMenuItem("file.save", "save"),
       commandMenuItem("app.openQuickOpen", "search", { separatorBefore: true }),
+      commandMenuItem("app.openQuickNote", "text"),
       commandMenuItem("view.toggleSidebar", "panel"),
       commandMenuItem("view.toggleRightPanel", "panel"),
       commandMenuItem("app.openSettings", "settings", { separatorBefore: true }),
@@ -4291,6 +4535,9 @@ export default function App() {
         theme={theme}
         uiDensity={uiDensity}
         defaultSaveExt={defaultSaveExt}
+        quickNoteSaveExt={quickNoteSaveExt}
+        quickNoteShowInTaskbar={quickNoteShowInTaskbar}
+        closeButtonBehavior={closeButtonBehavior}
         defaultNewNoteName={defaultNewNoteName}
         imageAttachmentFolder={imageAttachmentFolder}
         imagePathStyle={imagePathStyle}
@@ -4336,6 +4583,9 @@ export default function App() {
         onThemeCommand={dispatchCommand}
         onUiDensityChange={setUiDensity}
         onDefaultSaveExtChange={setDefaultSaveExt}
+        onQuickNoteSaveExtChange={setQuickNoteSaveExt}
+        onQuickNoteShowInTaskbarChange={setQuickNoteShowInTaskbar}
+        onCloseButtonBehaviorChange={setCloseButtonBehavior}
         onDefaultNewNoteNameChange={setDefaultNewNoteName}
         onDefaultNewNoteNameBlur={() => setDefaultNewNoteName((current) => normalizeDefaultNewNoteName(current))}
         onImageAttachmentFolderChange={setImageAttachmentFolder}

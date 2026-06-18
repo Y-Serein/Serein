@@ -64,6 +64,7 @@ export const appText = {
       "file.saveAs": "另存为",
       "file.export": "导出",
       "app.openQuickOpen": "快速打开",
+      "app.openQuickNote": "快捷便签",
       "app.openCommandPalette": "命令面板",
       "app.openSettings": "设置",
       "app.openShortcuts": "快捷键",
@@ -123,6 +124,14 @@ export const appText = {
       openFolderFailed: "无法打开所在文件夹。",
       closeFailed: "关闭窗口失败，请再试一次。",
       globalShortcutFailed: "全局快捷键注册失败，可能已被其他软件占用。",
+      quickNoteSaved: (path: string) => `快捷便签已保存：${path}`,
+      quickNoteNeedsVault: "请选择便签保存位置。",
+      quickNoteEmpty: "快捷便签为空，未保存。",
+      quickNoteSaveFailed: "快捷便签保存失败。",
+      quickNoteOpenFailed: "快捷便签打开失败",
+      quickNoteDesktopOnly: "快捷便签需要桌面版窗口环境。",
+      quickNotePinFailed: "快捷便签固定失败",
+      trayMinimizeFailed: "最小化到托盘失败。",
       externalFileReloaded: "磁盘文件已更新，当前文档已同步。",
       externalFileConflict: "磁盘文件已被其他应用修改。请比较内容后再保存，或另存为新文件。",
       exported: (format: string) => `已导出 ${format}`,
@@ -165,7 +174,42 @@ export const appText = {
       saveAndContinueHint: "先保存当前文档，然后继续刚才的操作。",
       discardChangesAction: "不保存继续",
       discardChangesHint: "丢弃当前未保存修改，并继续刚才的操作。",
-      about: `${APP_NAME} ${APP_VERSION}`,
+      closeBehaviorTitle: "关闭 Serein？",
+      closeBehaviorMessage: "选择按下右上角关闭按钮时的行为。",
+      closeBehaviorTray: "最小化到托盘",
+      closeBehaviorTrayDescription: "隐藏主窗口，Serein 继续在系统托盘运行。",
+      closeBehaviorExit: "关闭 Serein",
+      closeBehaviorExitDescription: "退出主窗口；如果有未保存内容会先提示。",
+      closeBehaviorRemember: "记住当前选择",
+      about: `${APP_NAME} ${APP_VERSION}
+
+当前构建
+- 便签打开更流畅，并保留已调好的创建位置。
+- 便签显示在任务栏，保存时每次选择位置。
+- 便签关闭前确认未保存内容，页眉页脚视觉收敛。
+
+历史更新
+- v1.0.4：快捷便签、托盘关闭和窗口关闭体验优化。
+- v1.0.3：代码块输入、撤销滚动、菜单和侧栏视觉收敛。
+- v1.0.2：剪贴板、Vault 索引、快速打开和链接体验增强。
+- v1.0.1：内置使用手册，补齐 Vault、链接、图谱和标签基础能力。
+- v0.0.6：启动体验优化。
+- v0.0.5：桌面窗口、全局快捷键和基础设置打磨。`,
+    },
+    quickNote: {
+      title: "快捷便签",
+      hint: "记录临时想法，保存时选择位置。",
+      standaloneHint: "保存时选择位置。",
+      placeholder: "写下这一条...",
+      titlePlaceholder: "标题（可选）",
+      unsavedChanges: "有未保存修改。",
+      save: "保存",
+      saving: "保存中",
+      pin: "固定",
+      unpin: "取消固定",
+      pinned: "已固定到屏幕。",
+      unpinned: "已取消固定。",
+      close: "关闭",
     },
     sidebar: {
       files: "文件",
@@ -335,6 +379,12 @@ export const appText = {
       compact: "紧凑",
       files: "文件",
       defaultSaveFormat: "默认保存格式",
+      quickNoteSaveFormat: "便签保存格式",
+      quickNoteShowInTaskbar: "便签窗口显示在任务栏",
+      closeButtonBehavior: "关闭按钮行为",
+      closeButtonAsk: "每次询问",
+      closeButtonTray: "最小化到托盘",
+      closeButtonExit: "直接关闭",
       defaultNewNoteName: "默认新文档名称",
       vaultMetadata: "Vault 元数据",
       vaultRoot: "Vault 根目录",
@@ -427,6 +477,7 @@ export const appText = {
       "file.saveAs": "Save as",
       "file.export": "Export",
       "app.openQuickOpen": "Quick open",
+      "app.openQuickNote": "Quick note",
       "app.openCommandPalette": "Command palette",
       "app.openSettings": "Settings",
       "app.openShortcuts": "Shortcuts",
@@ -486,6 +537,14 @@ export const appText = {
       openFolderFailed: "Failed to open the containing folder.",
       closeFailed: "Failed to close the window. Try again.",
       globalShortcutFailed: "Global shortcut registration failed. Another app may already use it.",
+      quickNoteSaved: (path: string) => `Quick note saved: ${path}`,
+      quickNoteNeedsVault: "Choose where to save the quick note.",
+      quickNoteEmpty: "Quick note is empty; nothing was saved.",
+      quickNoteSaveFailed: "Failed to save quick note.",
+      quickNoteOpenFailed: "Failed to open quick note",
+      quickNoteDesktopOnly: "Quick notes need the desktop window runtime.",
+      quickNotePinFailed: "Failed to pin quick note",
+      trayMinimizeFailed: "Failed to minimize to tray.",
       externalFileReloaded: "The file changed on disk and this note was reloaded.",
       externalFileConflict: "The file changed in another app. Compare before saving, or use Save As.",
       exported: (format: string) => `Exported ${format}`,
@@ -528,7 +587,42 @@ export const appText = {
       saveAndContinueHint: "Save the current note, then continue the previous action.",
       discardChangesAction: "Continue without saving",
       discardChangesHint: "Discard the current unsaved edits and continue the previous action.",
-      about: `${APP_NAME} ${APP_VERSION}`,
+      closeBehaviorTitle: "Close Serein?",
+      closeBehaviorMessage: "Choose what happens when you press the top-right close button.",
+      closeBehaviorTray: "Minimize to tray",
+      closeBehaviorTrayDescription: "Hide the main window and keep Serein running in the system tray.",
+      closeBehaviorExit: "Close Serein",
+      closeBehaviorExitDescription: "Exit the main window; unsaved changes will still be confirmed first.",
+      closeBehaviorRemember: "Remember this choice",
+      about: `${APP_NAME} ${APP_VERSION}
+
+Current build
+- Smoother quick note startup while preserving the tuned placement.
+- Quick notes show in the taskbar and ask where to save every time.
+- Quick notes confirm unsaved edits before closing and align their chrome.
+
+History
+- v1.0.4: quick note, tray exit, and close-window polish.
+- v1.0.3: code block input, undo scrolling, menu, and sidebar polish.
+- v1.0.2: clipboard, vault indexing, quick open, and link improvements.
+- v1.0.1: built-in guide plus vault, links, graph, and tag basics.
+- v0.0.6: startup polish.
+- v0.0.5: desktop window, global shortcut, and settings polish.`,
+    },
+    quickNote: {
+      title: "Quick note",
+      hint: "Capture a thought, then choose where to save it.",
+      standaloneHint: "Choose where to save when you save.",
+      placeholder: "Write this down...",
+      titlePlaceholder: "Title (optional)",
+      unsavedChanges: "Unsaved changes.",
+      save: "Save",
+      saving: "Saving",
+      pin: "Pin",
+      unpin: "Unpin",
+      pinned: "Pinned to screen.",
+      unpinned: "Unpinned.",
+      close: "Close",
     },
     sidebar: {
       files: "Files",
@@ -698,6 +792,12 @@ export const appText = {
       compact: "Compact",
       files: "Files",
       defaultSaveFormat: "Default save format",
+      quickNoteSaveFormat: "Quick note save format",
+      quickNoteShowInTaskbar: "Show quick note windows in the taskbar",
+      closeButtonBehavior: "Close button behavior",
+      closeButtonAsk: "Ask every time",
+      closeButtonTray: "Minimize to tray",
+      closeButtonExit: "Close directly",
       defaultNewNoteName: "Default new note name",
       vaultMetadata: "Vault metadata",
       vaultRoot: "Vault root",

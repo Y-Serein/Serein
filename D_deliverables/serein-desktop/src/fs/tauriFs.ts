@@ -21,6 +21,33 @@ export function configureGlobalRevealShortcut(shortcut: string | null) {
   return invoke<void>("configure_global_reveal_shortcut", { shortcut });
 }
 
+export type QuickNoteInitialSurface = {
+  width: number;
+  height: number;
+  x?: number;
+  y?: number;
+};
+
+export function configureGlobalQuickNoteShortcut(
+  shortcut: string | null,
+  showInTaskbar: boolean,
+  initialSurface?: QuickNoteInitialSurface | null,
+) {
+  return invoke<void>("configure_global_quick_note_shortcut", {
+    shortcut,
+    showInTaskbar,
+    initialSurface: initialSurface ?? null,
+  });
+}
+
+export function openQuickNoteWindow(showInTaskbar: boolean, initialSurface?: QuickNoteInitialSurface | null) {
+  return invoke<string>("open_quick_note_window", { showInTaskbar, initialSurface: initialSurface ?? null });
+}
+
+export function hideMainWindowToTray() {
+  return invoke<void>("hide_main_window_to_tray");
+}
+
 export function revealWindow() {
   return invoke<void>("reveal_window");
 }

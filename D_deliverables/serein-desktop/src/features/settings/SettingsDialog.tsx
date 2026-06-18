@@ -18,7 +18,7 @@ import {
   editorLatinFontOptions,
 } from "../../app/i18n";
 import type { AppLanguage, appText } from "../../app/i18n";
-import type { EditorMode, ImagePathStyle, SaveFileExt, SettingsSection, ThemeStyle, UIDensity } from "../../app/types";
+import type { CloseButtonBehavior, EditorMode, ImagePathStyle, SaveFileExt, SettingsSection, ThemeStyle, UIDensity } from "../../app/types";
 import { shortcutFromEvent, type ShortcutEntry } from "../../command/shortcuts";
 import { normalizeDefaultNewNoteName } from "../../services/settings";
 import { Button } from "../../shared/ui";
@@ -55,6 +55,9 @@ type SettingsDialogProps = {
   theme: ThemeStyle;
   uiDensity: UIDensity;
   defaultSaveExt: SaveFileExt;
+  quickNoteSaveExt: SaveFileExt;
+  quickNoteShowInTaskbar: boolean;
+  closeButtonBehavior: CloseButtonBehavior;
   defaultNewNoteName: string;
   imageAttachmentFolder: string;
   imagePathStyle: ImagePathStyle;
@@ -90,6 +93,9 @@ type SettingsDialogProps = {
   onThemeCommand: (commandId: string) => void;
   onUiDensityChange: (density: UIDensity) => void;
   onDefaultSaveExtChange: (value: SaveFileExt) => void;
+  onQuickNoteSaveExtChange: (value: SaveFileExt) => void;
+  onQuickNoteShowInTaskbarChange: (value: boolean) => void;
+  onCloseButtonBehaviorChange: (value: CloseButtonBehavior) => void;
   onDefaultNewNoteNameChange: (value: string) => void;
   onDefaultNewNoteNameBlur: () => void;
   onImageAttachmentFolderChange: (value: string) => void;
@@ -128,6 +134,9 @@ export function SettingsDialog({
   theme,
   uiDensity,
   defaultSaveExt,
+  quickNoteSaveExt,
+  quickNoteShowInTaskbar,
+  closeButtonBehavior,
   defaultNewNoteName,
   imageAttachmentFolder,
   imagePathStyle,
@@ -163,6 +172,9 @@ export function SettingsDialog({
   onThemeCommand,
   onUiDensityChange,
   onDefaultSaveExtChange,
+  onQuickNoteSaveExtChange,
+  onQuickNoteShowInTaskbarChange,
+  onCloseButtonBehaviorChange,
   onDefaultNewNoteNameChange,
   onDefaultNewNoteNameBlur,
   onImageAttachmentFolderChange,
@@ -494,6 +506,25 @@ export function SettingsDialog({
                   <select value={defaultSaveExt} onChange={(event) => onDefaultSaveExtChange(event.target.value as SaveFileExt)}>
                     <option value="md">.md</option>
                     <option value="txt">.txt</option>
+                  </select>
+                </label>
+                <label className="settings-field">
+                  <span>{t.settings.quickNoteSaveFormat}</span>
+                  <select value={quickNoteSaveExt} onChange={(event) => onQuickNoteSaveExtChange(event.target.value as SaveFileExt)}>
+                    <option value="md">.md</option>
+                    <option value="txt">.txt</option>
+                  </select>
+                </label>
+                <label className="settings-check">
+                  <input type="checkbox" checked={quickNoteShowInTaskbar} onChange={(event) => onQuickNoteShowInTaskbarChange(event.target.checked)} />
+                  {t.settings.quickNoteShowInTaskbar}
+                </label>
+                <label className="settings-field">
+                  <span>{t.settings.closeButtonBehavior}</span>
+                  <select value={closeButtonBehavior} onChange={(event) => onCloseButtonBehaviorChange(event.target.value as CloseButtonBehavior)}>
+                    <option value="ask">{t.settings.closeButtonAsk}</option>
+                    <option value="tray">{t.settings.closeButtonTray}</option>
+                    <option value="exit">{t.settings.closeButtonExit}</option>
                   </select>
                 </label>
                 <label className="settings-field">

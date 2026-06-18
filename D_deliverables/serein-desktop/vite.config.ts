@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const CORE_CODEMIRROR_PACKAGES = [
   "@codemirror/autocomplete",
@@ -68,6 +69,10 @@ export default defineConfig({
   envPrefix: ["VITE_", "TAURI_"],
   build: {
     rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        quickNote: fileURLToPath(new URL("./quick-note.html", import.meta.url)),
+      },
       output: {
         manualChunks(id) {
           if (!id.includes("/node_modules/")) return undefined;

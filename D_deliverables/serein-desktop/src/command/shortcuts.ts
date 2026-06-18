@@ -34,6 +34,10 @@ export type MenuGroup = {
   items: MenuItem[];
 };
 
+const QUICK_NOTE_SHORTCUT_ID = "app.openQuickNote";
+const LEGACY_QUICK_NOTE_DEFAULT_KEY = "Alt+Q";
+const QUICK_NOTE_DEFAULT_KEY = "Alt+W";
+
 let lastShortcutsJson: string | null = null;
 
 export const defaultShortcutRegistry: ShortcutEntry[] = [
@@ -44,6 +48,7 @@ export const defaultShortcutRegistry: ShortcutEntry[] = [
   { id: "file.saveAs", label: "Save as", category: "File", defaultKeys: ["Ctrl+Shift+S"], currentKeys: ["Ctrl+Shift+S"], commandId: "file.saveAs", editable: true, enabled: true },
   { id: "file.export", label: "Export", category: "File", defaultKeys: ["Ctrl+Shift+E"], currentKeys: ["Ctrl+Shift+E"], commandId: "file.export", editable: true, enabled: true },
   { id: "app.openQuickOpen", label: "Quick open", category: "App", defaultKeys: ["Ctrl+P"], currentKeys: ["Ctrl+P"], commandId: "app.openQuickOpen", editable: true, enabled: true },
+  { id: QUICK_NOTE_SHORTCUT_ID, label: "Quick note", category: "App", defaultKeys: [QUICK_NOTE_DEFAULT_KEY], currentKeys: [QUICK_NOTE_DEFAULT_KEY], commandId: "app.openQuickNote", editable: true, enabled: true },
   { id: "app.openCommandPalette", label: "Command palette", category: "App", defaultKeys: ["Ctrl+Shift+P"], currentKeys: ["Ctrl+Shift+P"], commandId: "app.openCommandPalette", editable: true, enabled: true },
   { id: "app.openSettings", label: "Open settings", category: "App", defaultKeys: ["Ctrl+,"], currentKeys: ["Ctrl+,"], commandId: "app.openSettings", editable: true, enabled: true },
   { id: "app.revealWindow", label: "Show Serein", category: "App", defaultKeys: ["Alt+S"], currentKeys: ["Alt+S"], commandId: "app.revealWindow", editable: true, enabled: true },
@@ -68,6 +73,7 @@ export const menuGroups: MenuGroup[] = [
       { label: "打开文件", commandId: "file.open" },
       { label: "打开 Vault", commandId: "file.openVault" },
       { label: "快速打开", commandId: "app.openQuickOpen" },
+      { label: "快捷便签", commandId: "app.openQuickNote" },
       { label: "保存", commandId: "file.save" },
       { label: "另存为", commandId: "file.saveAs" },
       { label: "导出", commandId: "file.export" },
@@ -203,11 +209,16 @@ export function readShortcuts(): ShortcutEntry[] {
       });
       if (!saved) return shortcut;
 
+      const currentKeys = Array.isArray(saved.currentKeys)
+        ? saved.currentKeys.map((key) => normalizeShortcutText(key)).filter(Boolean)
+        : shortcut.currentKeys;
+      const shouldMigrateQuickNoteDefault = shortcut.id === QUICK_NOTE_SHORTCUT_ID
+        && currentKeys.length === 1
+        && currentKeys[0] === LEGACY_QUICK_NOTE_DEFAULT_KEY;
+
       return {
         ...shortcut,
-        currentKeys: Array.isArray(saved.currentKeys)
-          ? saved.currentKeys.map((key) => normalizeShortcutText(key)).filter(Boolean)
-          : shortcut.currentKeys,
+        currentKeys: shouldMigrateQuickNoteDefault ? shortcut.currentKeys : currentKeys,
         enabled: typeof saved.enabled === "boolean" ? saved.enabled : shortcut.enabled,
       };
     });

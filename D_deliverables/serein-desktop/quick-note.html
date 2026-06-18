@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#eef8f3" />
+    <title>Serein Quick Note</title>
+    <style>
+      :root {
+        background: #eef8f3;
+      }
+
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #eef8f3;
+      }
+
+      .quick-note-boot-shell {
+        display: grid;
+        grid-template-rows: 30px minmax(0, 1fr) 26px;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #eef8f3;
+        color: #16302d;
+        font-family: "Avenir Next", "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+      }
+
+      .quick-note-boot-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid rgb(169 203 193 / 58%);
+        padding-left: 9px;
+      }
+
+      .quick-note-boot-brand {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .quick-note-boot-mark {
+        display: grid;
+        place-items: center;
+        width: 17px;
+        height: 17px;
+        border-radius: 4px;
+        background: rgb(47 150 152 / 14%);
+        color: #2f9698;
+        font-size: 9px;
+        font-weight: 700;
+      }
+
+      .quick-note-boot-controls {
+        display: flex;
+        align-self: stretch;
+      }
+
+      .quick-note-boot-controls span {
+        width: 32px;
+      }
+
+      .quick-note-boot-editor {
+        display: grid;
+        grid-template-rows: 38px minmax(0, 1fr);
+        min-height: 0;
+      }
+
+      .quick-note-boot-input {
+        border-bottom: 1px solid rgb(169 203 193 / 48%);
+      }
+
+      .quick-note-boot-lines {
+        padding: 11px 12px;
+      }
+
+      .quick-note-boot-line {
+        height: 10px;
+        max-width: 72%;
+        margin-bottom: 10px;
+        border-radius: 999px;
+        background: rgb(85 117 111 / 12%);
+      }
+
+      .quick-note-boot-line:nth-child(2) {
+        max-width: 58%;
+      }
+
+      .quick-note-boot-status {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        border-top: 1px solid rgb(169 203 193 / 32%);
+        color: rgb(85 117 111 / 74%);
+        font-size: 10.5px;
+        padding: 0 9px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <section class="quick-note-boot-shell" aria-label="Serein Quick Note">
+        <header class="quick-note-boot-title">
+          <div class="quick-note-boot-brand">
+            <span class="quick-note-boot-mark">Sy</span>
+            <span>快捷便签</span>
+          </div>
+          <div class="quick-note-boot-controls" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </header>
+        <main class="quick-note-boot-editor">
+          <div class="quick-note-boot-input"></div>
+          <div class="quick-note-boot-lines">
+            <div class="quick-note-boot-line"></div>
+            <div class="quick-note-boot-line"></div>
+          </div>
+        </main>
+        <footer class="quick-note-boot-status">保存时选择位置。</footer>
+      </section>
+    </div>
+    <script type="module" src="/src/quick-note.tsx"></script>
+  </body>
+</html>
