@@ -511,16 +511,27 @@ export function QuickNoteWindow() {
     await currentWindow.setAlwaysOnTop(false);
 
     const focusQuickNote = (shouldLog = false) => {
+      currentWindow.unminimize().catch((error) => {
+        if (shouldLog) console.warn("Failed to unminimize quick note window", error);
+      });
       currentWindow.setFocus().catch((error) => {
         if (shouldLog) console.warn("Failed to focus quick note window", error);
       });
-      titleRef.current?.focus();
+      titleRef.current?.focus({ preventScroll: true });
     };
 
     await currentWindow.show();
     focusQuickNote(true);
-    window.requestAnimationFrame(() => focusQuickNote());
-    window.setTimeout(() => focusQuickNote(), 90);
+    window.requestAnimationFrame(() => {
+      currentWindow.show().catch(() => undefined);
+      focusQuickNote();
+    });
+    [90, 220, 420].forEach((delay) => {
+      window.setTimeout(() => {
+        currentWindow.show().catch(() => undefined);
+        focusQuickNote();
+      }, delay);
+    });
     window.setTimeout(() => {
       surfacePersistenceReadyRef.current = true;
     }, QUICK_NOTE_SURFACE_PERSIST_READY_DELAY_MS);
