@@ -5,6 +5,7 @@ import type { LeftPanelTab, VaultIndexStatus } from "../../app/store/appStore";
 import type { AppLanguage, appText } from "../../app/i18n";
 import type { VaultTreeEntry } from "../../app/types";
 import type { Note } from "../../domain/model";
+import { normalizeFilePath } from "../../shared/markdown";
 import type { OutlineItem } from "../../shared/markdown";
 import type { VaultIndex, VaultIndexedFile, VaultSearchResult } from "../../vault";
 import { searchVaultIndexAsync } from "../../vault";
@@ -34,7 +35,8 @@ type VaultSidebarProps = {
   searchFocusQuery: string;
   onTabChange: (tab: LeftPanelTab) => void;
   onDispatchCommand: (commandId: string) => void;
-  onOpenMarkdownFile: (path: string) => void;
+  onOpenMarkdownFile: (path: string, options?: { targetLine?: number | null; targetText?: string | null }) => void;
+  onOpenCurrentSourceLocation: (line: number, text?: string | null) => void;
   onVaultError: (message: string | null) => void;
   onRequestVaultIndex: () => void;
   onSearchVaultTags: (query: string) => Promise<VaultSearchResult[]>;
@@ -117,6 +119,62 @@ function highlightedSearchText(text: string, query: string): ReactNode {
   if (!parts.length) return text;
   if (cursor < text.length) parts.push(text.slice(cursor));
   return parts;
+}
+
+type SidebarSearchResult = Omit<VaultSearchResult, "path"> & {
+  path: string | null;
+  line?: number;
+  matchedText?: string;
+  resultKey: string;
+};
+
+function searchPrefixFromQuery(query: string) {
+  const prefix = query.trim()[0] ?? "";
+  return ["@", "/", "#", ":", "："].includes(prefix) ? prefix : "";
+}
+
+function localSearchSnippet(line: string, matchIndex: number, matchLength: number) {
+  const start = Math.max(0, matchIndex - 48);
+  const end = Math.min(line.length, matchIndex + matchLength + 72);
+  const snippet = line.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "..." : ""}${snippet}${end < line.length ? "..." : ""}`;
+}
+
+function searchCurrentDocument(note: Note, query: string, limit = 80): SidebarSearchResult[] {
+  const cleanQuery = normalizeSearchHistoryItem(query);
+  if (!cleanQuery) return [];
+
+  const lowerQuery = cleanQuery.toLocaleLowerCase();
+  const lines = note.markdown.split(/\r?\n/);
+  const title = note.title || note.fileName || "Current document";
+  const relativePath = note.fileName ?? title;
+  const results: SidebarSearchResult[] = [];
+
+  for (let index = 0; index < lines.length && results.length < limit; index += 1) {
+    const line = lines[index];
+    const matchIndex = line.toLocaleLowerCase().indexOf(lowerQuery);
+    if (matchIndex < 0) continue;
+
+    results.push({
+      path: note.filePath ?? null,
+      relativePath,
+      title,
+      matchType: "content",
+      snippet: localSearchSnippet(line, matchIndex, cleanQuery.length),
+      line: index + 1,
+      matchedText: line.slice(matchIndex, matchIndex + cleanQuery.length),
+      resultKey: `current:${note.id}:${index + 1}:${matchIndex}`,
+    });
+  }
+
+  return results;
+}
+
+function sidebarSearchResultFromVault(result: VaultSearchResult): SidebarSearchResult {
+  return {
+    ...result,
+    resultKey: `${result.path}:${result.line ?? 0}:${result.matchedText ?? result.snippet}`,
+  };
 }
 
 function VaultEntry({
@@ -246,6 +304,7 @@ export function VaultSidebar({
   onTabChange,
   onDispatchCommand,
   onOpenMarkdownFile,
+  onOpenCurrentSourceLocation,
   onVaultError,
   onRequestVaultIndex,
   onSearchVaultTags,
@@ -271,11 +330,22 @@ export function VaultSidebar({
   const [tagSearchResults, setTagSearchResults] = useState<VaultSearchResult[]>([]);
   const [tagSearchLoading, setTagSearchLoading] = useState(false);
   const normalizedSearchQuery = searchQuery.trim();
-  const searchPrefix = ["@", "/", "#", ":"].includes(normalizedSearchQuery[0]) ? normalizedSearchQuery[0] : "";
+  const searchPrefix = searchPrefixFromQuery(normalizedSearchQuery);
+  const isLocalDocumentSearch = searchPrefix === "";
+  const isGlobalVaultSearch = searchPrefix !== "";
   const tagSearchDisabled = searchPrefix === "@" && !tagFeaturesEnabled;
   const effectiveSearchQuery = searchPrefix ? normalizedSearchQuery.slice(1).trim() : normalizedSearchQuery;
+  const vaultSearchQuery = searchPrefix === "：" ? `:${effectiveSearchQuery}` : searchQuery;
   const hasSidebarSearchIntent = effectiveSearchQuery.length > 0;
-  const effectiveSearchResults = searchResults.length ? searchResults : tagSearchResults;
+  const currentDocumentResults = useMemo(() => (
+    isLocalDocumentSearch && hasSidebarSearchIntent
+      ? searchCurrentDocument(activeNote, effectiveSearchQuery)
+      : []
+  ), [activeNote, effectiveSearchQuery, hasSidebarSearchIntent, isLocalDocumentSearch]);
+  const vaultSearchResults = useMemo(() => (
+    (searchResults.length ? searchResults : tagSearchResults).map(sidebarSearchResultFromVault)
+  ), [searchResults, tagSearchResults]);
+  const effectiveSearchResults = isLocalDocumentSearch ? currentDocumentResults : vaultSearchResults;
   const searchScopeLabels = useMemo(() => ({
     title: t.knowledge.searchTitle,
     path: t.knowledge.searchPath,
@@ -283,14 +353,13 @@ export function VaultSidebar({
     content: t.knowledge.searchContent,
   }), [t.knowledge.searchContent, t.knowledge.searchPath, t.knowledge.searchTag, t.knowledge.searchTitle]);
   const searchScopes = useMemo(() => [
-    { prefix: "", label: t.knowledge.searchAll, title: t.knowledge.searchPlaceholder },
     ...(tagFeaturesEnabled ? [{ prefix: "@", label: "@", title: t.knowledge.searchTag }] : []),
     { prefix: "/", label: "/", title: t.knowledge.searchPath },
     { prefix: "#", label: "#", title: t.knowledge.searchTitle },
-    { prefix: ":", label: ":", title: t.knowledge.searchContent },
-  ], [tagFeaturesEnabled, t.knowledge.searchAll, t.knowledge.searchContent, t.knowledge.searchPath, t.knowledge.searchPlaceholder, t.knowledge.searchTag, t.knowledge.searchTitle]);
+    { prefix: ":", label: ":", title: t.knowledge.searchVault },
+  ], [tagFeaturesEnabled, t.knowledge.searchPath, t.knowledge.searchTag, t.knowledge.searchTitle, t.knowledge.searchVault]);
   const activeSearchPrefix = useMemo(() => {
-    return searchPrefix;
+    return searchPrefix === "：" ? ":" : searchPrefix;
   }, [searchPrefix]);
   const highlightedQuery = effectiveSearchQuery;
   const rememberSearchQuery = useCallback((query: string) => {
@@ -318,7 +387,7 @@ export function VaultSidebar({
   const setSearchScope = (prefix: string) => {
     setSearchQuery((current) => {
       const trimmed = current.trimStart();
-      const currentPrefix = ["@", "/", "#", ":"].includes(trimmed[0]) ? trimmed[0] : "";
+      const currentPrefix = searchPrefixFromQuery(trimmed);
       const cleanQuery = currentPrefix ? trimmed.slice(1).trimStart() : current;
       return prefix ? `${prefix}${cleanQuery}` : cleanQuery;
     });
@@ -349,7 +418,7 @@ export function VaultSidebar({
   }, [effectiveSearchResults.length, searchQuery]);
 
   useEffect(() => {
-    if (tagSearchDisabled || tab !== "search" || !vaultIndex || !hasSidebarSearchIntent) {
+    if (!isGlobalVaultSearch || searchPrefix === "@" || tagSearchDisabled || tab !== "search" || !vaultIndex || !hasSidebarSearchIntent) {
       setSearchResults([]);
       setSearchLoading(false);
       return undefined;
@@ -359,7 +428,7 @@ export function VaultSidebar({
     let cancelled = false;
     setSearchLoading(true);
     const timeoutId = window.setTimeout(() => {
-      searchVaultIndexAsync(vaultIndex, searchQuery, {
+      searchVaultIndexAsync(vaultIndex, vaultSearchQuery, {
         limit: 60,
         draftFile: activeIndexedFile,
         includeTags: tagFeaturesEnabled,
@@ -387,7 +456,9 @@ export function VaultSidebar({
   }, [
     activeIndexedFile,
     hasSidebarSearchIntent,
-    searchQuery,
+    isGlobalVaultSearch,
+    searchPrefix,
+    vaultSearchQuery,
     tab,
     tagFeaturesEnabled,
     tagSearchDisabled,
@@ -395,14 +466,14 @@ export function VaultSidebar({
   ]);
 
   useEffect(() => {
-    if (tab !== "search" || !vaultMode || !hasSidebarSearchIntent) {
+    if (tab !== "search" || !vaultMode || !isGlobalVaultSearch || !hasSidebarSearchIntent) {
       requestedSearchIndexKeyRef.current = "";
       return;
     }
     if (searchPrefix === "@") return;
     if (vaultIndexStatus === "indexing") return;
 
-    const requestKey = `${vaultRoot ?? ""}\n${normalizedSearchQuery}`;
+    const requestKey = `${vaultRoot ?? ""}\n${vaultSearchQuery.trim()}`;
     if (requestedSearchIndexKeyRef.current === requestKey) return;
     if (vaultIndexStatus === "ready" && vaultIndex) return;
 
@@ -410,7 +481,7 @@ export function VaultSidebar({
     onRequestVaultIndex();
   }, [
     hasSidebarSearchIntent,
-    normalizedSearchQuery,
+    isGlobalVaultSearch,
     onRequestVaultIndex,
     searchPrefix,
     tab,
@@ -418,6 +489,7 @@ export function VaultSidebar({
     vaultIndexStatus,
     vaultMode,
     vaultRoot,
+    vaultSearchQuery,
   ]);
 
   useEffect(() => {
@@ -472,12 +544,25 @@ export function VaultSidebar({
     selectedSearchResultRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedSearchResultIndex, tab]);
 
+  const openSearchResult = useCallback((result: SidebarSearchResult) => {
+    rememberSearchQuery(searchQuery);
+    const targetText = result.matchedText ?? result.snippet;
+    if (!result.path || (activeFilePath && normalizeFilePath(result.path) === normalizeFilePath(activeFilePath))) {
+      if (result.line) onOpenCurrentSourceLocation(result.line, targetText);
+      return;
+    }
+
+    onOpenMarkdownFile(result.path, {
+      targetLine: result.line ?? null,
+      targetText,
+    });
+  }, [activeFilePath, onOpenCurrentSourceLocation, onOpenMarkdownFile, rememberSearchQuery, searchQuery]);
+
   const openSelectedSearchResult = useCallback((index: number) => {
     const result = effectiveSearchResults[index];
     if (!result) return;
-    rememberSearchQuery(searchQuery);
-    onOpenMarkdownFile(result.path);
-  }, [effectiveSearchResults, onOpenMarkdownFile, rememberSearchQuery, searchQuery]);
+    openSearchResult(result);
+  }, [effectiveSearchResults, openSearchResult]);
 
   return (
     <aside className="left-rail">
@@ -650,15 +735,14 @@ export function VaultSidebar({
             <div className="link-list sidebar-search-results">
               {effectiveSearchResults.length ? effectiveSearchResults.map((result, index) => (
                 <button
-                  key={result.path}
+                  key={result.resultKey}
                   ref={index === selectedSearchResultIndex ? selectedSearchResultRef : null}
                   type="button"
                   className={cx("link-item search-result-item", index === selectedSearchResultIndex && "selected")}
                   aria-current={index === selectedSearchResultIndex ? "true" : undefined}
                   onClick={() => {
                     setSelectedSearchResultIndex(index);
-                    rememberSearchQuery(searchQuery);
-                    onOpenMarkdownFile(result.path);
+                    openSearchResult(result);
                   }}
                 >
                   <Search size={14} aria-hidden="true" />
@@ -669,12 +753,12 @@ export function VaultSidebar({
                   <span>{highlightedSearchText(result.relativePath, highlightedQuery)}</span>
                   <small>{highlightedSearchText(result.snippet, highlightedQuery)}</small>
                 </button>
-              )) : hasSidebarSearchIntent && vaultMode && (vaultIndexStatus === "indexing" || searchLoading || tagSearchLoading) ? (
+              )) : hasSidebarSearchIntent && isGlobalVaultSearch && vaultMode && (vaultIndexStatus === "indexing" || searchLoading || tagSearchLoading) ? (
                 <p className="muted">{t.knowledge.indexing}</p>
               ) : !hasSidebarSearchIntent ? (
-                !vaultMode ? <p className="muted">{t.knowledge.openVaultForGraph}</p> : null
+                null
               ) : (
-                <p className="muted">{vaultMode ? t.knowledge.noSearchResults : t.knowledge.openVaultForGraph}</p>
+                <p className="muted">{isGlobalVaultSearch && !vaultMode ? t.knowledge.openVaultForGraph : t.knowledge.noSearchResults}</p>
               )}
             </div>
           </div>

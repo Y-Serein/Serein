@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    model::{ImportedAsset, LocalAssetData, MarkdownFile},
+    model::{ImportedAsset, LocalAssetData, MarkdownFile, SavedMarkdownFile},
     path_security::{
         ensure_path_inside_root, ensure_supported_export_path, ensure_supported_image_name,
         ensure_supported_text_path, is_supported_image_extension, normalized_extension,
@@ -50,7 +50,7 @@ pub fn write_markdown_file(
     expected_modified_at_ms: Option<u64>,
     expected_size: Option<u64>,
     backup_root: PathBuf,
-) -> Result<MarkdownFile, String> {
+) -> Result<SavedMarkdownFile, String> {
     ensure_supported_text_path(&path)?;
     ensure_reasonable_text_size(content.len())?;
 
@@ -76,7 +76,7 @@ pub fn write_markdown_file(
     let metadata = fs::metadata(file_path)
         .map_err(|error| format!("Saved file, but failed to read updated metadata: {error}"))?;
 
-    Ok(MarkdownFile {
+    Ok(SavedMarkdownFile {
         path: path.clone(),
         file_name: file_path
             .file_name()
@@ -84,7 +84,6 @@ pub fn write_markdown_file(
             .unwrap_or("Untitled.md")
             .to_string(),
         file_ext: normalized_extension(file_path).unwrap_or_else(|| "md".to_string()),
-        content,
         modified_at_ms: metadata_modified_time_ms(&metadata)?,
         size: metadata.len(),
     })

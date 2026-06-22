@@ -476,10 +476,11 @@ export function SettingsDialog({
                 <h3>{t.settings.appearance}</h3>
                 <div className="theme-options">
                   {([
-                    ["daily", t.commandLabels["theme.daily"], "theme.daily"],
                     ["mint", t.commandLabels["theme.mint"], "theme.mint"],
-                    ["ink", t.commandLabels["theme.ink"], "theme.ink"],
+                    ["eye", t.commandLabels["theme.eye"], "theme.eye"],
                     ["v5", t.commandLabels["theme.v5"], "theme.v5"],
+                    ["ink", t.commandLabels["theme.ink"], "theme.ink"],
+                    ["daily", t.commandLabels["theme.daily"], "theme.daily"],
                   ] as const).map(([id, label, commandId]) => (
                     <button key={id} type="button" className={theme === id ? "theme-option selected" : "theme-option"} onClick={() => onThemeCommand(commandId)}>
                       <span className={`theme-swatch ${id}`} />

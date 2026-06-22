@@ -130,6 +130,8 @@ export type VaultSearchResult = {
   title: string;
   matchType: "title" | "path" | "tag" | "content";
   snippet: string;
+  line?: number;
+  matchedText?: string;
 };
 
 type VaultSearchMode = VaultSearchResult["matchType"] | "all";
@@ -584,17 +586,23 @@ function searchVaultFile(file: VaultIndexedFile, context: VaultSearchContext): V
   const relativePath = file.relativePath.toLowerCase();
   const tags = file.tags.map((item) => item.toLowerCase());
   let searchableContent = "";
-  const matchType: VaultSearchResult["matchType"] | null = cleanQuery
-    ? matchesSearchMode(search.mode, "title") && title.includes(cleanQuery)
-      ? "title"
-      : matchesSearchMode(search.mode, "path") && relativePath.includes(cleanQuery)
-        ? "path"
-        : includeTags && matchesSearchMode(search.mode, "tag") && tags.some((item) => item.includes(cleanQuery))
-          ? "tag"
-          : matchesSearchMode(search.mode, "content") && (searchableContent = searchContentForFile(file, includeTags)).toLowerCase().includes(cleanQuery)
-            ? "content"
-            : null
-    : "tag";
+  let contentMatch: ContentSearchMatch | null = null;
+  let matchType: VaultSearchResult["matchType"] | null = null;
+
+  if (!cleanQuery) {
+    matchType = "tag";
+  } else if (matchesSearchMode(search.mode, "title") && title.includes(cleanQuery)) {
+    matchType = "title";
+  } else if (matchesSearchMode(search.mode, "path") && relativePath.includes(cleanQuery)) {
+    matchType = "path";
+  } else if (includeTags && matchesSearchMode(search.mode, "tag") && tags.some((item) => item.includes(cleanQuery))) {
+    matchType = "tag";
+  } else if (matchesSearchMode(search.mode, "content")) {
+    const searchContent = searchContentForFile(file, includeTags);
+    searchableContent = searchContent.content;
+    contentMatch = findContentSearchMatch(searchableContent, cleanQuery, searchContent.lineOffset);
+    if (contentMatch) matchType = "content";
+  }
 
   if (!matchType) return null;
   return {
@@ -602,7 +610,9 @@ function searchVaultFile(file: VaultIndexedFile, context: VaultSearchContext): V
     relativePath: file.relativePath,
     title: file.title,
     matchType,
-    snippet: createSearchSnippet(file, cleanQuery, matchType, searchableContent),
+    snippet: createSearchSnippet(file, cleanQuery, matchType, searchableContent, contentMatch),
+    line: contentMatch?.line,
+    matchedText: contentMatch?.matchedText,
   };
 }
 
@@ -633,9 +643,48 @@ function matchesSearchMode(mode: VaultSearchMode, target: VaultSearchResult["mat
   return mode === "all" || mode === target;
 }
 
-function searchContentForFile(file: VaultIndexedFile, includeTags: boolean) {
-  if (includeTags) return file.content;
-  return splitYamlFrontmatter(file.content)?.body ?? file.content;
+type SearchableContent = {
+  content: string;
+  lineOffset: number;
+};
+
+function searchContentForFile(file: VaultIndexedFile, includeTags: boolean): SearchableContent {
+  if (includeTags) return { content: file.content, lineOffset: 0 };
+
+  const frontmatter = splitYamlFrontmatter(file.content);
+  if (!frontmatter) return { content: file.content, lineOffset: 0 };
+
+  const normalized = file.content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const bodyStart = Math.max(0, normalized.length - frontmatter.body.length);
+  const lineOffset = bodyStart > 0 ? normalized.slice(0, bodyStart).split("\n").length - 1 : 0;
+  return { content: frontmatter.body, lineOffset };
+}
+
+type ContentSearchMatch = {
+  index: number;
+  line: number;
+  lineText: string;
+  matchedText: string;
+};
+
+function findContentSearchMatch(content: string, query: string, lineOffset = 0): ContentSearchMatch | null {
+  if (!query) return null;
+  const index = content.toLowerCase().indexOf(query);
+  if (index < 0) return null;
+
+  const before = content.slice(0, index);
+  const line = before.split(/\r?\n/).length + lineOffset;
+  const lineStart = Math.max(before.lastIndexOf("\n") + 1, 0);
+  const nextBreak = content.indexOf("\n", index);
+  const rawLineEnd = nextBreak < 0 ? content.length : nextBreak;
+  const lineEnd = rawLineEnd > lineStart && content[rawLineEnd - 1] === "\r" ? rawLineEnd - 1 : rawLineEnd;
+
+  return {
+    index,
+    line,
+    lineText: content.slice(lineStart, lineEnd),
+    matchedText: content.slice(index, index + query.length),
+  };
 }
 
 export function resolveVaultLinkTarget(
@@ -1224,17 +1273,17 @@ function createSearchSnippet(
   query: string,
   matchType: VaultSearchResult["matchType"],
   content = file.content,
+  contentMatch: ContentSearchMatch | null = null,
 ) {
   if (!query) return file.tags.length ? file.tags.map((tag) => `#${tag}`).join(", ") : file.relativePath;
   if (matchType === "title") return file.title;
   if (matchType === "path") return file.relativePath;
   if (matchType === "tag") return file.tags.map((tag) => `#${tag}`).join(", ");
 
-  const lowerContent = content.toLowerCase();
-  const index = lowerContent.indexOf(query);
-  if (index < 0) return file.relativePath;
-  const start = Math.max(0, index - 56);
-  const end = Math.min(content.length, index + query.length + 72);
+  const match = contentMatch ?? findContentSearchMatch(content, query);
+  if (!match) return file.relativePath;
+  const start = Math.max(0, match.index - 56);
+  const end = Math.min(content.length, match.index + query.length + 72);
   const snippet = content.slice(start, end).replace(/\s+/g, " ").trim();
   return `${start > 0 ? "..." : ""}${snippet}${end < content.length ? "..." : ""}`;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { X } from "lucide-react";
 import { getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
@@ -561,6 +561,39 @@ function sourceMatchCandidates(lineText: string, targetText: string | null) {
     .sort((left, right) => right.length - left.length);
 }
 
+function sourceSelectionCandidates(lineText: string, targetText: string | null) {
+  const candidates: string[] = [];
+  const addCandidate = (candidate: string) => {
+    const trimmed = candidate.trim();
+    if (trimmed.length < 2 || candidates.includes(trimmed)) return;
+    candidates.push(trimmed);
+  };
+
+  addCandidate(targetText ?? "");
+  addCandidate(markdownSourceDisplayText(targetText ?? ""));
+  addCandidate(markdownSourceDisplayText(lineText));
+  addCandidate(lineText);
+
+  return candidates;
+}
+
+function findTextNodeMatch(root: HTMLElement, candidates: string[]) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    const text = node.textContent ?? "";
+    const lowerText = text.toLocaleLowerCase();
+    for (const candidate of candidates) {
+      const matchIndex = lowerText.indexOf(candidate.toLocaleLowerCase());
+      if (matchIndex >= 0) {
+        return { node, start: matchIndex, end: matchIndex + candidate.length };
+      }
+    }
+    node = walker.nextNode();
+  }
+  return null;
+}
+
 function normalizeMarkdownHrefTarget(href: string) {
   const trimmed = href.trim().replace(/^<|>$/g, "");
   try {
@@ -847,6 +880,10 @@ export default function App() {
   const plainEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const lastFocusedNativeTextControlRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const saveBeforeContinueRef = useRef<(() => Promise<boolean>) | null>(null);
+  const saveActiveNoteRef = useRef<((options?: { trustDirtyFlag?: boolean }) => Promise<boolean>) | null>(null);
+  const backgroundSaveTimerRef = useRef<number | null>(null);
+  const backgroundSaveQueuedRef = useRef(false);
+  const backgroundSaveRunningRef = useRef<Promise<boolean> | null>(null);
   const restoredVaultRef = useRef(false);
   const restoredStandaloneFileRef = useRef(false);
   const checkedInitialOpenFileRef = useRef(false);
@@ -890,6 +927,8 @@ export default function App() {
   const appShellRef = useRef<HTMLDivElement | null>(null);
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0];
+  const activeNoteRef = useRef<Note>(activeNote);
+  activeNoteRef.current = activeNote;
   const deferredActiveMarkdown = useDeferredValue(activeNote.markdown);
   const t = appText[language];
   const hasActiveDocument = !isEmptyPlaceholder(activeNote);
@@ -1687,7 +1726,7 @@ export default function App() {
       return [nextNote, ...currentNotes.filter((note) => note.filePath !== nextNote.filePath)];
     });
     setActiveNoteId(nextNote.id);
-    setLastOpenedFile(nextNote.filePath ?? null);
+    setLastOpenedFile(null);
     if (useVaultContext && vaultRoot) {
       const relativePath = nextNote.filePath ? relativePathFromRoot(vaultRoot, nextNote.filePath) : null;
       if (relativePath !== null) {
@@ -1704,7 +1743,7 @@ export default function App() {
       }
 
       persistVaultPatch({
-        lastOpenedFile: nextNote.filePath ?? null,
+        lastOpenedFile: null,
         recentFiles: pushRecentFile(vaultWorkspace.recentFiles, nextNote.filePath ?? null),
       });
     }
@@ -1748,14 +1787,14 @@ export default function App() {
 
   const activateVault = useCallback(async (root: string) => {
     const initialized = await initVault(root);
-    const workspace = mergeWorkspaceState(initialized.workspace, {
+    const workspace = nextWorkspaceState(mergeWorkspaceState(initialized.workspace, {
       sidebarWidth,
       sidebarVisible,
       rightPanelVisible,
       rightPanelWidth,
       editorLeftGap,
       uiScale,
-    });
+    }), { lastOpenedFile: null });
 
     vaultIndexFileOverridesRef.current.clear();
     vaultTagSearchCacheRef.current.clear();
@@ -1768,7 +1807,7 @@ export default function App() {
     setVaultRoot(initialized.root);
     setVaultWorkspace(workspace);
     setSelectedVaultDir(workspace.selectedDir);
-    setLastOpenedFile(workspace.lastOpenedFile);
+    setLastOpenedFile(null);
     setSidebarWidth(clampSidebarWidth(workspace.layout.sidebarWidth));
     setSidebarVisible(workspace.layout.sidebarVisible);
     setRightPanelVisible(workspace.layout.rightPanelVisible);
@@ -1786,19 +1825,11 @@ export default function App() {
     const emptyNote = createEmptyNote();
     setNotes([emptyNote]);
     setActiveNoteId(emptyNote.id);
-
-    if (workspace.lastOpenedFile) {
-      openMarkdownFile(workspace.lastOpenedFile, { skipUnsavedCheck: true }).catch((error) => {
-        console.error("Failed to restore last opened file", error);
-        setVaultError(t.errors.restoreLastFileFailed);
-      });
-    }
     void loadVaultDirectory("", initialized.root);
   }, [
     cancelScheduledVaultIndexRefresh,
     editorLeftGap,
     loadVaultDirectory,
-    openMarkdownFile,
     rightPanelVisible,
     rightPanelWidth,
     sidebarVisible,
@@ -1806,7 +1837,6 @@ export default function App() {
     setVaultIndex,
     setVaultIndexError,
     setVaultIndexStatus,
-    t.errors.restoreLastFileFailed,
     uiScale,
   ]);
 
@@ -1844,7 +1874,7 @@ export default function App() {
     setVaultError(null);
     setSelectedVaultDir("");
     setExpandedDirs(new Set(demo.expandedDirs));
-    setLastOpenedFile(nextNote.filePath ?? null);
+    setLastOpenedFile(null);
     setNotes([nextNote]);
     setActiveNoteId(nextNote.id);
     setSaveStatus("saved");
@@ -1905,10 +1935,33 @@ export default function App() {
       dirty: false,
     };
 
-    setNotes((currentNotes) => currentNotes.map((item) => (item.id === note.id ? nextNote : item)));
-    setLastOpenedFile(nextNote.filePath ?? null);
+    startTransition(() => {
+      setNotes((currentNotes) => currentNotes.map((item) => {
+        if (item.id !== note.id) return item;
+        if (markdownEqualForDirty(item.markdown, markdownToSave)) return nextNote;
+
+        const currentWithSavedMetadata: Note = {
+          ...item,
+          filePath: file.path,
+          fileName: file.fileName,
+          fileExt: file.fileExt,
+          fileModifiedAtMs: file.modifiedAtMs,
+          fileSize: file.size,
+          lineEnding: item.lineEnding ?? note.lineEnding ?? "lf",
+          savedMarkdown: markdownToSave,
+          richSavedMarkdown,
+        };
+
+        return {
+          ...currentWithSavedMetadata,
+          title: titleFromMarkdown(item.markdown, currentWithSavedMetadata.title),
+          dirty: noteDirtyForMarkdown(currentWithSavedMetadata, item.markdown, { compareRichBaseline: editorMode === "rich" }),
+        };
+      }));
+    });
+    setLastOpenedFile(null);
     persistVaultPatch({
-      lastOpenedFile: nextNote.filePath ?? null,
+      lastOpenedFile: null,
       recentFiles: pushRecentFile(vaultWorkspace.recentFiles, nextNote.filePath ?? null),
     });
     if (vaultRoot) {
@@ -1924,17 +1977,21 @@ export default function App() {
         vaultIndexFileOverridesRef.current.set(vaultIndexOverrideKey(vaultRoot, file.path), indexFile);
         vaultTagSearchCacheRef.current.clear();
         vaultTagSearchPendingRef.current.clear();
-        setVaultIndex((currentIndex) => upsertVaultIndexFile(currentIndex, vaultRoot, indexFile));
+        if (vaultIndexStatus !== "ready") {
+          setVaultIndex((currentIndex) => upsertVaultIndexFile(currentIndex, vaultRoot, indexFile));
+        }
         if (!isExistingFileSave) {
           await loadVaultDirectory(parentVaultDir(savedVaultRelativePath));
         }
         scheduleVaultIndexRefresh(vaultRoot);
       }
     }
+    const savedSnapshotStillCurrent = activeNoteRef.current?.id === note.id
+      && markdownEqualForDirty(activeNoteRef.current.markdown, markdownToSave);
     setSavedAt(new Date());
     setSaveError(null);
-    setSaveStatus("saved");
-  }, [defaultSaveExt, editorMode, loadVaultDirectory, persistVaultPatch, scheduleVaultIndexRefresh, setVaultIndex, vaultRoot, vaultWorkspace.recentFiles]);
+    setSaveStatus(savedSnapshotStillCurrent ? "saved" : "idle");
+  }, [defaultSaveExt, editorMode, loadVaultDirectory, persistVaultPatch, scheduleVaultIndexRefresh, setVaultIndex, vaultIndexStatus, vaultRoot, vaultWorkspace.recentFiles]);
 
   const syncActiveNoteFromDisk = useCallback(async () => {
     if (demoVaultMode || !activeNote?.filePath) return;
@@ -2026,12 +2083,15 @@ export default function App() {
     }
   }, [activeNote, defaultSaveExt, saveNoteToPath, t.errors.saveAsFailed]);
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (options: { trustDirtyFlag?: boolean } = {}) => {
     if (!activeNote) return false;
 
     try {
       if (activeNote.filePath) {
-        if (!noteDirtyForMarkdown(activeNote, activeNote.markdown, { compareRichBaseline: editorMode === "rich" })) {
+        const dirty = options.trustDirtyFlag
+          ? Boolean(activeNote.dirty)
+          : noteDirtyForMarkdown(activeNote, activeNote.markdown, { compareRichBaseline: editorMode === "rich" });
+        if (!dirty) {
           setSavedAt(new Date());
           setSaveError(null);
           setSaveStatus("saved");
@@ -2051,13 +2111,75 @@ export default function App() {
   }, [activeNote, editorMode, handleSaveAs, saveNoteToPath, setSaveError, setSaveStatus, t.errors.saveFailed]);
 
   useEffect(() => {
-    saveBeforeContinueRef.current = handleSave;
+    saveActiveNoteRef.current = handleSave;
     return () => {
-      if (saveBeforeContinueRef.current === handleSave) {
-        saveBeforeContinueRef.current = null;
+      if (saveActiveNoteRef.current === handleSave) {
+        saveActiveNoteRef.current = null;
       }
     };
   }, [handleSave]);
+
+  const scheduleBackgroundSave = useCallback(() => {
+    backgroundSaveQueuedRef.current = true;
+    if (backgroundSaveTimerRef.current !== null || backgroundSaveRunningRef.current) return;
+
+    const run = () => {
+      backgroundSaveTimerRef.current = null;
+      if (!backgroundSaveQueuedRef.current) return;
+
+      backgroundSaveQueuedRef.current = false;
+      const saveActiveNote = saveActiveNoteRef.current;
+      if (!saveActiveNote) return;
+
+      const savePromise = saveActiveNote({ trustDirtyFlag: true });
+      backgroundSaveRunningRef.current = savePromise;
+
+      void savePromise.finally(() => {
+        if (backgroundSaveRunningRef.current === savePromise) {
+          backgroundSaveRunningRef.current = null;
+        }
+        if (backgroundSaveQueuedRef.current && activeNoteRef.current?.dirty) {
+          backgroundSaveTimerRef.current = window.setTimeout(run, 0);
+        } else if (!activeNoteRef.current?.dirty) {
+          backgroundSaveQueuedRef.current = false;
+        }
+      });
+    };
+
+    backgroundSaveTimerRef.current = window.setTimeout(run, 0);
+  }, []);
+
+  const saveBeforeContinue = useCallback(async () => {
+    const pendingBackgroundSave = backgroundSaveRunningRef.current;
+    if (pendingBackgroundSave) {
+      await pendingBackgroundSave;
+    }
+    if (backgroundSaveTimerRef.current !== null) {
+      window.clearTimeout(backgroundSaveTimerRef.current);
+      backgroundSaveTimerRef.current = null;
+    }
+    backgroundSaveQueuedRef.current = false;
+
+    const saveActiveNote = saveActiveNoteRef.current;
+    return saveActiveNote ? saveActiveNote({ trustDirtyFlag: false }) : false;
+  }, []);
+
+  useEffect(() => () => {
+    if (backgroundSaveTimerRef.current !== null) {
+      window.clearTimeout(backgroundSaveTimerRef.current);
+      backgroundSaveTimerRef.current = null;
+    }
+    backgroundSaveQueuedRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    saveBeforeContinueRef.current = saveBeforeContinue;
+    return () => {
+      if (saveBeforeContinueRef.current === saveBeforeContinue) {
+        saveBeforeContinueRef.current = null;
+      }
+    };
+  }, [saveBeforeContinue]);
 
   const importImagesForEditor = useCallback(async (files: File[]) => {
     try {
@@ -2724,7 +2846,7 @@ export default function App() {
     "file.newFolder": { id: "file.newFolder", label: t.commandLabels["file.newFolder"], enabled: Boolean(vaultRoot), run: handleCreateVaultFolder },
     "file.open": { id: "file.open", label: t.commandLabels["file.open"], enabled: true, run: handleOpenFile },
     "file.openVault": { id: "file.openVault", label: t.commandLabels["file.openVault"], enabled: true, run: handleOpenVault },
-    "file.save": { id: "file.save", label: t.commandLabels["file.save"], enabled: hasActiveDocument, run: () => { void handleSave(); } },
+    "file.save": { id: "file.save", label: t.commandLabels["file.save"], enabled: hasActiveDocument, run: scheduleBackgroundSave },
     "file.saveAs": { id: "file.saveAs", label: t.commandLabels["file.saveAs"], enabled: hasActiveDocument, run: () => { void handleSaveAs(); } },
     "file.export": { id: "file.export", label: t.commandLabels["file.export"], enabled: hasActiveDocument, run: handleExport },
     "app.openQuickOpen": {
@@ -2806,10 +2928,11 @@ export default function App() {
     "view.setRichEdit": { id: "view.setRichEdit", label: t.commandLabels["view.setRichEdit"], enabled: editorMode !== "rich", run: () => setGlobalEditorMode("rich") },
     "view.toggleSidebar": { id: "view.toggleSidebar", label: t.commandLabels["view.toggleSidebar"], enabled: true, run: () => setSidebarVisible((visible) => !visible) },
     "view.toggleRightPanel": { id: "view.toggleRightPanel", label: t.commandLabels["view.toggleRightPanel"], enabled: true, run: () => setRightPanelVisible((visible) => !visible) },
-    "theme.daily": { id: "theme.daily", label: t.commandLabels["theme.daily"], enabled: theme !== "daily", run: () => setTheme("daily") },
     "theme.mint": { id: "theme.mint", label: t.commandLabels["theme.mint"], enabled: theme !== "mint", run: () => setTheme("mint") },
-    "theme.ink": { id: "theme.ink", label: t.commandLabels["theme.ink"], enabled: theme !== "ink", run: () => setTheme("ink") },
+    "theme.eye": { id: "theme.eye", label: t.commandLabels["theme.eye"], enabled: theme !== "eye", run: () => setTheme("eye") },
     "theme.v5": { id: "theme.v5", label: t.commandLabels["theme.v5"], enabled: theme !== "v5", run: () => setTheme("v5") },
+    "theme.ink": { id: "theme.ink", label: t.commandLabels["theme.ink"], enabled: theme !== "ink", run: () => setTheme("ink") },
+    "theme.daily": { id: "theme.daily", label: t.commandLabels["theme.daily"], enabled: theme !== "daily", run: () => setTheme("daily") },
   }), [
     activeNote,
     editorMode,
@@ -2820,7 +2943,6 @@ export default function App() {
     handleExport,
     handleOpenFile,
     handleOpenVault,
-    handleSave,
     handleSaveAs,
     openQuickOpen,
     openQuickNote,
@@ -2830,6 +2952,7 @@ export default function App() {
     runImageCommand,
     runLinkCommand,
     setGlobalEditorMode,
+    scheduleBackgroundSave,
     showMessageDialog,
     t,
     theme,
@@ -3016,17 +3139,6 @@ export default function App() {
     });
   }, [activateVault, initialOpenFileChecked, t.errors.recoveryPaused, t.errors.recoveryPausedLabel, t.errors.restoreVaultFailed, vaultRecoveryBlocked, vaultRoot]);
 
-  useEffect(() => {
-    if (!initialOpenFileChecked || restoredStandaloneFileRef.current || vaultRoot || !restoreWorkspace || !lastOpenedFile) return;
-    restoredStandaloneFileRef.current = true;
-
-    openMarkdownFile(lastOpenedFile, { skipUnsavedCheck: true }).catch((error) => {
-      console.error("Failed to restore last opened file", error);
-      setSaveError(t.errors.restoreLastFileFailed);
-      setSaveStatus("error");
-    });
-  }, [initialOpenFileChecked, lastOpenedFile, openMarkdownFile, restoreWorkspace, t.errors.restoreLastFileFailed, vaultRoot]);
-
   const settingsToPersist = useMemo<AppSettings>(() => ({
       editorModePreferenceVersion: defaultSettings.editorModePreferenceVersion,
       theme,
@@ -3037,7 +3149,7 @@ export default function App() {
       rightPanelVisible,
       rightPanelWidth,
       vaultRoot,
-      lastOpenedFile,
+      lastOpenedFile: null,
       selectedVaultDir,
       vaultRecoveryBlocked,
       defaultEditorMode: defaultEditorModeSetting,
@@ -3078,7 +3190,6 @@ export default function App() {
     imageAttachmentFolder,
     imagePathStyle,
     language,
-    lastOpenedFile,
     normalizeWindowsImagePaths,
     restoreWorkspace,
     restoreWindowState,
@@ -3294,7 +3405,7 @@ export default function App() {
     persistVaultPatch({
       selectedDir: selectedVaultDir,
       expandedDirs: Array.from(expandedDirs),
-      lastOpenedFile,
+      lastOpenedFile: null,
       layout: {
         sidebarWidth,
         sidebarVisible,
@@ -3319,7 +3430,6 @@ export default function App() {
     centerView,
     editorLeftGap,
     expandedDirs,
-    lastOpenedFile,
     persistVaultPatch,
     rightPanelWidth,
     rightPanelVisible,
@@ -3522,8 +3632,18 @@ export default function App() {
       if (!textarea) return false;
 
       const lineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 22;
+      const selectionCandidates = sourceSelectionCandidates(line.text, target.text);
+      const lowerLine = line.text.toLocaleLowerCase();
+      const selection = selectionCandidates
+        .map((candidate) => ({ candidate, index: lowerLine.indexOf(candidate.toLocaleLowerCase()) }))
+        .find((candidate) => candidate.index >= 0);
       textarea.focus();
-      textarea.setSelectionRange(line.start, line.end);
+      if (selection) {
+        const start = line.start + selection.index;
+        textarea.setSelectionRange(start, start + selection.candidate.length);
+      } else {
+        textarea.setSelectionRange(line.start, line.end);
+      }
       textarea.scrollTop = Math.max(0, (target.line - 4) * lineHeight);
       return true;
     }
@@ -3564,14 +3684,24 @@ export default function App() {
           delete node.dataset.sourceLocationTarget;
         }
       });
-      matched.classList.add("source-location-target");
-      matched.dataset.sourceLocationTarget = highlightId;
+      const textMatch = findTextNodeMatch(matched, sourceSelectionCandidates(line.text, target.text));
+      if (textMatch) {
+        const range = document.createRange();
+        range.setStart(textMatch.node, textMatch.start);
+        range.setEnd(textMatch.node, textMatch.end);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      } else {
+        matched.classList.add("source-location-target");
+        matched.dataset.sourceLocationTarget = highlightId;
+        window.setTimeout(() => {
+          if (matched.dataset.sourceLocationTarget !== highlightId) return;
+          matched.classList.remove("source-location-target");
+          delete matched.dataset.sourceLocationTarget;
+        }, 4000);
+      }
       if (scroll) matched.scrollIntoView({ behavior: "smooth", block: "center" });
-      window.setTimeout(() => {
-        if (matched.dataset.sourceLocationTarget !== highlightId) return;
-        matched.classList.remove("source-location-target");
-        delete matched.dataset.sourceLocationTarget;
-      }, 4000);
       return true;
     };
 
@@ -4303,11 +4433,14 @@ export default function App() {
           searchFocusQuery={sidebarSearchSeed}
           onTabChange={setLeftPanelTab}
           onDispatchCommand={dispatchCommand}
-          onOpenMarkdownFile={(path) => {
-            openMarkdownFile(path).catch((error) => {
+          onOpenMarkdownFile={(path, options) => {
+            openMarkdownFile(path, options).catch((error) => {
               console.error("Failed to open vault file", error);
               setVaultError(t.errors.openVaultFileFailed);
             });
+          }}
+          onOpenCurrentSourceLocation={(line, text) => {
+            setPendingSourceLocation({ line, text: text?.trim() || null });
           }}
           onVaultError={setVaultError}
           onRequestVaultIndex={requestVaultIndexForSearch}

@@ -71,6 +71,8 @@ export type MarkdownFileResponse = {
   size: number;
 };
 
+export type SavedMarkdownFileResponse = Omit<MarkdownFileResponse, "content">;
+
 export type ImportedAssetResponse = {
   path: string;
   relativeMarkdownPath: string;

@@ -96,7 +96,7 @@ pub fn write_markdown_file(
     content: String,
     expected_modified_at_ms: Option<u64>,
     expected_size: Option<u64>,
-) -> Result<MarkdownFile, String> {
+) -> Result<crate::model::SavedMarkdownFile, String> {
     let backup_root = app_data_dir(&app)?.join("backups");
     fs_ops::write_markdown_file(path, content, expected_modified_at_ms, expected_size, backup_root)
 }

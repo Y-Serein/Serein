@@ -3,6 +3,7 @@ import type {
   ImportedAssetResponse,
   LocalAssetDataResponse,
   MarkdownFileResponse,
+  SavedMarkdownFileResponse,
   VaultDirectoryResponse,
   VaultInitResponse,
   VaultIndexResponse,
@@ -58,12 +59,15 @@ export function writeMarkdownFile(
   expectedModifiedAtMs?: number | null,
   expectedSize?: number | null,
 ) {
-  return invoke<MarkdownFileResponse>("write_markdown_file", {
+  return invoke<SavedMarkdownFileResponse>("write_markdown_file", {
     path,
     content,
     expectedModifiedAtMs: expectedModifiedAtMs ?? null,
     expectedSize: expectedSize ?? null,
-  });
+  }).then((file) => ({
+    ...file,
+    content,
+  }));
 }
 
 export function writeExportFile(path: string, format: "html" | "pdf", bytes: number[]) {

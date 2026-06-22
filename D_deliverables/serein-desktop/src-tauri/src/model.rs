@@ -13,6 +13,16 @@ pub struct MarkdownFile {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SavedMarkdownFile {
+    pub path: String,
+    pub file_name: String,
+    pub file_ext: String,
+    pub modified_at_ms: Option<u64>,
+    pub size: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportedAsset {
     pub path: String,
     pub relative_markdown_path: String,

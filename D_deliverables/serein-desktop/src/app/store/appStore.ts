@@ -210,7 +210,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   vaultIndexStatus: "idle",
   vaultIndexError: null,
   selectedVaultDir: initialSettings.selectedVaultDir,
-  lastOpenedFile: initialSettings.lastOpenedFile,
+  lastOpenedFile: null,
   vaultRecoveryBlocked: initialSettings.vaultRecoveryBlocked,
   expandedDirs: new Set([""]),
   vaultWorkspace: mergeWorkspaceState(null, {

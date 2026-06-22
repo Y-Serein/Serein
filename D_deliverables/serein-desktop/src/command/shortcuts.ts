@@ -135,10 +135,11 @@ export const menuGroups: MenuGroup[] = [
     id: "theme",
     label: "主题",
     items: [
-      { label: "Daily", commandId: "theme.daily" },
-      { label: "Mint", commandId: "theme.mint" },
-      { label: "Dark", commandId: "theme.ink" },
-      { label: "Paper", commandId: "theme.v5" },
+      { label: "青霜", commandId: "theme.mint" },
+      { label: "护眼", commandId: "theme.eye" },
+      { label: "纸页", commandId: "theme.v5" },
+      { label: "雾蓝", commandId: "theme.ink" },
+      { label: "深夜", commandId: "theme.daily" },
     ],
   },
   {

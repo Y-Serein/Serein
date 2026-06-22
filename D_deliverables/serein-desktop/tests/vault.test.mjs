@@ -178,7 +178,13 @@ test("builds searchable active frontmatter tags and limited global graph with un
   assert.equal(searchVaultIndex(index, "#beta")[0].relativePath, "b.md");
   assert.equal(searchVaultIndex(index, "/extra-2")[0].relativePath, "extra-2.md");
   assert.equal(searchVaultIndex(index, "@misc")[0].relativePath, "c.md");
-  assert.equal(searchVaultIndex(index, ":body")[0].relativePath, "b.md");
+  const bodyResult = searchVaultIndex(index, ":body")[0];
+  assert.equal(bodyResult.relativePath, "b.md");
+  assert.equal(bodyResult.line, 7);
+  assert.equal(bodyResult.matchedText, "body");
+  const bodyWithoutTagFrontmatterResult = searchVaultIndex(index, ":body", { includeTags: false })[0];
+  assert.equal(bodyWithoutTagFrontmatterResult.line, 7);
+  assert.equal(bodyWithoutTagFrontmatterResult.matchedText, "body");
   assert.equal(searchVaultIndex(index, "#body").length, 0);
   assert.equal(searchVaultIndex(index, "@").length, 0);
   assert.equal(searchVaultIndex(index, "/").length, 0);

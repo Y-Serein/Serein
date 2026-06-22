@@ -38,7 +38,7 @@ import {
   toggleStrikethroughCommand,
 } from "@milkdown/kit/preset/gfm";
 import { markRule } from "@milkdown/kit/prose";
-import { lift } from "@milkdown/kit/prose/commands";
+import { lift, setBlockType } from "@milkdown/kit/prose/commands";
 import { liftListItem, sinkListItem, splitListItem } from "@milkdown/kit/prose/schema-list";
 import { AllSelection, Plugin, PluginKey, Selection, TextSelection } from "@milkdown/kit/prose/state";
 import type { Command } from "@milkdown/kit/prose/state";
@@ -589,6 +589,40 @@ const handleRichTab = (outdent: boolean): Command => (state, dispatch, view) => 
 
   return indentRichTextLine(outdent)(state, dispatch, view);
 };
+
+function turnHeadingIntoParagraphAtStart(view: EditorView) {
+  const { state } = view;
+  const { selection } = state;
+  if (!selection.empty) return false;
+
+  const { $from } = selection;
+  if ($from.parent.type.name !== "heading" || $from.parentOffset !== 0) return false;
+
+  const paragraphType = state.schema.nodes.paragraph;
+  if (!paragraphType) return false;
+
+  return setBlockType(paragraphType)(state, view.dispatch, view);
+}
+
+function pastedTextStartsWithMarkdownList(text: string) {
+  const firstLine = text.replace(/\r\n?/g, "\n").split("\n").find((line) => line.trim().length > 0) ?? "";
+  return /^\s{0,3}(?:[-+*]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/.test(firstLine);
+}
+
+function pasteTextIntoEmptyHeading(view: EditorView, text: string) {
+  if (!text || !pastedTextStartsWithMarkdownList(text)) return false;
+
+  const { state } = view;
+  const { selection } = state;
+  if (!selection.empty) return false;
+
+  const { $from } = selection;
+  if ($from.parent.type.name !== "heading" || $from.parent.content.size !== 0) return false;
+
+  view.dispatch(state.tr.insertText(text, selection.from, selection.to).scrollIntoView());
+  view.focus();
+  return true;
+}
 
 const richTabShortcut = $shortcut(() => ({
   Tab: { key: "Tab", priority: 200, onRun: () => handleRichTab(false) },
@@ -1320,7 +1354,7 @@ function convertTypedMarkdownLink(view: EditorView) {
   if (!selection.empty) return false;
 
   const $from = selection.$from;
-  if ($from.parent.type.name !== "paragraph") return false;
+  if (!$from.parent.inlineContent || $from.parent.type.name === "code_block") return false;
 
   const textBefore = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
   const match = textBefore.match(/(!?)\[([^\]\n]+)\]\(([^)\n]+)\)$/);
@@ -1441,7 +1475,7 @@ function markdownLinkTextRangeAtCursor(view: EditorView): ExpandedLinkRange | nu
   if (!selection.empty) return null;
 
   const $from = selection.$from;
-  if ($from.parent.type.name !== "paragraph") return null;
+  if (!$from.parent.inlineContent || $from.parent.type.name === "code_block") return null;
 
   const parentText = $from.parent.textBetween(0, $from.parent.content.size, "\n", "\n");
   const pattern = /\[([^\]\n]+)\]\(([^)\n]+)\)/g;
@@ -2087,6 +2121,21 @@ function EditorSurface({
           return;
         }
 
+        if (
+          event.key === "Backspace"
+          && !event.altKey
+          && !event.ctrlKey
+          && !event.metaKey
+          && !event.shiftKey
+          && turnHeadingIntoParagraphAtStart(view)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          view.focus();
+          return;
+        }
+
         if (isCodeBlockContentTarget && codeBlock) {
           if (isImeKeyboardEvent(event)) return;
 
@@ -2351,6 +2400,13 @@ function EditorSurface({
       };
       const handlePaste = (event: ClipboardEvent) => {
         const text = event.clipboardData?.getData("text/plain") ?? "";
+        if (pasteTextIntoEmptyHeading(view, text)) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          return;
+        }
+
         const pastedFrontmatter = splitYamlFrontmatter(text);
         if (!pastedFrontmatter) return;
         if (!selectionStartsAtDocumentTop(view)) return;
