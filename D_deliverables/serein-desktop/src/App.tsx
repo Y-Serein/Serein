@@ -1965,6 +1965,7 @@ export default function App() {
       recentFiles: pushRecentFile(vaultWorkspace.recentFiles, nextNote.filePath ?? null),
     });
     if (vaultRoot) {
+      const previousVaultRelativePath = note.filePath ? relativePathFromRoot(vaultRoot, note.filePath) : null;
       const savedVaultRelativePath = relativePathFromRoot(vaultRoot, file.path);
       if (savedVaultRelativePath !== null) {
         const indexFile = {
@@ -1981,7 +1982,16 @@ export default function App() {
           setVaultIndex((currentIndex) => upsertVaultIndexFile(currentIndex, vaultRoot, indexFile));
         }
         if (!isExistingFileSave) {
-          await loadVaultDirectory(parentVaultDir(savedVaultRelativePath));
+          const directoriesToRefresh = new Set([parentVaultDir(savedVaultRelativePath)]);
+          if (
+            previousVaultRelativePath !== null
+            && normalizeFilePath(previousVaultRelativePath) !== normalizeFilePath(savedVaultRelativePath)
+          ) {
+            directoriesToRefresh.add(parentVaultDir(previousVaultRelativePath));
+          }
+          for (const directory of directoriesToRefresh) {
+            await loadVaultDirectory(directory);
+          }
         }
         scheduleVaultIndexRefresh(vaultRoot);
       }

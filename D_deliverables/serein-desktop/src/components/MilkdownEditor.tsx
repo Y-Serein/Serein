@@ -103,6 +103,10 @@ type ExpandedLinkRange = {
   to: number;
 };
 
+type PendingCodeBlockTopLine = {
+  from: number;
+};
+
 type WikiSuggestState = {
   from: number;
   to: number;
@@ -1091,7 +1095,7 @@ function activeCodeBlockLine(view: EditorView, codeBlockDom: HTMLElement) {
   const selection = view.state.selection;
   const node = pos === null ? null : view.state.doc.nodeAt(pos);
   if (pos === null || !node || node.type.name !== "code_block") {
-    return { isLastLine: false, isBlank: false, blankLinesBefore: 0, hasNonBlankBefore: false };
+    return { isFirstLine: false, isLastLine: false, isBlank: false, blankLinesBefore: 0, hasNonBlankBefore: false };
   }
 
   const text = node.textContent;
@@ -1107,11 +1111,77 @@ function activeCodeBlockLine(view: EditorView, codeBlockDom: HTMLElement) {
   }
 
   return {
+    isFirstLine: lineNumber === 1,
     isLastLine: lineNumber === lines.length,
     isBlank: lineText.trim() === "",
     blankLinesBefore,
     hasNonBlankBefore: previousLines.some((line) => Boolean(line.trim())),
   };
+}
+
+function emptyTextBlockBeforeCodeBlock(view: EditorView, codeBlockPos: number) {
+  const { state } = view;
+  const paragraph = state.schema.nodes.paragraph;
+  const $pos = state.doc.resolve(codeBlockPos);
+  const parent = $pos.parent;
+  const index = $pos.index();
+  const previous = index > 0 ? parent.child(index - 1) : null;
+
+  if (
+    previous?.isTextblock
+    && previous.type.name !== "code_block"
+    && parent.canReplaceWith(index, index, previous.type)
+  ) {
+    const node = previous.type.createAndFill(previous.attrs);
+    if (node) return node;
+  }
+
+  if (paragraph && parent.canReplaceWith(index, index, paragraph)) {
+    return paragraph.create();
+  }
+
+  return null;
+}
+
+function insertCodeBlockTopLine(view: EditorView, codeBlockDom: HTMLElement): PendingCodeBlockTopLine | null {
+  const pos = findCodeBlockPos(view, codeBlockDom);
+  if (pos === null) return null;
+
+  const node = view.state.doc.nodeAt(pos);
+  if (!node || node.type.name !== "code_block") return null;
+
+  const insertedNode = emptyTextBlockBeforeCodeBlock(view, pos);
+  if (!insertedNode) return null;
+
+  let tr = view.state.tr.insert(pos, insertedNode);
+  tr = tr.setSelection(TextSelection.create(tr.doc, pos + 1)).scrollIntoView();
+  view.dispatch(tr);
+  view.focus();
+  return { from: pos };
+}
+
+function removePendingCodeBlockTopLine(view: EditorView, pending: PendingCodeBlockTopLine) {
+  const { state } = view;
+  const node = state.doc.nodeAt(pending.from);
+  if (!node || !node.isTextblock || node.textContent.length > 0) return false;
+
+  const { selection } = state;
+  if (!selection.empty || selection.from <= pending.from || selection.from >= pending.from + node.nodeSize) return false;
+
+  const $pos = state.doc.resolve(pending.from);
+  const parent = $pos.parent;
+  const index = $pos.index();
+  const next = index + 1 < parent.childCount ? parent.child(index + 1) : null;
+  if (next?.type.name !== "code_block") return false;
+
+  let tr = state.tr.delete(pending.from, pending.from + node.nodeSize);
+  const selectionPos = Math.max(0, Math.min(pending.from, tr.doc.content.size));
+  const resolved = tr.doc.resolve(selectionPos);
+  const nextSelection = Selection.findFrom(resolved, -1, true) ?? Selection.findFrom(resolved, 1, true);
+  if (nextSelection) tr = tr.setSelection(nextSelection);
+  view.dispatch(tr.scrollIntoView());
+  view.focus();
+  return true;
 }
 
 function isImeKeyboardEvent(event: KeyboardEvent) {
@@ -1410,8 +1480,67 @@ function convertTypedMarkdownImage(view: EditorView) {
   return true;
 }
 
+function convertTypedMarkdownStrong(view: EditorView) {
+  const { state } = view;
+  const { selection } = state;
+  if (!selection.empty) return false;
+
+  const $from = selection.$from;
+  if (!$from.parent.inlineContent || $from.parent.type.name === "code_block") return false;
+
+  const textBefore = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
+  const match = textBefore.match(/(^|[^*\\])\*\*([^\s*](?:[^\n]*?[^\s*])?)\*\*$/);
+  if (!match) return false;
+
+  const [, prefix, label] = match;
+  if (!label.trim()) return false;
+
+  const strong = state.schema.marks.strong;
+  if (!strong) return false;
+
+  const markdownLength = match[0].length - prefix.length;
+  const from = selection.from - markdownLength;
+  const to = selection.from;
+  let tr = state.tr.insertText(label, from, to);
+  tr = tr.addMark(from, from + label.length, strong.create());
+  tr = tr.setSelection(TextSelection.create(tr.doc, from + label.length));
+  view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+function convertTypedMarkdownEmphasis(view: EditorView) {
+  const { state } = view;
+  const { selection } = state;
+  if (!selection.empty) return false;
+
+  const $from = selection.$from;
+  if (!$from.parent.inlineContent || $from.parent.type.name === "code_block") return false;
+
+  const textBefore = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
+  const match = textBefore.match(/(^|[^*\\])\*([^\s*](?:[^\n]*?[^\s*])?)\*$/);
+  if (!match) return false;
+
+  const [, prefix, label] = match;
+  if (!label.trim()) return false;
+
+  const emphasis = state.schema.marks.emphasis;
+  if (!emphasis) return false;
+
+  const markdownLength = match[0].length - prefix.length;
+  const from = selection.from - markdownLength;
+  const to = selection.from;
+  let tr = state.tr.insertText(label, from, to);
+  tr = tr.addMark(from, from + label.length, emphasis.create());
+  tr = tr.setSelection(TextSelection.create(tr.doc, from + label.length));
+  view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
 function convertTypedMarkdownInline(view: EditorView) {
-  return convertTypedMarkdownImage(view) || convertTypedMarkdownLink(view);
+  return convertTypedMarkdownImage(view)
+    || convertTypedMarkdownLink(view)
+    || convertTypedMarkdownStrong(view)
+    || convertTypedMarkdownEmphasis(view);
 }
 
 function sameLinkAttrs(left: Record<string, unknown>, right: Record<string, unknown>) {
@@ -1945,6 +2074,7 @@ function EditorSurface({
       };
       let linkExpandFrame = 0;
       let expandedLinkRange: ExpandedLinkRange | null = null;
+      let pendingCodeBlockTopLine: PendingCodeBlockTopLine | null = null;
       let suppressNextLinkExpand = false;
       let suppressPointerLinkExpand = false;
       const moveInsideExpandedLink = (pos: number) => {
@@ -2073,6 +2203,17 @@ function EditorSurface({
         const isRedo = (event.ctrlKey || event.metaKey) && !event.altKey && (key === "y" || (event.shiftKey && key === "z"));
         if (codeBlock) scheduleActiveCodeBlockRefresh(event.target);
 
+        if (isPlainArrowUp && pendingCodeBlockTopLine) {
+          const removed = removePendingCodeBlockTopLine(view, pendingCodeBlockTopLine);
+          pendingCodeBlockTopLine = null;
+          if (removed) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            return;
+          }
+        }
+
         if (wikiSuggestRef.current && !event.ctrlKey && !event.metaKey && !event.altKey) {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
@@ -2164,6 +2305,20 @@ function EditorSurface({
             event.stopPropagation();
             beginLanguageEdit(languageControl);
             languageControl.focus();
+            return;
+          }
+
+          if (isPlainArrowUp) {
+            const { isFirstLine } = activeCodeBlockLine(view, codeBlock);
+            if (!isFirstLine) return;
+
+            const inserted = insertCodeBlockTopLine(view, codeBlock);
+            if (!inserted) return;
+
+            pendingCodeBlockTopLine = inserted;
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
             return;
           }
 
@@ -2397,6 +2552,9 @@ function EditorSurface({
         scheduleActiveTableRefresh();
         scheduleActiveImageRefresh();
         scheduleWikiSuggestUpdate();
+        if (!selectionInsideExpandedLink() && convertTypedMarkdownInline(view)) {
+          refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current);
+        }
       };
       const handlePaste = (event: ClipboardEvent) => {
         const text = event.clipboardData?.getData("text/plain") ?? "";
