@@ -21,6 +21,7 @@ import {
   createYamlFrontmatter,
   extractOutline,
   getHeadingOffsets,
+  normalizeRichMarkdownEscapes,
   normalizeWikiLinkEscapes,
   parseYamlFrontmatterProperties,
   setYamlPropertyValue,
@@ -611,6 +612,29 @@ test("normalizes escaped wiki links emitted by rich edit serialization", () => {
   assert.equal(normalizeWikiLinkEscapes("\\[\\[A#标题|显示文字\\]\\]"), "[[A#标题|显示文字]]");
   assert.equal(normalizeWikiLinkEscapes("[[A]]"), "[[A]]");
   assert.equal(normalizeWikiLinkEscapes("```\n\\[\\[A]]\n```"), "```\n\\[\\[A]]\n```");
+});
+
+test("normalizes escaped markdown links emitted by rich edit serialization", () => {
+  assert.equal(
+    normalizeRichMarkdownEscapes("### \\[NUT(7)]\\(https\\://networkupstools.org/docs/man/nut.html)"),
+    "### [NUT(7)](https://networkupstools.org/docs/man/nut.html)",
+  );
+  assert.equal(
+    normalizeRichMarkdownEscapes("### \\[Improv Wi-Fi: Open standard for setting up Wi-Fi via Bluetooth LE and Serial]\\(\\[https\\://www\\.improv-wifi.com/]\\(https\\://www\\.improv-wifi.com/))"),
+    "### [Improv Wi-Fi: Open standard for setting up Wi-Fi via Bluetooth LE and Serial](https://www.improv-wifi.com/)",
+  );
+  assert.equal(
+    normalizeRichMarkdownEscapes("```\n\\[NUT(7)]\\(https\\://networkupstools.org/docs/man/nut.html)\n```"),
+    "```\n\\[NUT(7)]\\(https\\://networkupstools.org/docs/man/nut.html)\n```",
+  );
+  assert.equal(
+    normalizeRichMarkdownEscapes("## 3. [eez\\_studio示例（RT-Thread） - SiFli SDK编程指南 文档](https://docs.sifli.com/projects/sdk/latest/sf32lb55x/example/multimedia/lvgl/lvgl_tools_example/eez_studio/README.html)"),
+    "## 3. [eez_studio示例（RT-Thread） - SiFli SDK编程指南 文档](https://docs.sifli.com/projects/sdk/latest/sf32lb55x/example/multimedia/lvgl/lvgl_tools_example/eez_studio/README.html)",
+  );
+  assert.equal(
+    normalizeRichMarkdownEscapes("* \\<https\\://www.cnblogs.com/tianwuyvlianshui/p/18698331\\>"),
+    "* <https://www.cnblogs.com/tianwuyvlianshui/p/18698331>",
+  );
 });
 
 test("matches wiki-style heading aliases when jumping to a heading", () => {

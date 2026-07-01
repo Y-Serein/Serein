@@ -157,6 +157,175 @@ export function normalizeWikiLinkEscapes(markdown: string) {
   }).join("");
 }
 
+function unescapeRichMarkdownPunctuation(value: string) {
+  return value.replace(/\\([!-\/:-@[-`{-~])/g, "$1");
+}
+
+function unescapeRichMarkdownLabel(value: string) {
+  return value.replace(/\\([!-\/:-@[-`{-~])/g, (match, char: string) => (
+    char === "[" || char === "]" || char === "(" || char === ")" || char === "\\"
+      ? match
+      : char
+  ));
+}
+
+function isEscapedAt(value: string, index: number) {
+  let slashCount = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
+}
+
+function markdownLinkDestinationEnd(value: string, openParen: number) {
+  let depth = 1;
+  for (let index = openParen + 1; index < value.length; index += 1) {
+    if (value[index] === "\\" && value[index + 1] === "(") {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (value[index] === "\\" && value[index + 1] === ")") {
+      depth -= 1;
+      if (depth === 0) return index + 2;
+      index += 1;
+      continue;
+    }
+    if (isEscapedAt(value, index)) continue;
+    if (value[index] === "(") {
+      depth += 1;
+      continue;
+    }
+    if (value[index] !== ")") continue;
+    depth -= 1;
+    if (depth === 0) return index + 1;
+  }
+  return -1;
+}
+
+function normalMarkdownLinkAt(value: string, start: number) {
+  if (value[start] !== "[" || isEscapedAt(value, start) || value[start - 1] === "!") return null;
+
+  let labelEnd = -1;
+  for (let index = start + 1; index < value.length; index += 1) {
+    if (value[index] === "]" && !isEscapedAt(value, index)) {
+      labelEnd = index;
+      break;
+    }
+  }
+  if (labelEnd < 0 || value[labelEnd + 1] !== "(") return null;
+
+  const end = markdownLinkDestinationEnd(value, labelEnd + 1);
+  if (end < 0) return null;
+
+  const label = unescapeRichMarkdownLabel(value.slice(start + 1, labelEnd));
+  const rawHref = unescapeRichMarkdownPunctuation(value.slice(labelEnd + 2, end - 1)).trim();
+  if (!label || !rawHref) return null;
+
+  const nested = rawHref.match(/^\[([^\]\n]+)]\((.+)\)$/);
+  const href = nested ? nested[2].trim() : rawHref;
+  return {
+    end,
+    text: `[${label}](${href})`,
+  };
+}
+
+function escapedMarkdownLinkAt(value: string, start: number) {
+  if (value[start] !== "\\" || value[start + 1] !== "[") return null;
+
+  const labelStart = start + 2;
+  let labelEnd = -1;
+  let afterLabel = -1;
+  for (let index = labelStart; index < value.length; index += 1) {
+    if (value[index] === "\\" && value[index + 1] === "]") {
+      labelEnd = index;
+      afterLabel = index + 2;
+      break;
+    }
+    if (value[index] === "]" && !isEscapedAt(value, index)) {
+      labelEnd = index;
+      afterLabel = index + 1;
+      break;
+    }
+  }
+  if (labelEnd < 0) return null;
+
+  const openParen = value[afterLabel] === "\\" && value[afterLabel + 1] === "("
+    ? afterLabel + 1
+    : value[afterLabel] === "("
+      ? afterLabel
+      : -1;
+  if (openParen < 0) return null;
+
+  const end = markdownLinkDestinationEnd(value, openParen);
+  if (end < 0) return null;
+
+  const label = unescapeRichMarkdownLabel(value.slice(labelStart, labelEnd));
+  const rawHref = unescapeRichMarkdownPunctuation(value.slice(openParen + 1, end - 1)).trim();
+  if (!label || !rawHref) return null;
+
+  const nested = rawHref.match(/^\[([^\]\n]+)]\((.+)\)$/);
+  const href = nested ? nested[2].trim() : rawHref;
+  return {
+    end,
+    text: `[${label}](${href})`,
+  };
+}
+
+function escapedAutolinkAt(value: string, start: number) {
+  const escapedOpen = value[start] === "\\" && value[start + 1] === "<";
+  const plainOpen = value[start] === "<" && !isEscapedAt(value, start);
+  if (!escapedOpen && !plainOpen) return null;
+
+  const bodyStart = start + (escapedOpen ? 2 : 1);
+  for (let index = bodyStart; index < value.length; index += 1) {
+    if (value[index] === "\n") return null;
+    const escapedClose = value[index] === "\\" && value[index + 1] === ">";
+    const plainClose = value[index] === ">" && !isEscapedAt(value, index);
+    if (!escapedClose && !plainClose) continue;
+
+    const bodyEnd = escapedClose ? index : index;
+    const href = unescapeRichMarkdownPunctuation(value.slice(bodyStart, bodyEnd)).trim();
+    if (!/^[a-z][a-z\d+.-]*:[^\s<>]+$/i.test(href)) return null;
+
+    return {
+      end: index + (escapedClose ? 2 : 1),
+      text: `<${href}>`,
+    };
+  }
+  return null;
+}
+
+function normalizeEscapedMarkdownLinks(line: string) {
+  let normalized = "";
+  for (let index = 0; index < line.length;) {
+    const link = escapedMarkdownLinkAt(line, index)
+      ?? normalMarkdownLinkAt(line, index)
+      ?? escapedAutolinkAt(line, index);
+    if (link) {
+      normalized += link.text;
+      index = link.end;
+      continue;
+    }
+    normalized += line[index];
+    index += 1;
+  }
+  return normalized;
+}
+
+export function normalizeRichMarkdownEscapes(markdown: string) {
+  const wikiNormalized = normalizeWikiLinkEscapes(markdown);
+  let inFence = false;
+  return wikiNormalized.split(/(\r?\n)/).map((part) => {
+    if (part === "\n" || part === "\r\n") return part;
+    if (/^\s{0,3}(```+|~~~+)/.test(part)) {
+      inFence = !inFence;
+      return part;
+    }
+    return inFence ? part : normalizeEscapedMarkdownLinks(part);
+  }).join("");
+}
+
 export function extractFirstLineTitle(markdown: string) {
   const firstLine = markdown.split(/\r?\n/, 1)[0] ?? "";
   const match = firstLine.match(/^#(?!#)\s+(.+?)\s*$/);

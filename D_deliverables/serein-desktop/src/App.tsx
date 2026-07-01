@@ -97,6 +97,7 @@ import {
   getHeadingOffsets,
   isSameOrChildPath,
   joinVaultPath,
+  normalizeRichMarkdownEscapes,
   normalizeWikiLinkEscapes,
   normalizeFilePath,
   parentVaultDir,
@@ -1557,7 +1558,9 @@ export default function App() {
   }, [requestCloseWindow]);
 
   const handleMarkdownChange = useCallback((markdown: string) => {
-    const normalizedMarkdown = normalizeWikiLinkEscapes(markdown);
+    const normalizedMarkdown = editorMode === "rich"
+      ? normalizeRichMarkdownEscapes(markdown)
+      : normalizeWikiLinkEscapes(markdown);
     const compareRichBaseline = editorMode === "rich";
     setNotes((currentNotes) => currentNotes.map((note) => {
       if (note.id !== activeNoteId) return note;
@@ -1566,7 +1569,7 @@ export default function App() {
   }, [activeNoteId, editorMode]);
 
   const handleRichMarkdownBaseline = useCallback((markdown: string) => {
-    const normalizedMarkdown = normalizeWikiLinkEscapes(markdown);
+    const normalizedMarkdown = normalizeRichMarkdownEscapes(markdown);
     setNotes((currentNotes) => currentNotes.map((note) => {
       if (note.id !== activeNoteId || note.dirty) return note;
       const savedMarkdown = note.savedMarkdown ?? "";

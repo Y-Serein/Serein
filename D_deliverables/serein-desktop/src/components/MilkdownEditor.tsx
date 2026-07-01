@@ -116,6 +116,13 @@ type WikiSuggestState = {
   selectedIndex: number;
 };
 
+type MarkdownLinkSource = {
+  start: number;
+  end: number;
+  label: string;
+  href: string;
+};
+
 const codeBlockLanguages = codeBlockLanguageData.map((language) => {
   if (language.name !== "Shell") return language;
   return LanguageDescription.of({
@@ -1418,6 +1425,121 @@ function handleCodeBlockTab(view: EditorView, codeBlockDom: HTMLElement, outdent
   return true;
 }
 
+function isEscapedAt(text: string, index: number) {
+  let slashCount = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
+}
+
+function unescapeMarkdownPunctuation(text: string) {
+  return text.replace(/\\([!-\/:-@[-`{-~])/g, "$1");
+}
+
+function unescapeMarkdownLabel(text: string) {
+  return text.replace(/\\([!-\/:-@[-`{-~])/g, (match, char: string) => (
+    char === "[" || char === "]" || char === "(" || char === ")" || char === "\\"
+      ? match
+      : char
+  ));
+}
+
+function escapeMarkdownLinkLabel(text: string) {
+  return text.replace(/\\/g, "\\\\").replace(/]/g, "\\]");
+}
+
+function escapeMarkdownAutolinkHref(href: string) {
+  return href.replace(/[<>]/g, "");
+}
+
+function isAutolinkHref(href: string) {
+  return /^[a-z][a-z\d+.-]*:[^\s<>]*$/i.test(href);
+}
+
+function findLinkLabelEnd(text: string, openBracket: number) {
+  for (let index = openBracket + 1; index < text.length; index += 1) {
+    if (text[index] === "]" && !isEscapedAt(text, index)) return index;
+  }
+  return -1;
+}
+
+function findLinkDestinationEnd(text: string, openParen: number) {
+  let depth = 1;
+  for (let index = openParen + 1; index < text.length; index += 1) {
+    if (isEscapedAt(text, index)) continue;
+    const char = text[index];
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char !== ")") continue;
+    depth -= 1;
+    if (depth === 0) return index;
+  }
+  return -1;
+}
+
+function markdownLinkSources(text: string) {
+  const sources: MarkdownLinkSource[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== "[" || isEscapedAt(text, index) || text[index - 1] === "!") continue;
+
+    const labelEnd = findLinkLabelEnd(text, index);
+    if (labelEnd < 0 || text[labelEnd + 1] !== "(") continue;
+
+    const destinationEnd = findLinkDestinationEnd(text, labelEnd + 1);
+    if (destinationEnd < 0) continue;
+
+    sources.push({
+      start: index,
+      end: destinationEnd + 1,
+      label: text.slice(index + 1, labelEnd),
+      href: text.slice(labelEnd + 2, destinationEnd).trim(),
+    });
+    index = destinationEnd;
+  }
+  return sources;
+}
+
+function nestedMarkdownHref(rawHref: string) {
+  const trimmed = unescapeMarkdownPunctuation(rawHref).trim();
+  const sources = markdownLinkSources(trimmed);
+  if (sources.length !== 1 || sources[0].start !== 0 || sources[0].end !== trimmed.length) return trimmed;
+  return unescapeMarkdownPunctuation(sources[0].href).trim();
+}
+
+function markdownLinkSourceBeforeCursor(textBefore: string) {
+  const sources = markdownLinkSources(textBefore);
+  for (let index = sources.length - 1; index >= 0; index -= 1) {
+    if (sources[index].end === textBefore.length) return sources[index];
+  }
+  return null;
+}
+
+function markdownLinkSourceAtOffset(text: string, offset: number) {
+  return markdownLinkSources(text).find((source) => offset >= source.start && offset <= source.end) ?? null;
+}
+
+function markdownAutolinkSourceAtOffset(text: string, offset: number) {
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== "<" || isEscapedAt(text, index)) continue;
+
+    for (let end = index + 1; end < text.length; end += 1) {
+      if (text[end] === "\n") break;
+      if (text[end] !== ">" || isEscapedAt(text, end)) continue;
+
+      const href = text.slice(index + 1, end).trim();
+      if (isAutolinkHref(href) && offset >= index && offset <= end + 1) {
+        return { start: index, end: end + 1 };
+      }
+      index = end;
+      break;
+    }
+  }
+  return null;
+}
+
 function convertTypedMarkdownLink(view: EditorView) {
   const { state } = view;
   const { selection } = state;
@@ -1427,18 +1549,17 @@ function convertTypedMarkdownLink(view: EditorView) {
   if (!$from.parent.inlineContent || $from.parent.type.name === "code_block") return false;
 
   const textBefore = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
-  const match = textBefore.match(/(!?)\[([^\]\n]+)\]\(([^)\n]+)\)$/);
-  if (!match) return false;
-  if (match[1]) return false;
+  const source = markdownLinkSourceBeforeCursor(textBefore);
+  if (!source) return false;
 
-  const [, , label, rawHref] = match;
-  const href = rawHref.trim();
+  const label = unescapeMarkdownLabel(source.label);
+  const href = nestedMarkdownHref(source.href);
   if (!label || !href) return false;
 
   const link = state.schema.marks.link;
   if (!link) return false;
 
-  const from = selection.from - match[0].length;
+  const from = selection.from - (source.end - source.start);
   const to = selection.from;
   let tr = state.tr.insertText(label, from, to);
   tr = tr.addMark(from, from + label.length, link.create({ href, title: null }));
@@ -1607,21 +1728,14 @@ function markdownLinkTextRangeAtCursor(view: EditorView): ExpandedLinkRange | nu
   if (!$from.parent.inlineContent || $from.parent.type.name === "code_block") return null;
 
   const parentText = $from.parent.textBetween(0, $from.parent.content.size, "\n", "\n");
-  const pattern = /\[([^\]\n]+)\]\(([^)\n]+)\)/g;
-  let match: RegExpExecArray | null;
+  const source = markdownLinkSourceAtOffset(parentText, $from.parentOffset)
+    ?? markdownAutolinkSourceAtOffset(parentText, $from.parentOffset);
+  if (!source) return null;
 
-  while ((match = pattern.exec(parentText)) !== null) {
-    const start = match.index;
-    const end = start + match[0].length;
-    if (parentText[start - 1] === "!") continue;
-    if ($from.parentOffset < start || $from.parentOffset > end) continue;
-    return {
-      from: $from.start() + start,
-      to: $from.start() + end,
-    };
-  }
-
-  return null;
+  return {
+    from: $from.start() + source.start,
+    to: $from.start() + source.end,
+  };
 }
 
 function convertMarkdownLinkRange(view: EditorView, range: ExpandedLinkRange | null) {
@@ -1629,11 +1743,13 @@ function convertMarkdownLinkRange(view: EditorView, range: ExpandedLinkRange | n
 
   const cursorPos = view.state.selection.empty ? view.state.selection.from : null;
   const text = view.state.doc.textBetween(range.from, range.to, "\n", "\n");
-  const match = text.match(/^\[([^\]\n]+)\]\(([^)\n]+)\)$/);
-  if (!match) return false;
+  const sources = markdownLinkSources(text);
+  const source = sources.length === 1 && sources[0].start === 0 && sources[0].end === text.length ? sources[0] : null;
+  const autolinkMatch = source ? null : text.match(/^<([a-z][a-z\d+.-]*:[^\s<>]+)>$/i);
+  if (!source && !autolinkMatch) return false;
 
-  const [, label, rawHref] = match;
-  const href = rawHref.trim();
+  const label = source ? unescapeMarkdownLabel(source.label) : autolinkMatch![1];
+  const href = source ? nestedMarkdownHref(source.href) : autolinkMatch![1];
   if (!label || !href) return false;
 
   const link = view.state.schema.marks.link;
@@ -1645,7 +1761,9 @@ function convertMarkdownLinkRange(view: EditorView, range: ExpandedLinkRange | n
     const removedLength = text.length - label.length;
     let nextPos = range.from + label.length;
 
-    if (cursorPos <= range.from) {
+    if (!source) {
+      nextPos = range.from + Math.max(0, Math.min(label.length, cursorPos - range.from - 1));
+    } else if (cursorPos <= range.from) {
       nextPos = cursorPos;
     } else if (cursorPos >= range.to) {
       nextPos = cursorPos - removedLength;
@@ -1675,7 +1793,9 @@ function expandActiveLinkToMarkdown(view: EditorView, expandedRange: ExpandedLin
   if (!label || !range.href) return null;
 
   const labelOffset = Math.max(0, Math.min(selection.from - range.from, label.length));
-  const markdown = `[${label}](${range.href})`;
+  const markdown = label === range.href && isAutolinkHref(range.href)
+    ? `<${escapeMarkdownAutolinkHref(range.href)}>`
+    : `[${escapeMarkdownLinkLabel(label)}](${range.href})`;
   const textNode = view.state.schema.text(markdown);
   const linkType = view.state.schema.marks.link;
   let tr = view.state.tr.replaceWith(range.from, range.to, textNode);
@@ -2090,6 +2210,11 @@ function EditorSurface({
         && view.state.selection.from >= expandedLinkRange!.from
         && view.state.selection.from <= expandedLinkRange!.to
       );
+      const selectionIntersectsExpandedLink = () => (
+        Boolean(expandedLinkRange)
+        && view.state.selection.from <= expandedLinkRange!.to
+        && view.state.selection.to >= expandedLinkRange!.from
+      );
       const convertExpandedLink = () => {
         if (!expandedLinkRange) return false;
         const handled = convertMarkdownLinkRange(view, expandedLinkRange);
@@ -2105,9 +2230,11 @@ function EditorSurface({
         }
 
         if (expandedLinkRange) {
-          const currentRawRange = markdownLinkTextRangeAtCursor(view);
-          if (currentRawRange) {
-            expandedLinkRange = currentRawRange;
+          if (selectionIntersectsExpandedLink()) {
+            const currentRawRange = view.state.selection.empty ? markdownLinkTextRangeAtCursor(view) : null;
+            if (currentRawRange) {
+              expandedLinkRange = currentRawRange;
+            }
             return;
           }
           convertExpandedLink();
@@ -2537,7 +2664,7 @@ function EditorSurface({
           return;
         }
 
-        if (selectionInsideExpandedLink()) {
+        if (selectionIntersectsExpandedLink()) {
           expandedLinkRange = markdownLinkTextRangeAtCursor(view) ?? expandedLinkRange;
           return;
         }
@@ -2668,7 +2795,6 @@ function EditorSurface({
 
         event.preventDefault();
         event.stopPropagation();
-        scheduleLinkExpandRefresh();
       };
       const handleSelectionChange = () => {
         scheduleActiveCodeBlockRefresh();
@@ -2684,7 +2810,6 @@ function EditorSurface({
       view.dom.addEventListener("input", handleInput, { capture: true });
       view.dom.addEventListener("paste", handlePaste, { capture: true });
       view.dom.addEventListener("pointerdown", handlePointerDown, { capture: true });
-      view.dom.addEventListener("pointerup", scheduleLinkExpandRefresh, { capture: true });
       view.dom.addEventListener("focusout", handleFocusOut, { capture: true });
       view.dom.addEventListener("click", handleClick, { capture: true });
       document.addEventListener("selectionchange", handleSelectionChange);
@@ -2700,7 +2825,6 @@ function EditorSurface({
         view.dom.removeEventListener("input", handleInput, { capture: true });
         view.dom.removeEventListener("paste", handlePaste, { capture: true });
         view.dom.removeEventListener("pointerdown", handlePointerDown, { capture: true });
-        view.dom.removeEventListener("pointerup", scheduleLinkExpandRefresh, { capture: true });
         view.dom.removeEventListener("focusout", handleFocusOut, { capture: true });
         view.dom.removeEventListener("click", handleClick, { capture: true });
         document.removeEventListener("selectionchange", handleSelectionChange);
