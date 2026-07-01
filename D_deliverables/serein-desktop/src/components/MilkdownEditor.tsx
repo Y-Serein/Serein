@@ -51,6 +51,7 @@ import type { YamlFrontmatterParts } from "../shared/markdown";
 import {
   composeMarkdownWithFrontmatter,
   createYamlFrontmatter,
+  normalizeRichMarkdownEscapes,
   setYamlPropertyValue,
   splitYamlFrontmatter,
   splitYamlPropertyValue,
@@ -1936,7 +1937,7 @@ function EditorSurface({
   const [loading, getEditor] = useInstance();
 
   const emitMarkdownChange = (nextMarkdown: string) => {
-    const normalizedMarkdown = normalizeRichSerializedSpaces(nextMarkdown);
+    const normalizedMarkdown = normalizeRichMarkdownEscapes(normalizeRichSerializedSpaces(nextMarkdown));
     lastKnownMarkdownRef.current = normalizedMarkdown;
     onChangeRef.current(normalizedMarkdown);
   };

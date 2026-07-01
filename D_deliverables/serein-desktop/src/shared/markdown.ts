@@ -140,21 +140,58 @@ export function findHeadingIndex(markdown: string, heading: string) {
   ));
 }
 
-export function normalizeWikiLinkEscapes(markdown: string) {
-  let inFence = false;
+type MarkdownFenceState = {
+  marker: "`" | "~";
+  length: number;
+};
+
+function markdownFenceAtLineStart(line: string) {
+  const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
+  if (!match) return null;
+
+  const fence = match[1];
+  return {
+    marker: fence[0] as "`" | "~",
+    length: fence.length,
+    rest: line.slice(match[0].length),
+  };
+}
+
+function mapMarkdownOutsideFences(markdown: string, mapLine: (line: string) => string) {
+  let activeFence: MarkdownFenceState | null = null;
+
   return markdown.split(/(\r?\n)/).map((part) => {
     if (part === "\n" || part === "\r\n") return part;
-    if (/^\s{0,3}(```+|~~~+)/.test(part)) {
-      inFence = !inFence;
+    const fence = markdownFenceAtLineStart(part);
+
+    if (activeFence) {
+      if (
+        fence
+        && fence.marker === activeFence.marker
+        && fence.length >= activeFence.length
+        && fence.rest.trim().length === 0
+      ) {
+        activeFence = null;
+      }
       return part;
     }
-    if (inFence) return part;
 
-    return part.replace(/(!?)((?:\\?\[){2})([^\]\n]+?)((?:\\?\]){2})/g, (match, embedded: string, opener: string, target: string, closer: string) => {
+    if (fence) {
+      activeFence = { marker: fence.marker, length: fence.length };
+      return part;
+    }
+
+    return mapLine(part);
+  }).join("");
+}
+
+export function normalizeWikiLinkEscapes(markdown: string) {
+  return mapMarkdownOutsideFences(markdown, (part) => (
+    part.replace(/(!?)((?:\\?\[){2})([^\]\n]+?)((?:\\?\]){2})/g, (match, embedded: string, opener: string, target: string, closer: string) => {
       if (!opener.includes("\\") && !closer.includes("\\")) return match;
       return `${embedded}[[${target}]]`;
-    });
-  }).join("");
+    })
+  ));
 }
 
 function unescapeRichMarkdownPunctuation(value: string) {
@@ -315,15 +352,7 @@ function normalizeEscapedMarkdownLinks(line: string) {
 
 export function normalizeRichMarkdownEscapes(markdown: string) {
   const wikiNormalized = normalizeWikiLinkEscapes(markdown);
-  let inFence = false;
-  return wikiNormalized.split(/(\r?\n)/).map((part) => {
-    if (part === "\n" || part === "\r\n") return part;
-    if (/^\s{0,3}(```+|~~~+)/.test(part)) {
-      inFence = !inFence;
-      return part;
-    }
-    return inFence ? part : normalizeEscapedMarkdownLinks(part);
-  }).join("");
+  return mapMarkdownOutsideFences(wikiNormalized, normalizeEscapedMarkdownLinks);
 }
 
 export function extractFirstLineTitle(markdown: string) {

@@ -628,6 +628,10 @@ test("normalizes escaped markdown links emitted by rich edit serialization", () 
     "```\n\\[NUT(7)]\\(https\\://networkupstools.org/docs/man/nut.html)\n```",
   );
   assert.equal(
+    normalizeRichMarkdownEscapes("````bash\n```text\n\\[NUT(7)]\\(https\\://networkupstools.org/docs/man/nut.html)\n```\n````\n\n### \\[NUT(7)]\\(https\\://networkupstools.org/docs/man/nut.html)"),
+    "````bash\n```text\n\\[NUT(7)]\\(https\\://networkupstools.org/docs/man/nut.html)\n```\n````\n\n### [NUT(7)](https://networkupstools.org/docs/man/nut.html)",
+  );
+  assert.equal(
     normalizeRichMarkdownEscapes("## 3. [eez\\_studio示例（RT-Thread） - SiFli SDK编程指南 文档](https://docs.sifli.com/projects/sdk/latest/sf32lb55x/example/multimedia/lvgl/lvgl_tools_example/eez_studio/README.html)"),
     "## 3. [eez_studio示例（RT-Thread） - SiFli SDK编程指南 文档](https://docs.sifli.com/projects/sdk/latest/sf32lb55x/example/multimedia/lvgl/lvgl_tools_example/eez_studio/README.html)",
   );
