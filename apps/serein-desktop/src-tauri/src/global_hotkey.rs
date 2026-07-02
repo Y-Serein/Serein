@@ -178,7 +178,7 @@ mod platform {
         sync::{Mutex, OnceLock, atomic::Ordering, mpsc},
         thread::{self, JoinHandle},
     };
-    use tauri::{AppHandle, Manager};
+    use tauri::AppHandle;
     use windows_sys::Win32::{
         Foundation::HWND,
         System::Threading::GetCurrentThreadId,
@@ -226,7 +226,6 @@ mod platform {
                 Self::QuickNote => {
                     let app_for_closure = app.clone();
                     app.run_on_main_thread(move || {
-                        focus_visible_main_window(&app_for_closure);
                         let show_in_taskbar = QUICK_NOTE_SHOW_IN_TASKBAR.load(Ordering::Relaxed);
                         if let Err(error) = open_quick_note_window(
                             &app_for_closure,
@@ -257,18 +256,6 @@ mod platform {
 
     static REVEAL_HOTKEY_CONTROLLER: OnceLock<Mutex<Option<HotkeyController>>> = OnceLock::new();
     static QUICK_NOTE_HOTKEY_CONTROLLER: OnceLock<Mutex<Option<HotkeyController>>> = OnceLock::new();
-
-    fn focus_visible_main_window(app: &AppHandle) {
-        let Some(window) = app.get_webview_window("main") else {
-            return;
-        };
-        if !window.is_visible().unwrap_or(false) {
-            return;
-        }
-
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
 
     pub fn configure_reveal(app: AppHandle, shortcut: Option<String>) -> Result<(), String> {
         configure(app, shortcut, HotkeyAction::Reveal)

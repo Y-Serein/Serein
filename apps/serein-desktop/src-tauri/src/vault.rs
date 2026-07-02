@@ -1070,7 +1070,7 @@ mod tests {
     #[test]
     fn vault_index_reads_unopened_nested_active_tag_file() {
         let root = temp_dir("index-nested-tag");
-        let nested = root.join("C_context").join("test");
+        let nested = root.join("tests").join("fixtures").join("rich-edit");
         fs::create_dir_all(&nested).expect("create nested vault fixture");
         fs::write(root.join("home.md"), "# Home").expect("write home");
         fs::write(
@@ -1080,7 +1080,10 @@ mod tests {
         .expect("write nested tag file");
 
         let response = read_vault_index_files(root.to_string_lossy().to_string()).expect("read vault index");
-        assert!(response.files.iter().any(|file| file.relative_path == "C_context/test/new.md"));
+        assert!(response
+            .files
+            .iter()
+            .any(|file| file.relative_path == "tests/fixtures/rich-edit/new.md"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1088,7 +1091,7 @@ mod tests {
     #[test]
     fn vault_tag_search_reads_unopened_nested_active_tag_file() {
         let root = temp_dir("tag-search-nested");
-        let nested = root.join("C_context").join("test");
+        let nested = root.join("tests").join("fixtures").join("rich-edit");
         fs::create_dir_all(&nested).expect("create nested vault fixture");
         fs::write(
             nested.join("new.md"),
@@ -1105,7 +1108,7 @@ mod tests {
             .expect("search active tag files");
 
         assert_eq!(response.files.len(), 1);
-        assert_eq!(response.files[0].relative_path, "C_context/test/new.md");
+        assert_eq!(response.files[0].relative_path, "tests/fixtures/rich-edit/new.md");
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1116,7 +1119,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let root = temp_dir("index-unreadable-dir");
-        let readable = root.join("C_context").join("test");
+        let readable = root.join("tests").join("fixtures").join("rich-edit");
         let unreadable = root.join("A_unreadable");
         fs::create_dir_all(&readable).expect("create readable nested vault fixture");
         fs::create_dir_all(&unreadable).expect("create unreadable directory");
@@ -1130,7 +1133,10 @@ mod tests {
         let response = read_vault_index_files(root.to_string_lossy().to_string()).expect("read vault index");
 
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o755)).expect("restore permissions");
-        assert!(response.files.iter().any(|file| file.relative_path == "C_context/test/new.md"));
+        assert!(response
+            .files
+            .iter()
+            .any(|file| file.relative_path == "tests/fixtures/rich-edit/new.md"));
         assert!(response.skipped_files >= 1);
 
         let _ = fs::remove_dir_all(root);

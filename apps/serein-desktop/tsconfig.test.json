@@ -13,6 +13,7 @@
     "src/export/markdownExport.ts",
     "src/export/pdfExport.ts",
     "src/app/defaults.ts",
+    "src/command/globalShortcuts.ts",
     "src/explorer/tree.ts",
     "src/shared/markdown.ts",
     "src/vault/index.ts",

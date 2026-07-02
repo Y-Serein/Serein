@@ -33,6 +33,7 @@ import {
   shortcutFromEvent,
   writeShortcuts,
 } from "./command/shortcuts";
+import { resolveGlobalAppShortcuts } from "./command/globalShortcuts";
 import type { EditorCommandAction, Note } from "./domain/model";
 import { createDemoVault, readDemoMarkdownFile } from "./dev/demoVault";
 import { applyPlainEditorCommand } from "./editor/plainCommands";
@@ -325,6 +326,13 @@ function isWindowDragBlockedTarget(target: EventTarget | null) {
 
 function isTauriRuntime() {
   return Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+}
+
+function isWindowsTauriRuntime() {
+  if (!isTauriRuntime()) return false;
+  const navigatorWithUserAgentData = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const platform = navigatorWithUserAgentData.userAgentData?.platform ?? navigator.platform ?? "";
+  return /win/i.test(platform) || /windows/i.test(navigator.userAgent);
 }
 
 function readQuickNoteInitialSurface(): QuickNoteInitialSurface | null {
@@ -980,16 +988,9 @@ export default function App() {
     });
   }, [centerGraphIsolatedOnly, centerGraphOpen, centerGraphShowUnresolved, centerGraphTag, tagFeaturesEnabled, vaultIndex]);
   const shortcutConflicts = useMemo(() => findShortcutConflicts(shortcuts), [shortcuts]);
-  const globalRevealShortcut = useMemo(() => {
-    const shortcut = shortcuts.find((item) => item.id === "app.revealWindow");
-    if (!shortcut?.enabled) return null;
-    return shortcut.currentKeys[0] ?? null;
-  }, [shortcuts]);
-  const globalQuickNoteShortcut = useMemo(() => {
-    const shortcut = shortcuts.find((item) => item.id === "app.openQuickNote");
-    if (!shortcut?.enabled) return null;
-    return shortcut.currentKeys[0] ?? null;
-  }, [shortcuts]);
+  const globalAppShortcuts = useMemo(() => resolveGlobalAppShortcuts(shortcuts), [shortcuts]);
+  const globalRevealShortcut = globalAppShortcuts.revealWindow;
+  const globalQuickNoteShortcut = globalAppShortcuts.openQuickNote;
   const vaultMode = Boolean(vaultRoot);
   const textStats = useMemo(() => countDocumentText(deferredActiveMarkdown), [deferredActiveMarkdown]);
   const lineCount = useMemo(() => deferredActiveMarkdown.split(/\r?\n/).length, [deferredActiveMarkdown]);
@@ -3587,10 +3588,9 @@ export default function App() {
       const command = commands[shortcut.commandId];
       if (!command?.enabled) return;
 
-      if (shortcut.commandId === "app.openQuickNote" && isTauriRuntime()) {
+      if (shortcut.commandId === "app.openQuickNote" && isWindowsTauriRuntime()) {
         event.preventDefault();
         event.stopPropagation();
-        dispatchCommand(shortcut.commandId);
         return;
       }
 

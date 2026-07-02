@@ -42,6 +42,7 @@ import {
 } from "../.test-dist/vault/workspace.js";
 
 const root = "/vault";
+const richEditFixturePath = "tests/fixtures/rich-edit/new.md";
 
 function treeEntry(relativePath, kind = "file", children = []) {
   const name = relativePath ? relativePath.split("/").pop() : "vault";
@@ -414,7 +415,7 @@ test("upserts saved active frontmatter tags into the vault index", () => {
     ],
   });
 
-  index = upsertVaultIndexFile(index, root, file("C_context/test/new.md", [
+  index = upsertVaultIndexFile(index, root, file(richEditFixturePath, [
     "---",
     "tags: [remark 备注]",
     "aliases: [remark]",
@@ -424,9 +425,9 @@ test("upserts saved active frontmatter tags into the vault index", () => {
     "# new",
   ].join("\n")));
 
-  assert.deepEqual(searchVaultIndex(index, "@remark").map((item) => item.relativePath), ["C_context/test/new.md"]);
+  assert.deepEqual(searchVaultIndex(index, "@remark").map((item) => item.relativePath), [richEditFixturePath]);
 
-  index = upsertVaultIndexFile(index, root, file("C_context/test/new.md", [
+  index = upsertVaultIndexFile(index, root, file(richEditFixturePath, [
     "---",
     "tags: [remark 备注]",
     "aliases: [remark]",
@@ -448,7 +449,7 @@ test("keeps opened active frontmatter tags searchable after switching active fil
     ],
   });
 
-  index = upsertVaultIndexFile(index, root, file("C_context/test/new.md", [
+  index = upsertVaultIndexFile(index, root, file(richEditFixturePath, [
     "---",
     "tags: [remark 备注]",
     "aliases: [remark]",
@@ -464,22 +465,22 @@ test("keeps opened active frontmatter tags searchable after switching active fil
   assert.ok(otherDraft);
   assert.deepEqual(
     searchVaultIndex(index, "@remark", { draftFile: otherDraft }).map((item) => item.relativePath),
-    ["C_context/test/new.md"],
+    [richEditFixturePath],
   );
 });
 
-test("indexes the real unopened C_context active remark fixture", () => {
-  const content = fs.readFileSync("../../C_context/test/new.md", "utf8");
+test("indexes the real unopened rich-edit active remark fixture", () => {
+  const content = fs.readFileSync("../../tests/fixtures/rich-edit/new.md", "utf8");
   const index = buildVaultIndex(root, {
     truncated: false,
     skippedFiles: 0,
     files: [
       file("home.md", "# Home"),
-      file("C_context/test/new.md", content),
+      file(richEditFixturePath, content),
     ],
   });
 
-  assert.deepEqual(searchVaultIndex(index, "@remark").map((item) => item.relativePath), ["C_context/test/new.md"]);
+  assert.deepEqual(searchVaultIndex(index, "@remark").map((item) => item.relativePath), [richEditFixturePath]);
 });
 
 test("parses indented YAML frontmatter fields and indexes draft tags", () => {
