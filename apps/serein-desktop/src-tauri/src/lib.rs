@@ -5,6 +5,7 @@ mod global_hotkey;
 mod model;
 mod path_security;
 mod safe_fs;
+mod tray_owner;
 mod vault;
 
 use tauri::{
@@ -25,7 +26,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            setup_tray(app.handle())?;
+            if tray_owner::acquire_tray_owner() {
+                setup_tray(app.handle())?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

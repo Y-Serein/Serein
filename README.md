@@ -5,7 +5,7 @@ Serein is a local Markdown desktop writing tool built with Tauri 2, React, TypeS
 The current release target is the desktop application in:
 
 ```text
-D_deliverables/serein-desktop/
+apps/serein-desktop/
 ```
 
 ## Features
@@ -24,7 +24,7 @@ Release downloads will be published here after Windows packaging is verified.
 ## Build
 
 ```bash
-cd D_deliverables/serein-desktop
+cd apps/serein-desktop
 npm ci
 npm run build
 ```
@@ -32,14 +32,14 @@ npm run build
 For Tauri static checking:
 
 ```bash
-cd D_deliverables/serein-desktop/src-tauri
+cd apps/serein-desktop/src-tauri
 env CARGO_TARGET_DIR=/tmp/serein-tauri-target cargo check
 ```
 
 Windows release packaging should be run on Windows:
 
 ```powershell
-.\T_tools\build_windows.ps1
+.\scripts\build_windows.ps1
 ```
 
 After Windows dependencies have been installed once, `-SkipInstall` can be used
