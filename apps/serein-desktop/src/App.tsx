@@ -167,7 +167,12 @@ type SourceLocationTarget = {
   text: string | null;
 };
 type NativeEditCommand = "cut" | "copy" | "paste" | "undo" | "redo" | "selectAll";
+type MarkdownHistoryState = {
+  undo: string[];
+  redo: string[];
+};
 const SEARCH_SEED_MAX_LENGTH = 160;
+const MARKDOWN_HISTORY_LIMIT = 120;
 
 function isEditorTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
@@ -312,6 +317,12 @@ function runNativeTextEditCommand(control: HTMLInputElement | HTMLTextAreaElemen
   }
 
   return false;
+}
+
+function pushMarkdownHistoryEntry(stack: string[], markdown: string) {
+  if (stack[stack.length - 1] === markdown) return;
+  stack.push(markdown);
+  if (stack.length > MARKDOWN_HISTORY_LIMIT) stack.splice(0, stack.length - MARKDOWN_HISTORY_LIMIT);
 }
 
 function isRecordingShortcutTarget(target: EventTarget | null) {
@@ -900,6 +911,7 @@ export default function App() {
   const pendingHeadingRef = useRef<string | null>(null);
   const sidebarRevealKeyRef = useRef<string | null>(null);
   const richCommandIdRef = useRef(0);
+  const markdownHistoryRef = useRef<Map<string, MarkdownHistoryState>>(new Map());
   const vaultIndexRefreshIdRef = useRef(0);
   const scheduledVaultIndexRefreshRef = useRef<{ idleId: number | null; timeoutId: number | null } | null>(null);
   const vaultIndexFileOverridesRef = useRef<Map<string, VaultIndexFileResponse>>(new Map());
@@ -1558,6 +1570,18 @@ export default function App() {
     };
   }, [requestCloseWindow]);
 
+  const recordMarkdownHistory = useCallback((noteId: string, beforeMarkdown: string, afterMarkdown: string) => {
+    if (beforeMarkdown === afterMarkdown) return;
+    let history = markdownHistoryRef.current.get(noteId);
+    if (!history) {
+      history = { undo: [], redo: [] };
+      markdownHistoryRef.current.set(noteId, history);
+    }
+
+    pushMarkdownHistoryEntry(history.undo, beforeMarkdown);
+    history.redo = [];
+  }, []);
+
   const handleMarkdownChange = useCallback((markdown: string) => {
     const normalizedMarkdown = editorMode === "rich"
       ? normalizeRichMarkdownEscapes(markdown)
@@ -1565,9 +1589,11 @@ export default function App() {
     const compareRichBaseline = editorMode === "rich";
     setNotes((currentNotes) => currentNotes.map((note) => {
       if (note.id !== activeNoteId) return note;
+      if (note.markdown === normalizedMarkdown) return note;
+      recordMarkdownHistory(note.id, note.markdown, normalizedMarkdown);
       return noteWithMarkdown(note, normalizedMarkdown, { compareRichBaseline });
     }));
-  }, [activeNoteId, editorMode]);
+  }, [activeNoteId, editorMode, recordMarkdownHistory]);
 
   const handleRichMarkdownBaseline = useCallback((markdown: string) => {
     const normalizedMarkdown = normalizeRichMarkdownEscapes(markdown);
@@ -2656,12 +2682,54 @@ export default function App() {
     });
   }, [activeNote, setNotes]);
 
+  const applyMarkdownHistory = useCallback((direction: "undo" | "redo") => {
+    const note = activeNoteRef.current;
+    if (!note) return false;
+
+    const history = markdownHistoryRef.current.get(note.id);
+    const source = direction === "undo" ? history?.undo : history?.redo;
+    if (!history || !source?.length) return false;
+
+    let nextMarkdown: string | undefined;
+    while (source.length) {
+      const candidate = source.pop();
+      if (candidate !== undefined && candidate !== note.markdown) {
+        nextMarkdown = candidate;
+        break;
+      }
+    }
+    if (nextMarkdown === undefined) return false;
+
+    const target = direction === "undo" ? history.redo : history.undo;
+    pushMarkdownHistoryEntry(target, note.markdown);
+
+    const compareRichBaseline = editorMode === "rich";
+    setNotes((currentNotes) => currentNotes.map((item) => {
+      if (item.id !== note.id) return item;
+      return noteWithMarkdown(item, nextMarkdown, { compareRichBaseline });
+    }));
+
+    window.requestAnimationFrame(() => {
+      if (editorMode === "plain") {
+        plainEditorRef.current?.focus();
+        return;
+      }
+
+      editorSurfaceRef.current?.querySelector<HTMLElement>(".ProseMirror")?.focus();
+    });
+    return true;
+  }, [editorMode, setNotes]);
+
   const runPlainEditCommand = useCallback((command: "cut" | "copy" | "paste" | "undo" | "redo") => {
     const textarea = plainEditorRef.current;
     if (!textarea) return;
     textarea.focus();
 
-    if (command === "undo" || command === "redo") return;
+    if (command === "undo" || command === "redo") {
+      if (applyMarkdownHistory(command)) return;
+      document.execCommand(command);
+      return;
+    }
 
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
@@ -2675,7 +2743,7 @@ export default function App() {
     readDesktopClipboardText().then((text) => {
       if (text) replacePlainEditorSelection(text);
     });
-  }, [replacePlainEditorSelection]);
+  }, [applyMarkdownHistory, replacePlainEditorSelection]);
 
   const runEditorCommand = useCallback((action: EditorCommandAction, payload?: string, alt?: string) => {
     if (!activeNote) return;
@@ -2723,13 +2791,15 @@ export default function App() {
     const nativeControl = nativeTextControlForEditCommand();
     if (nativeControl && runNativeTextEditCommand(nativeControl, command)) return;
 
+    if ((command === "undo" || command === "redo") && applyMarkdownHistory(command)) return;
+
     if (editorMode === "plain") {
       runPlainEditCommand(command);
       return;
     }
 
     runEditorCommand(command);
-  }, [editorMode, nativeTextControlForEditCommand, runEditorCommand, runPlainEditCommand]);
+  }, [applyMarkdownHistory, editorMode, nativeTextControlForEditCommand, runEditorCommand, runPlainEditCommand]);
 
   const runLinkCommand = useCallback(async () => {
     const href = await showInputDialog(t.prompts.linkUrl, "https://");
@@ -3558,11 +3628,23 @@ export default function App() {
       if (
         isEditorTarget(event.target)
         && (
+          shortcut.commandId === "edit.undo"
+          || shortcut.commandId === "edit.redo"
+        )
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        dispatchCommand(shortcut.commandId);
+        return;
+      }
+
+      if (
+        isEditorTarget(event.target)
+        && (
           shortcut.commandId === "edit.cut"
           || shortcut.commandId === "edit.copy"
           || shortcut.commandId === "edit.paste"
-          || shortcut.commandId === "edit.undo"
-          || shortcut.commandId === "edit.redo"
         )
       ) {
         return;

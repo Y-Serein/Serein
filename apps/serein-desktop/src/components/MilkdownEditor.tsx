@@ -348,48 +348,6 @@ function clearNativeSelection(view?: EditorView) {
   (rootSelection ?? window.getSelection())?.removeAllRanges();
 }
 
-function editorScrollerForElement(element: HTMLElement) {
-  let node: HTMLElement | null = element.parentElement;
-  while (node && node !== document.body) {
-    const style = window.getComputedStyle(node);
-    if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) return node;
-    node = node.parentElement;
-  }
-  return document.scrollingElement instanceof HTMLElement ? document.scrollingElement : null;
-}
-
-function selectionHeadPosition(selection: Selection) {
-  return selection instanceof TextSelection ? selection.head : selection.from;
-}
-
-function proseMirrorSelectionVisible(view: EditorView, scroller: HTMLElement | null) {
-  if (!scroller) return true;
-  try {
-    const coords = view.coordsAtPos(selectionHeadPosition(view.state.selection));
-    const viewport = scroller === document.scrollingElement
-      ? { top: 0, bottom: window.innerHeight }
-      : scroller.getBoundingClientRect();
-    return coords.bottom >= viewport.top + 2 && coords.top <= viewport.bottom - 2;
-  } catch {
-    return true;
-  }
-}
-
-function centerProseMirrorSelection(view: EditorView, scroller: HTMLElement | null) {
-  if (!scroller) return;
-  try {
-    const coords = view.coordsAtPos(selectionHeadPosition(view.state.selection));
-    const viewport = scroller === document.scrollingElement
-      ? { top: 0, height: window.innerHeight }
-      : scroller.getBoundingClientRect();
-    const cursorCenter = (coords.top + coords.bottom) / 2;
-    const viewportCenter = viewport.top + viewport.height / 2;
-    scroller.scrollTop += cursorCenter - viewportCenter;
-  } catch {
-    // Native history may leave selection in a transient state; ignore scroll compensation then.
-  }
-}
-
 function codeBlockDomAtSelection(view: EditorView) {
   const { $from } = view.state.selection;
   for (let depth = $from.depth; depth > 0; depth -= 1) {
@@ -398,53 +356,6 @@ function codeBlockDomAtSelection(view: EditorView) {
     return dom instanceof HTMLElement ? dom.closest<HTMLElement>(".milkdown-code-block") : null;
   }
   return null;
-}
-
-const richHistoryScrollJobs = new WeakMap<EditorView, { frames: number[]; timers: number[] }>();
-
-function clearRichHistoryScrollJob(view: EditorView) {
-  const job = richHistoryScrollJobs.get(view);
-  if (!job) return;
-  job.frames.forEach((frame) => window.cancelAnimationFrame(frame));
-  job.timers.forEach((timer) => window.clearTimeout(timer));
-  richHistoryScrollJobs.delete(view);
-}
-
-function runRichHistoryWithEditorScroll(view: EditorView, runHistory: () => void) {
-  const scroller = editorScrollerForElement(view.dom);
-  const scrollTopBefore = scroller?.scrollTop ?? 0;
-
-  const stabilizeSelectionScroll = () => {
-    if (!scroller) return;
-
-    scroller.scrollTop = scrollTopBefore;
-    if (proseMirrorSelectionVisible(view, scroller)) return;
-
-    centerProseMirrorSelection(view, scroller);
-  };
-
-  clearRichHistoryScrollJob(view);
-  runHistory();
-  stabilizeSelectionScroll();
-
-  const frames: number[] = [];
-  const timers: number[] = [];
-  const scheduleFrame = (callback: () => void) => {
-    const frame = window.requestAnimationFrame(callback);
-    frames.push(frame);
-  };
-  const scheduleTimer = (delay: number) => {
-    const timer = window.setTimeout(stabilizeSelectionScroll, delay);
-    timers.push(timer);
-  };
-
-  scheduleFrame(() => {
-    stabilizeSelectionScroll();
-    scheduleFrame(stabilizeSelectionScroll);
-  });
-  scheduleTimer(50);
-  scheduleTimer(120);
-  richHistoryScrollJobs.set(view, { frames, timers });
 }
 
 function refreshLocalImagePreviews(root: HTMLElement, imagePreviewMap: Record<string, string>) {
@@ -1041,6 +952,36 @@ function findTablePos(view: EditorView, tableBlockDom: HTMLElement) {
   return found;
 }
 
+const codeBlockExitParentNames = new Set(["blockquote", "list_item", "bullet_list", "ordered_list"]);
+
+function selectionInsideRange(selection: Selection, from: number, to: number) {
+  return selection.from >= from && selection.to <= to;
+}
+
+function codeBlockExitPosition(view: EditorView, directAfter: number) {
+  const { doc } = view.state;
+  let exitAfter = directAfter;
+
+  while (exitAfter < doc.content.size) {
+    const $after = doc.resolve(exitAfter);
+    let liftedAfter = exitAfter;
+
+    for (let depth = $after.depth; depth > 0; depth -= 1) {
+      const parent = $after.node(depth);
+      if (!codeBlockExitParentNames.has(parent.type.name)) continue;
+      if ($after.index(depth) !== parent.childCount) continue;
+
+      liftedAfter = $after.after(depth);
+      break;
+    }
+
+    if (liftedAfter === exitAfter) break;
+    exitAfter = liftedAfter;
+  }
+
+  return exitAfter;
+}
+
 function exitCodeBlockAfter(view: EditorView, codeBlockDom: HTMLElement) {
   const pos = findCodeBlockPos(view, codeBlockDom);
   if (pos === null) return false;
@@ -1049,14 +990,22 @@ function exitCodeBlockAfter(view: EditorView, codeBlockDom: HTMLElement) {
   const paragraph = view.state.schema.nodes.paragraph;
   if (!node || node.type.name !== "code_block" || !paragraph) return false;
 
-  const after = pos + node.nodeSize;
+  const codeFrom = pos;
+  const codeTo = pos + node.nodeSize;
+  const after = codeBlockExitPosition(view, codeTo);
   let tr = view.state.tr;
 
   if (after >= view.state.doc.content.size) {
     tr = tr.insert(after, paragraph.create());
     tr = tr.setSelection(TextSelection.create(tr.doc, after + 1));
   } else {
-    tr = tr.setSelection(TextSelection.near(tr.doc.resolve(after), 1));
+    const nextSelection = Selection.findFrom(tr.doc.resolve(after), 1, true);
+    if (nextSelection && !selectionInsideRange(nextSelection, codeFrom, codeTo)) {
+      tr = tr.setSelection(nextSelection);
+    } else {
+      tr = tr.insert(after, paragraph.create());
+      tr = tr.setSelection(TextSelection.create(tr.doc, after + 1));
+    }
   }
 
   view.dispatch(tr.scrollIntoView());
@@ -2314,8 +2263,27 @@ function EditorSurface({
         window.cancelAnimationFrame(activeCodeBlockFrame);
         activeCodeBlockFrame = window.requestAnimationFrame(() => refreshActiveCodeBlock(view, fallbackTarget));
       };
+      const eventBelongsToEditor = (target: HTMLElement | null) => {
+        if (target && view.dom.contains(target)) return true;
+
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && view.dom.contains(activeElement)) return true;
+
+        if (
+          target
+          && target.closest("button, input, textarea, select, [contenteditable='true'], [role='menu'], .menu-popover, .app-dialog, .window-controls")
+        ) {
+          return false;
+        }
+
+        const selection = document.getSelection();
+        const anchor = selection?.anchorNode;
+        return Boolean(anchor && view.dom.contains(anchor));
+      };
       const handleKeyDown = (event: KeyboardEvent) => {
         const target = event.target instanceof HTMLElement ? event.target : null;
+        if (!eventBelongsToEditor(target)) return;
+
         const targetCodeBlock = target?.closest<HTMLElement>(".milkdown-code-block") ?? null;
         const selectionCodeBlock = codeBlockDomAtSelection(view);
         const codeBlock = targetCodeBlock ?? selectionCodeBlock;
@@ -2326,9 +2294,6 @@ function EditorSurface({
         const isPlainArrowDown = event.key === "ArrowDown" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
         const isPlainArrowUp = event.key === "ArrowUp" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
         const isPlainTab = event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey;
-        const key = event.key.toLowerCase();
-        const isUndo = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && key === "z";
-        const isRedo = (event.ctrlKey || event.metaKey) && !event.altKey && (key === "y" || (event.shiftKey && key === "z"));
         if (codeBlock) scheduleActiveCodeBlockRefresh(event.target);
 
         if (isPlainArrowUp && pendingCodeBlockTopLine) {
@@ -2379,17 +2344,6 @@ function EditorSurface({
           return;
         }
 
-        if (isUndo || isRedo) {
-          event.preventDefault();
-          event.stopPropagation();
-          event.stopImmediatePropagation();
-          runRichHistoryWithEditorScroll(view, () => {
-            commands.call(isUndo ? undoCommand.key : redoCommand.key);
-          });
-          view.focus();
-          return;
-        }
-
         if (
           event.key === "Backspace"
           && !event.altKey
@@ -2431,8 +2385,12 @@ function EditorSurface({
 
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation();
             beginLanguageEdit(languageControl);
-            languageControl.focus();
+            languageControl.focus({ preventScroll: true });
+            if (document.activeElement !== languageControl) {
+              exitCodeBlockAfter(view, codeBlock);
+            }
             return;
           }
 
@@ -2539,6 +2497,7 @@ function EditorSurface({
           if (isPlainArrowDown) {
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation();
             if (isLanguagePickerOpen(languageButton) && focusLanguagePickerItem(codeBlock, 1)) return;
 
             updateCodeBlockLanguage(view, codeBlock, currentLanguageText(languageButton));
@@ -2806,7 +2765,7 @@ function EditorSurface({
         scheduleActiveImageRefresh();
       };
 
-      view.dom.addEventListener("keydown", handleKeyDown, { capture: true });
+      window.addEventListener("keydown", handleKeyDown, { capture: true });
       view.dom.addEventListener("keyup", handleKeyUp, { capture: true });
       view.dom.addEventListener("input", handleInput, { capture: true });
       view.dom.addEventListener("paste", handlePaste, { capture: true });
@@ -2821,7 +2780,7 @@ function EditorSurface({
         window.cancelAnimationFrame(activeImageFrame);
         window.cancelAnimationFrame(activeCodeBlockFrame);
         window.cancelAnimationFrame(wikiSuggestFrame);
-        view.dom.removeEventListener("keydown", handleKeyDown, { capture: true });
+        window.removeEventListener("keydown", handleKeyDown, { capture: true });
         view.dom.removeEventListener("keyup", handleKeyUp, { capture: true });
         view.dom.removeEventListener("input", handleInput, { capture: true });
         view.dom.removeEventListener("paste", handlePaste, { capture: true });
