@@ -1,0 +1,48 @@
+## AI未整理项目
+
+* transformers-main
+
+* system-prompts-and-models-of-ai-tools-main
+
+* dive-into-llms-main
+
+* <https://github.com/Y-Serein，阅读这个仓库，今天我想学会点什么，给我一些推荐的方向>
+
+<br />
+
+<br />
+
+<br />
+
+* reset/backlight 是否，修改
+
+* 确认分辨率和时序
+
+* SSD\_SEND的宏定义或原始驱动工程
+
+* tree
+
+<br />
+
+<br />
+
+### tree
+
+```bash
+# 只显示2层
+tree -L 2
+
+# 只显示目录
+tree -d
+
+# 显示文件大小
+tree -sh
+
+tree -pugD
+1212
+sudo tee /etc/apt/apt.conf.d/95proxy >/dev/null <<'EOF'
+Acquire::http::Proxy "http://127.0.0.1:7897";
+Acquire::https::Proxy "http://127.0.0.1:7897";
+EOF
+
+```

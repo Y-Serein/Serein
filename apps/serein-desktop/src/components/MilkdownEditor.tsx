@@ -995,6 +995,18 @@ function selectionInsideRange(selection: Selection, from: number, to: number) {
   return selection.from >= from && selection.to <= to;
 }
 
+function canInsertParagraphAt(view: EditorView, position: number) {
+  const paragraph = view.state.schema.nodes.paragraph;
+  if (!paragraph) return false;
+
+  try {
+    const $position = view.state.doc.resolve(position);
+    return $position.parent.canReplaceWith($position.index(), $position.index(), paragraph);
+  } catch {
+    return false;
+  }
+}
+
 function codeBlockExitPosition(view: EditorView, directAfter: number) {
   const { doc } = view.state;
   let exitAfter = directAfter;
@@ -1031,17 +1043,21 @@ function exitCodeBlockAfter(view: EditorView, codeBlockDom: HTMLElement) {
   const codeTo = pos + node.nodeSize;
   const after = codeBlockExitPosition(view, codeTo);
   let tr = view.state.tr;
+  const insertExitParagraph = (position: number) => {
+    if (!canInsertParagraphAt(view, position)) return false;
+    tr = tr.insert(position, paragraph.create());
+    tr = tr.setSelection(TextSelection.create(tr.doc, position + 1));
+    return true;
+  };
 
   if (after >= view.state.doc.content.size) {
-    tr = tr.insert(after, paragraph.create());
-    tr = tr.setSelection(TextSelection.create(tr.doc, after + 1));
+    if (!insertExitParagraph(after)) return false;
   } else {
     const nextSelection = Selection.findFrom(tr.doc.resolve(after), 1, true);
     if (nextSelection && !selectionInsideRange(nextSelection, codeFrom, codeTo)) {
       tr = tr.setSelection(nextSelection);
     } else {
-      tr = tr.insert(after, paragraph.create());
-      tr = tr.setSelection(TextSelection.create(tr.doc, after + 1));
+      if (!insertExitParagraph(after)) return false;
     }
   }
 
@@ -1097,6 +1113,9 @@ function activeCodeBlockLine(view: EditorView, codeBlockDom: HTMLElement) {
   const lineNumber = text.slice(0, offset).split("\n").length;
   const lines = text.split("\n");
   const lineText = lines[lineNumber - 1] ?? "";
+  const nextLineBreak = text.indexOf("\n", offset);
+  const lineEnd = nextLineBreak === -1 ? text.length : nextLineBreak;
+  const isLogicalLastLine = text.slice(lineEnd).replace(/\n/g, "").length === 0;
   const previousLines = lines.slice(0, lineNumber - 1);
   let blankLinesBefore = 0;
   for (let index = previousLines.length - 1; index >= 0; index -= 1) {
@@ -1106,7 +1125,7 @@ function activeCodeBlockLine(view: EditorView, codeBlockDom: HTMLElement) {
 
   return {
     isFirstLine: lineNumber === 1,
-    isLastLine: lineNumber === lines.length,
+    isLastLine: lineNumber === lines.length || isLogicalLastLine,
     isBlank: lineText.trim() === "",
     blankLinesBefore,
     hasNonBlankBefore: previousLines.some((line) => Boolean(line.trim())),
@@ -2430,11 +2449,14 @@ function EditorSurface({
             if (!isLastLine) return;
 
             const languageControl = codeBlock.querySelector<HTMLButtonElement>(".language-button");
-            if (!languageControl) return;
-
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation();
+            if (!languageControl) {
+              exitCodeBlockAfter(view, codeBlock);
+              return;
+            }
+
             beginLanguageEdit(languageControl);
             languageControl.focus({ preventScroll: true });
             if (document.activeElement !== languageControl) {
