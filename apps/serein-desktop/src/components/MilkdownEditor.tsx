@@ -46,7 +46,7 @@ import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
 import { $inputRule, $prose, $shortcut, replaceAll } from "@milkdown/kit/utils";
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from "@milkdown/react";
-import type { EditorCommandSignal } from "../domain/model";
+import type { EditorCommandResult, EditorCommandSignal } from "../domain/model";
 import type { YamlFrontmatterParts } from "../shared/markdown";
 import {
   composeMarkdownWithFrontmatter,
@@ -66,6 +66,7 @@ type MilkdownEditorProps = {
   onChange: (markdown: string) => void;
   onRichMarkdownBaseline: (markdown: string) => void;
   command: EditorCommandSignal | null;
+  onCommandResult: (result: EditorCommandResult) => void;
   onOpenLink: (href: string) => boolean;
   wikiLinkSuggestions: WikiLinkSuggestion[];
   onCreateWikiLink: (target: string) => Promise<string | null>;
@@ -283,6 +284,42 @@ function editorDocumentFromMarkdown(markdown: string, normalizeWindowsImagePaths
     bodyMarkdown,
     fullMarkdown: frontmatter ? composeMarkdownWithFrontmatter(frontmatter.frontmatter, bodyMarkdown) : bodyMarkdown,
   };
+}
+
+type RichSelectionSnapshot = {
+  anchor: number;
+  head: number;
+};
+
+function richSelectionSnapshot(view: EditorView): RichSelectionSnapshot {
+  return {
+    anchor: view.state.selection.anchor,
+    head: view.state.selection.head,
+  };
+}
+
+function restoreRichSelectionSnapshot(view: EditorView, snapshot: RichSelectionSnapshot) {
+  const maxPos = view.state.doc.content.size;
+  const clampPosition = (position: number) => Math.max(0, Math.min(maxPos, position));
+  const anchor = clampPosition(snapshot.anchor);
+  const head = clampPosition(snapshot.head);
+
+  let nextSelection: Selection | null = null;
+  try {
+    nextSelection = anchor === head
+      ? TextSelection.near(view.state.doc.resolve(anchor), 1)
+      : TextSelection.create(view.state.doc, anchor, head);
+  } catch {
+    try {
+      nextSelection = Selection.near(view.state.doc.resolve(anchor), anchor <= head ? 1 : -1);
+    } catch {
+      nextSelection = Selection.atStart(view.state.doc);
+    }
+  }
+
+  if (!view.state.selection.eq(nextSelection)) {
+    view.dispatch(view.state.tr.setSelection(nextSelection));
+  }
 }
 
 function selectionStartsAtDocumentTop(view: EditorView) {
@@ -1765,83 +1802,87 @@ function expandActiveLinkToMarkdown(view: EditorView, expandedRange: ExpandedLin
   };
 }
 
-function runEditorCommand(editor: Editor, command: EditorCommandSignal) {
+function runEditorCommand(editor: Editor, command: EditorCommandSignal, onResult: (result: EditorCommandResult) => void) {
   editor.action((ctx) => {
     const commands = ctx.get(commandsCtx);
     const view = ctx.get(editorViewCtx);
+    let handled = false;
     view.focus();
 
     switch (command.action) {
       case "paragraph":
-        commands.call(turnIntoTextCommand.key);
+        handled = commands.call(turnIntoTextCommand.key);
         break;
       case "heading1":
-        commands.call(wrapInHeadingCommand.key, 1);
+        handled = commands.call(wrapInHeadingCommand.key, 1);
         break;
       case "heading2":
-        commands.call(wrapInHeadingCommand.key, 2);
+        handled = commands.call(wrapInHeadingCommand.key, 2);
         break;
       case "heading3":
-        commands.call(wrapInHeadingCommand.key, 3);
+        handled = commands.call(wrapInHeadingCommand.key, 3);
         break;
       case "blockquote":
-        commands.call(wrapInBlockquoteCommand.key);
+        handled = commands.call(wrapInBlockquoteCommand.key);
         break;
       case "bulletList":
-        commands.call(wrapInBulletListCommand.key);
+        handled = commands.call(wrapInBulletListCommand.key);
         break;
       case "orderedList":
-        commands.call(wrapInOrderedListCommand.key);
+        handled = commands.call(wrapInOrderedListCommand.key);
         break;
       case "codeBlock":
-        commands.call(createCodeBlockCommand.key);
+        handled = commands.call(createCodeBlockCommand.key);
         break;
       case "table":
-        commands.call(insertTableCommand.key, { row: 3, col: 3 });
+        handled = commands.call(insertTableCommand.key, { row: 3, col: 3 });
         break;
       case "image":
         if (command.payload) {
-          commands.call(insertImageCommand.key, { src: command.payload, alt: command.alt ?? "" });
+          handled = commands.call(insertImageCommand.key, { src: command.payload, alt: command.alt ?? "" });
         }
         break;
       case "bold":
-        commands.call(toggleStrongCommand.key);
+        handled = commands.call(toggleStrongCommand.key);
         break;
       case "italic":
-        commands.call(toggleEmphasisCommand.key);
+        handled = commands.call(toggleEmphasisCommand.key);
         break;
       case "inlineCode":
-        commands.call(toggleInlineCodeCommand.key);
+        handled = commands.call(toggleInlineCodeCommand.key);
         break;
       case "strike":
-        commands.call(toggleStrikethroughCommand.key);
+        handled = commands.call(toggleStrikethroughCommand.key);
         break;
       case "link":
         if (command.payload) {
-          commands.call(toggleLinkCommand.key, { href: command.payload });
+          handled = commands.call(toggleLinkCommand.key, { href: command.payload });
         }
         break;
       case "cut":
-        cutRichSelection(view);
+        handled = cutRichSelection(view);
         break;
       case "copy":
-        copyRichSelection(view);
+        handled = copyRichSelection(view);
         break;
       case "paste":
         pasteRichText(view);
+        handled = true;
         break;
       case "undo":
-        commands.call(undoCommand.key);
+        handled = commands.call(undoCommand.key);
         break;
       case "redo":
-        commands.call(redoCommand.key);
+        handled = commands.call(redoCommand.key);
         break;
       case "selectAllSmart":
-        commands.inline(selectRichScope);
+        handled = commands.inline(selectRichScope);
         break;
       default:
         break;
     }
+
+    onResult({ command, handled });
   });
 }
 
@@ -1850,6 +1891,7 @@ function EditorSurface({
   onChange,
   onRichMarkdownBaseline,
   command,
+  onCommandResult,
   onOpenLink,
   wikiLinkSuggestions,
   onCreateWikiLink,
@@ -1867,6 +1909,7 @@ function EditorSurface({
   const lastKnownMarkdownRef = useRef(initialDocumentRef.current.fullMarkdown);
   const onChangeRef = useRef(onChange);
   const onRichMarkdownBaselineRef = useRef(onRichMarkdownBaseline);
+  const onCommandResultRef = useRef(onCommandResult);
   const onOpenLinkRef = useRef(onOpenLink);
   const wikiLinkSuggestionsRef = useRef(wikiLinkSuggestions);
   const onCreateWikiLinkRef = useRef(onCreateWikiLink);
@@ -1999,6 +2042,10 @@ function EditorSurface({
   }, [onRichMarkdownBaseline]);
 
   useEffect(() => {
+    onCommandResultRef.current = onCommandResult;
+  }, [onCommandResult]);
+
+  useEffect(() => {
     onOpenLinkRef.current = onOpenLink;
   }, [onOpenLink]);
 
@@ -2053,7 +2100,7 @@ function EditorSurface({
     if (loading || !command) return;
     const editor = getEditor();
     if (!editor) return;
-    runEditorCommand(editor, command);
+    runEditorCommand(editor, command, onCommandResultRef.current);
   }, [command, getEditor, loading]);
 
   useEffect(() => {
@@ -2072,9 +2119,11 @@ function EditorSurface({
     setFrontmatterKeyboardReveal(false);
 
     editor.action((ctx) => {
-      replaceAll(nextDocument.bodyMarkdown)(ctx);
-      onRichMarkdownBaselineRef.current(nextDocument.fullMarkdown);
       const view = ctx.get(editorViewCtx);
+      const previousSelection = richSelectionSnapshot(view);
+      replaceAll(nextDocument.bodyMarkdown)(ctx);
+      restoreRichSelectionSnapshot(view, previousSelection);
+      onRichMarkdownBaselineRef.current(nextDocument.fullMarkdown);
       window.requestAnimationFrame(() => refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current));
     });
   }, [getEditor, loading, markdown, normalizeWindowsImagePaths]);
@@ -2994,6 +3043,7 @@ export function MilkdownEditor({
   onChange,
   onRichMarkdownBaseline,
   command,
+  onCommandResult,
   onOpenLink,
   wikiLinkSuggestions,
   onCreateWikiLink,
@@ -3011,6 +3061,7 @@ export function MilkdownEditor({
         onChange={onChange}
         onRichMarkdownBaseline={onRichMarkdownBaseline}
         command={command}
+        onCommandResult={onCommandResult}
         onOpenLink={onOpenLink}
         wikiLinkSuggestions={wikiLinkSuggestions}
         onCreateWikiLink={onCreateWikiLink}

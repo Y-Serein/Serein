@@ -50,6 +50,11 @@ export type EditorCommandSignal = {
   alt?: string;
 };
 
+export type EditorCommandResult = {
+  command: EditorCommandSignal;
+  handled: boolean;
+};
+
 export type Whiteboard = {
   id: ID;
   title: string;

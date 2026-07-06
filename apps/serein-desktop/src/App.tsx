@@ -34,8 +34,13 @@ import {
   writeShortcuts,
 } from "./command/shortcuts";
 import { resolveGlobalAppShortcuts } from "./command/globalShortcuts";
-import type { EditorCommandAction, Note } from "./domain/model";
+import type { EditorCommandAction, EditorCommandResult, Note } from "./domain/model";
 import { createDemoVault, readDemoMarkdownFile } from "./dev/demoVault";
+import {
+  recordMarkdownHistoryEntry,
+  takeMarkdownHistorySnapshot,
+  type MarkdownHistoryStore,
+} from "./editor/markdownHistory";
 import { applyPlainEditorCommand } from "./editor/plainCommands";
 import { directoryFromResponse, preserveLoadedDirectoryChildren, updateVaultNode } from "./explorer/tree";
 import { AppContextMenu } from "./features/context-menu/AppContextMenu";
@@ -167,12 +172,7 @@ type SourceLocationTarget = {
   text: string | null;
 };
 type NativeEditCommand = "cut" | "copy" | "paste" | "undo" | "redo" | "selectAll";
-type MarkdownHistoryState = {
-  undo: string[];
-  redo: string[];
-};
 const SEARCH_SEED_MAX_LENGTH = 160;
-const MARKDOWN_HISTORY_LIMIT = 120;
 
 function isEditorTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
@@ -317,12 +317,6 @@ function runNativeTextEditCommand(control: HTMLInputElement | HTMLTextAreaElemen
   }
 
   return false;
-}
-
-function pushMarkdownHistoryEntry(stack: string[], markdown: string) {
-  if (stack[stack.length - 1] === markdown) return;
-  stack.push(markdown);
-  if (stack.length > MARKDOWN_HISTORY_LIMIT) stack.splice(0, stack.length - MARKDOWN_HISTORY_LIMIT);
 }
 
 function isRecordingShortcutTarget(target: EventTarget | null) {
@@ -911,7 +905,7 @@ export default function App() {
   const pendingHeadingRef = useRef<string | null>(null);
   const sidebarRevealKeyRef = useRef<string | null>(null);
   const richCommandIdRef = useRef(0);
-  const markdownHistoryRef = useRef<Map<string, MarkdownHistoryState>>(new Map());
+  const markdownHistoryRef = useRef<MarkdownHistoryStore>(new Map());
   const vaultIndexRefreshIdRef = useRef(0);
   const scheduledVaultIndexRefreshRef = useRef<{ idleId: number | null; timeoutId: number | null } | null>(null);
   const vaultIndexFileOverridesRef = useRef<Map<string, VaultIndexFileResponse>>(new Map());
@@ -1571,15 +1565,7 @@ export default function App() {
   }, [requestCloseWindow]);
 
   const recordMarkdownHistory = useCallback((noteId: string, beforeMarkdown: string, afterMarkdown: string) => {
-    if (beforeMarkdown === afterMarkdown) return;
-    let history = markdownHistoryRef.current.get(noteId);
-    if (!history) {
-      history = { undo: [], redo: [] };
-      markdownHistoryRef.current.set(noteId, history);
-    }
-
-    pushMarkdownHistoryEntry(history.undo, beforeMarkdown);
-    history.redo = [];
+    recordMarkdownHistoryEntry(markdownHistoryRef.current, noteId, beforeMarkdown, afterMarkdown);
   }, []);
 
   const handleMarkdownChange = useCallback((markdown: string) => {
@@ -2686,22 +2672,14 @@ export default function App() {
     const note = activeNoteRef.current;
     if (!note) return false;
 
-    const history = markdownHistoryRef.current.get(note.id);
-    const source = direction === "undo" ? history?.undo : history?.redo;
-    if (!history || !source?.length) return false;
-
-    let nextMarkdown: string | undefined;
-    while (source.length) {
-      const candidate = source.pop();
-      if (candidate !== undefined && candidate !== note.markdown) {
-        nextMarkdown = candidate;
-        break;
+    const plainSelection = editorMode === "plain" && plainEditorRef.current
+      ? {
+        start: plainEditorRef.current.selectionStart,
+        end: plainEditorRef.current.selectionEnd,
       }
-    }
-    if (nextMarkdown === undefined) return false;
-
-    const target = direction === "undo" ? history.redo : history.undo;
-    pushMarkdownHistoryEntry(target, note.markdown);
+      : null;
+    const nextMarkdown = takeMarkdownHistorySnapshot(markdownHistoryRef.current, note.id, note.markdown, direction);
+    if (nextMarkdown === null) return false;
 
     const compareRichBaseline = editorMode === "rich";
     setNotes((currentNotes) => currentNotes.map((item) => {
@@ -2711,7 +2689,14 @@ export default function App() {
 
     window.requestAnimationFrame(() => {
       if (editorMode === "plain") {
-        plainEditorRef.current?.focus();
+        const textarea = plainEditorRef.current;
+        if (!textarea) return;
+        textarea.focus();
+        if (plainSelection) {
+          const nextStart = Math.min(plainSelection.start, textarea.value.length);
+          const nextEnd = Math.min(plainSelection.end, textarea.value.length);
+          textarea.setSelectionRange(nextStart, nextEnd);
+        }
         return;
       }
 
@@ -2744,6 +2729,12 @@ export default function App() {
       if (text) replacePlainEditorSelection(text);
     });
   }, [applyMarkdownHistory, replacePlainEditorSelection]);
+
+  const handleRichCommandResult = useCallback((result: EditorCommandResult) => {
+    if (result.handled) return;
+    if (result.command.action !== "undo" && result.command.action !== "redo") return;
+    applyMarkdownHistory(result.command.action);
+  }, [applyMarkdownHistory]);
 
   const runEditorCommand = useCallback((action: EditorCommandAction, payload?: string, alt?: string) => {
     if (!activeNote) return;
@@ -2791,15 +2782,13 @@ export default function App() {
     const nativeControl = nativeTextControlForEditCommand();
     if (nativeControl && runNativeTextEditCommand(nativeControl, command)) return;
 
-    if ((command === "undo" || command === "redo") && applyMarkdownHistory(command)) return;
-
     if (editorMode === "plain") {
       runPlainEditCommand(command);
       return;
     }
 
     runEditorCommand(command);
-  }, [applyMarkdownHistory, editorMode, nativeTextControlForEditCommand, runEditorCommand, runPlainEditCommand]);
+  }, [editorMode, nativeTextControlForEditCommand, runEditorCommand, runPlainEditCommand]);
 
   const runLinkCommand = useCallback(async () => {
     const href = await showInputDialog(t.prompts.linkUrl, "https://");
@@ -4612,6 +4601,7 @@ export default function App() {
           hasActiveDocument={hasActiveDocument}
           editorMode={editorMode}
           richCommand={richCommand}
+          onRichCommandResult={handleRichCommandResult}
           editorSurfaceRef={editorSurfaceRef}
           plainEditorRef={plainEditorRef}
           onMarkdownChange={handleMarkdownChange}
