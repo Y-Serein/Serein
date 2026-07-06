@@ -1,0 +1,786 @@
+---
+tags: [Atlas, writing]
+aliases: [Atlas, Project Atlas]
+status: active
+---
+<br />
+
+# vibe-bridge
+
+### 设备挂载
+
+```bash
+usbipd list
+# usbipd bind --busid 8-1
+usbipd attach --wsl Ubuntu-22.04 --busid 8-1
+ls /dev/hid*
+
+# 查看进程
+sudo fuser -v /dev/hidraw0
+sudo fuser -v /dev/video0
+
+# 结束必要进程
+sudo fuser -k /dev/hidraw0
+
+# Powshell
+usbipd detach --all
+
+usbipd detach --busid 9-3
+```
+
+### 编译
+
+```bash
+apptainer exec --cleanenv /home/rv_nano/AIKB/LicheeRV-Nano-Build/host/ubuntu/licheervnano-build-ubuntu.sqfs bash -lc 'cd /home/rv_nano/AIKB/LicheeRV-Nano-Build && source build/cvisetup.sh && defconfig sg2002_licheervnano_sd && pack_rootfs && pack_burn_image'
+
+IMG=/home/rv_nano/AIKB/LicheeRV-Nano-Build/install/soc_sg2002_licheervnano_sd/images/2026-07--16-22-bd7487.img; cp "$IMG" ~/Sipeed/image_ys/ && rm "$IMG"
+
+Get-Content "c:\Serein_Y\Sipeed\rv_nano\tools\vibe-bridge\vb-daemon.log" -Tail 240
+
+cd /home/rv_nano/Sipeed/rv_nano/tools/vibe-bridge
+PYTHONPATH=src python3 -m vibe_bridge.main doctor
+
+# 查看当前所有 session ID
+PYTHONPATH=/home/rv_nano/Sipeed/rv_nano/tools/vibe-bridge/src \
+python3 -m vibe_bridge.main sessions
+
+```
+
+### 规则
+
+```Text
+~\Sipeed\rv_nano\tools\vibe-bridge，读./AGENTS.md 和 ./HANDOFF.md
+
+比如选择桌宠->用户定义按键功能,
+用户电脑安装一个插件，aikb上电后，然后开启用户体验，甚至希望用户通过和AI聊天,就把按键功能定义好了。
+
+
+
+目前项目我已经烧录验证过了，挺正常的，但是有几个bug，1.akim那几个需要重新生成一下，现在比例不对，好像放在视频上整体比之前大了一点点，你可以看Sipeed\rv_nano\tools\vibe-bridge\C_context\images\logs\v4.png是正常的，v5是异常的，就是整体有点大，v4的voice是之前生成的，reject和running，这些都需要重新生成一下，原始视频在Sipeed\rv_nano\tools\vibe-bridge\C_context\images\new，
+
+目前项目我已经烧录验证过了，挺正常的，这次的主要架构优化，尽量不要改变现有实现，用户电脑安装一个插件，aikb上电后，然后开启用户体验，甚至希望用户通过和AI聊天,就把按键功能定义好了。，我们来讨论一下这个方案，只是讨论还没确定要实施
+
+打开terminal输入一键配置命令，有终端的hook+hidraw+自动命令输入直接brew install一个轻量的桥接（类似角标，可以获取当前agent的使用状况，让屏幕显示信息更丰富）；
+```
+
+### Kitty
+
+```bash
+host 端测试
+cd /home/rv_nano/Sipeed/rv_nano/tools/vibe-bridge
+PYTHONPATH=src python3 scripts/send_kitty_png.py --cols 24 --rows 8 --hold 20
+```
+
+### 调色盘
+
+[gruvbox-contrib/color.table at master · morhetz/gruvbox-contrib](https://github.com/morhetz/gruvbox-contrib/blob/master/color.table)
+
+```bash
+80年代HP老仪器风：这是调色板，所有颜色都让ai从这里取，然后艺术风格就一致了
+
+ Opus 4.7 | 📁NanoUPS | 🔀main  | █░░░░░░░░░ 8% of 1M tokens
+  💬
+```
+
+```bash
+Serein Dino Terminal Pet Style – Reusable Master Prompt
+
+Please follow the Serein Dino Terminal Pet Style for this image.
+
+This is a premium embedded keyboard-screen pixel pet interface.
+The core style is:
+
+static retro terminal HUD + Gruvbox-inspired warm pixel palette + one consistent tiny dinosaur companion + state-based micro-animation
+
+Preserve the entire UI layout exactly as shown in the reference image, including:
+header, footer, all text, divider lines, background texture, screen perspective, spacing, labels, icons, ground line, grass tufts, and overall product feel.
+
+Do not change the text.
+Do not move the UI.
+Do not add unrelated elements.
+Only adjust or animate the tiny dinosaur and the state-specific symbol/effect in the center.
+
+The tiny dinosaur must always keep the same character identity:
+a small cute side-facing pixel dinosaur,
+compact chubby body,
+rounder head,
+short snout,
+short subtle mouth line,
+warm olive-green body,
+amber / warm beige belly,
+small dark expressive eye,
+orange-yellow back spikes,
+tiny arms and feet,
+cute, clever, calm, and warm personality,
+like a tiny AI coding companion.
+
+Do not redesign it into a different dinosaur.
+Do not make the head long or oval.
+Do not make the mouth line too long.
+Do not make the body tall, thin, aggressive, or monster-like.
+
+Use a strict Gruvbox-style palette:
+dark background #1d2021 / #282828,
+warm text #fbf1c7 / #ebdbb2,
+yellow #fabd2f,
+orange #fe8019,
+red #fb4934 / #cc241d,
+aqua #8ec07c,
+muted gray/brown #928374 / #7c6f64.
+
+Keep the colors muted, warm, retro, and premium.
+Avoid neon colors, glossy gradients, oversaturated cartoon colors, or modern app-style UI colors.
+
+If this is a video, create a 3–4 second seamless loop.
+The UI must remain perfectly static:
+no camera movement,
+no zoom,
+no screen shake,
+no layout drift.
+
+The dinosaur animation should be subtle and product-grade:
+tiny breathing,
+natural blinking,
+small head movement,
+delayed tail sway,
+light body weight shift,
+grounded feet,
+and state-specific micro-behaviors.
+
+State behavior must match the screen meaning:
+
+ASKING: waiting for confirmation, slightly curious, thinking
+VOICE / LISTENING: leaning forward, attentive, patient, listening
+RUNNING: running in place, task in progress, focused and lively
+REJECTED: disappointed, apologetic, slightly slumped
+ERROR: confused but not panicked
+SUCCESS: happy and satisfied, but restrained
+THINKING: calm, reflective, subtle eye and head movement
+
+Very important: do not mix state symbols.
+
+Only VOICE may contain a microphone or sound-wave elements.
+Only ASKING may contain a question mark.
+Only RUNNING may contain motion streaks and foot dust.
+Only REJECTED may contain a red X.
+Do not let grass disappear.
+Do not let labels move.
+Do not let the header or footer change.
+Do not change the text content.
+
+The final result should look like a polished embedded device interface:
+the same tiny Serein dinosaur companion shown in different states,
+inside a fixed retro terminal-style screen,
+using cute, restrained, premium pixel-art micro-animation.
+```
+
+### 键盘
+
+```bash
+www.ttc9.com
+默认量产轴：TTC Neptune 海王星线性轴，定位文案可以写：
+Smooth thocky linear switch, tuned for long coding sessions.
+
+静音版本：TTC Frozen Silent V2，定位文案：
+Quiet linear switch for late-night coding and shared workspaces.
+
+
+| 按键 | 引脚 | 功能名 | 中文功能 |
+| --- | --- | --- | --- |
+| KEY1 | A15 | REJECT | 取消、拒绝、停止当前 AI 任务，或返回上一层 |
+| KEY2 | A24 | VOICE | 进入语音输入；后续支持按住录音、松开发送；暂未接录音时显示语音输入占位状态 |
+| KEY3 | A23 | SESSION | 打开会话 / 任务选择面板 |
+| KEY4 | A27 | VOTE / REVIEW | 打开当前 AI 输出的评分、选择、审查面板 |
+| KEY5 | A25 | AGENT / MODEL | 打开模型 / Agent 选择面板，用于 Claude、Codex、Gemini、Local 或 fast/deep 模式切换 |
+| KEY6 | A22 | MULTI FUNCTIONAL | 打开综合快捷面板，放保存、提交、Apply All、截图、设置、亮度、音量、网络状态等低频功能 |
+| KEY8 | P19 | MENU / DEBUG | 短按打开主菜单或调试菜单；当前作为预留扩展入口 |
+| ENC_SW | P21 | SELECT / ENTER | 轻确认、进入当前选中项 | User_Key_Boot |
+| ENC_A / ENC_B | P22 / P23 | ROTARY | 列表滚动、候选项选择、参数调整 |
+```
+
+### akim
+
+```bash
+cd /home/rv_nano/Sipeed/rv_nano/tools/skim
+
+python3 skim.py \
+../vibe-bridge/images/new/vedio_voice.mp4 \
+outputs/vedio_voice.akim \
+--preview-out outputs/vedio_voice.png \
+--fps 12
+# --duration-sec 8 \
+
+python3 skim.py --reverse outputs/vedio_voice.akim outputs/vedio_voice.mp4
+```
+
+###
+
+### Linux USB Gadget 麦克风
+
+```bash
+扬声器通过IIS1 DOGPIOC24接入AW8010AFCR，麦克风通过IOB26为MIC_DAT0、IOB24为BCK、IOB25为MIC_WS，GPIOA30在u-boot阶段改为BOOT键，之后改为旋转编码器按下的key，
+
+cat /proc/asound/cards
+  cat /proc/asound/pcm
+  ls -l /dev/snd /dev | grep -E 'snd|audio|acodec'
+  dmesg | grep -Ei 'snd|audio|i2s|pdm|adc|dac|cvi'
+  ls -l /mnt/system/usr/bin/sample_audio
+  sha256sum /mnt/system/usr/bin/sample_audio
+
+export LD_LIBRARY_PATH="/lib:/lib/3rd:/usr/lib:/usr/local/lib:/mnt/system/lib:/mnt/system/usr/lib:/mnt/system/usr/lib/3rd:/mnt/data/lib"
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/mnt/system/usr/bin:/mnt/system/usr/sbin:/mnt/data/bin:/mnt/data/sbin"
+
+ls -l /mnt/system/usr/lib/libcvi_audio.so /mnt/system/usr/lib/libtinyalsa.so /mnt/system/usr/lib/3rd/libcli.so
+
+cd /mnt/system/usr/bin
+./sample_audio 4 --list -r 8000 -R 8000 -c 2 -p 320 -C 0 -V 0 -F /tmp/mic.raw -T 5
+ls -l /tmp/mic.raw
+./sample_audio 5 --list -r 8000 -R 8000 -c 2 -p 320 -C 0 -V 0 -F /tmp/mic.raw -T 5
+
+Typeless
+
+
+arecord -D hw:0,0 -f S16_LE -r 48000 -c 2 -d 5 /tmp/iis2_s16.wav
+
+aplay -D hw:2,0 /tmp/iis2_s16.wav
+
+# 格式转换
+ffmpeg -f s16le -ar 48000 -ac 2 -i ./iis2_s16.raw ./iis2_s16.wav
+
+```
+
+<br />
+
+### 色系
+
+* 粉黛+棕墨：#FFD7FC + #342626
+
+* 奶杏+深棕：#FFF8D9 + #333126
+
+* 宁雾+青冥：#B6FFC2 + #273326
+
+* 浅豆绿+浅雾绿：#C9E5C4 + #F0F8EE
+
+* \#729A93 + #FBFEE5
+
+# vibi-coding
+
+### 定义
+
+1. Agent Reasoning → Skill → MCP：智能体怎么思考、怎么调用技能、怎么连接外部工具
+2. 终端显示体验：终端兼容/控制标准：VT100、终端状态栏特殊符号体系：Powerline、适合中英文混排的编程字体：Sarasa Gothic；
+3. 接管终端的 PTY/ConPTY 字节流
+4. 呈现形式：CC主动发送提示和设定VT100
+5. Hooks：Vscode、CC等
+6. <br />
+
+* TFT
+
+  > 412 \* RGB （W） \* 960（H)
+
+* VT100参考
+
+  > [MarkLodato/vt100-parser: A VT100-compatible, output-only terminal emulator.](https://github.com/MarkLodato/vt100-parser)
+
+  > [TFT_vt100/TFT_vt100.ino at master · kazkojima/TFT_vt100](https://github.com/kazkojima/TFT_vt100/blob/master/TFT_vt100.ino)
+
+* 旋转编码器参考
+
+  > <https://blog.csdn.net/Ammon_Zhang/article/details/84585205>
+
+* [CV181x/CV180x BSP + MPI SDK 开发文档汇总 (BSP + MPI Software Development Document)](https://developer.sophgo.com/thread/471.html)
+
+* github\vowstar
+
+### 逻辑
+
+电脑 -> USB CDC / ttyGS0 -> aikb\_lcd\_ui -> 屏幕
+
+2. 上电先显示 U-Boot 启动画面 Vibe Coding starting;
+3. Linux 启动后进入 aikb\_lcd\_ui。
+4. 屏幕内容大概是：
+
+   * 左上有 AIKB VT100 terminal
+
+   * 下面有 Claude Code stream ready  Type-C: /dev/ttyGS0
+
+   * 有一行 Powerline 风格状态条测试内容
+
+   * 有中英文混排测试：English + 中文 + Powerline
+
+   * 底部有状态栏：AIKB > VT100 > Claude，右侧显示时间
+
+   * 光标会闪烁
+5. 如果电脑端通过 Type-C 往 /dev/ttyGS0 发 VT100/ANSI 终端流，屏幕会像终端一样显示输出，支持颜色、清屏、光标移动、粗体、反显、部分滚动控制。
+6. 如果电脑端暂时没发数据，会停留在内置 mock 终端测试页，不会空白。
+
+注意一个细节：第一次真实接入时，如果电脑端希望清掉 mock 内容，发送端最好先发：
+
+定义三个按键在A15、A24、A23、一个旋转编码器ABE在在A27，A25、A22引脚，需要做键盘按键定义和，引脚需要上拉。做HID定义
+
+* 修改显示显示策略，三个session，中间为当前选择的session，
+
+Vendor HID 双向交互、主机下发字符显示到 LCD VT100 终端
+按键上行：板端 aikb\_hid\_input -> Vendor HID 0x10 -> Vibe\_Bridge
+屏幕下行：Vibe\_Bridge -> HID 0x20 -> 板端 FIFO -> aikb\_lcd\_ui
+
+### 测试
+
+`aikb_pcm_dual_mono.c` 和 `aikb_usb_mic_bridge`：前者是双麦/AGC/降噪处理，后者是 `arecord -> 处理 -> UAC aplay` 的实时链路脚本。
+
+<br />
+
+<br />
+
+### 源码
+
+buildroot\board\cvitek\SG200X\overlay\etc\init.d：系统启动脚本目录
+
+### 编译
+
+```bash
+# 编译完退出容器
+cd /home/rv_nano/AIKB/LicheeRV-Nano-Build
+apptainer exec --cleanenv host/ubuntu/licheervnano-build-ubuntu.sqfs bash -lc 'cd /home/rv_nano/AIKB/LicheeRV-Nano-Build && source build/cvisetup.sh && defconfig sg2002_licheervnano_sd && build_all'
+
+apptainer exec --cleanenv host/ubuntu/licheervnano-build-ubuntu.sqfs bash -lc \
+'cd /home/rv_nano/AIKB/LicheeRV-Nano-Build && source build/cvisetup.sh && \
+ defconfig sg2002_licheervnano_sd && pack_rootfs && pack_burn_image'
+
+apptainer exec --cleanenv host/ubuntu/licheervnano-build-ubuntu.sqfs bash -lc '
+cd /home/rv_nano/AIKB/LicheeRV-Nano-Build &&
+source build/cvisetup.sh &&
+defconfig sg2002_licheervnano_sd &&
+make -B -C middleware/v2/sample/aikb_lcd_ui CC=riscv64-unknown-linux-musl-gcc CFLAGS="-Os" &&
+riscv64-unknown-linux-musl-strip --strip-all middleware/v2/sample/aikb_lcd_ui/aikb_lcd_ui &&
+pack_rootfs &&
+pack_burn_image
+'
+
+# 进入 sqfs 容器
+cd /home/rv_nano/AIKB/LicheeRV-Nano-Build/host/ubuntu && apptainer shell --cleanenv licheervnano-build-ubuntu.sqfs
+
+# 预编译
+cd ~/AIKB/LicheeRV-Nano-Build && source build/cvisetup.sh
+
+# C906:
+defconfig sg2002_licheervnano_sd
+build_all
+
+~/Sipeed/rv_nano/docs/img/
+
+```
+
+<br />
+
+### 接手
+
+```bash
+工作目录在AIKB，读./docs/HANDOFF.md先别接着做，整理一下开发文档，接口文档，IO资源映射表, TODO，整理好放在Serein_Y\Sipeed\rv_nano\docs下
+
+把当前session状态写到./docs/HANDOFF.md，按这个结构，
+## 当前在做什么
+## 已经试过的方案和结果（含失败的）
+## 下一步计划（3-5条actionable)
+## 关键文件路径（相对路径，一行一个）
+## 还没搞清楚的问题
+要让我3天后打开这个文件30秒能接上工作
+
+现在接手vibe_coding项目，两个工作目录/AIKB/LicheeRV-Nano-Build，Sipeed\rv_nano\tools\Vibe_Bridge，读这两份./docs/HANDOFF.md，先不用接着做，当前执行现象如下
+工作目录在/AIKB/LicheeRV-Nano-Build，读./docs/HANDOFF.md先不用接着做，
+工作目录在Sipeed\rv_nano\tools\vibe-keyboard, 读./HANDOFF.md先不用接着做。
+然后接着做
+```
+
+### 验证
+
+```bash
+lsusb | grep -i '359f\|2120'
+ls /dev/hidraw* 2>&1
+dmesg | tail -20
+```
+
+### 旋钮
+
+CNC 铝外壳 → 菱形滚花 → 喷砂 → 黑色阳极 → POM 轴套注塑 → 压装轴套 → CD 纹顶盖加工 → 顶盖压入/胶合 → 同心度和插拔力测试
+
+## RV\_nano测试
+
+### 编译
+
+```bash
+# 进入 sqfs 容器
+cd /home/rv_nano/AIKB/LicheeRV-Nano-Build/host/ubuntu && apptainer shell --cleanenv licheervnano-build-ubuntu.sqfs
+
+# 预编译
+cd ~/AIKB/LicheeRV-Nano-Build && source build/cvisetup.sh
+
+# C906:
+defconfig sg2002_licheervnano_sd
+build_all
+
+~/Sipeed/rv_nano/docs/img/
+
+# 验证新屏幕驱动能不能编过、U-Boot 能不能点亮：
+cd ~/AIKB/LicheeRV-Nano-Build
+source build/cvisetup.sh && defconfig sg2002_licheervnano_sd && build_uboot
+pack_burn_image
+
+# 把 middleware 里的 sample_dsi 一起编出来，方便进系统后单独测屏：
+build_middleware
+
+# 重新出整张 SD 镜像：
+clean_all
+build_all
+
+# 和屏幕直接相关的：
+- U-Boot：u-boot-2021.10/build/...
+- 最终镜像：install/soc_sg2002_licheervnano_sd/
+
+run sdboot
+
+cd u-boot-2021.10/build/sg2002_licheervnano_sd/arch/riscv/dts/
+
+stat -c '%y %n' sg2002_licheervnano_sd.dtb u-boot.dtb
+```
+
+### 屏幕
+
+```bash
+
+# 验证新屏幕驱动能不能编过、U-Boot 能不能点亮：
+cd ~/AIKB/LicheeRV-Nano-Build
+source build/cvisetup.sh && defconfig sg2002_licheervnano_sd && build_uboot
+pack_burn_image
+
+# 把 middleware 里的 sample_dsi 一起编出来，方便进系统后单独测屏：
+build_middleware
+
+# 重新出整张 SD 镜像：
+clean_all
+build_all
+
+
+```
+
+<br />
+
+### 设备挂载
+
+[Releases · dorssel/usbipd-win](https://github.com/dorssel/usbipd-win/releases)下载并安装最新的 .msi 文件。
+
+```bash
+# 打开 Windows 终端 (PowerShell)，输入：
+usbipd list
+
+# 找到你的 Vibe Coding Keyboard（可以根据 VID:PID 或名称识别），记下它的 BUSID（例如 2-3）。
+# 绑定设备（仅第一次需要）：
+usbipd bind --busid 8-1
+
+# 挂载到 WSL
+usbipd attach --wsl --busid 8-1
+
+`usbipd: info: Using WSL distribution 'Ubuntu' to attach; the device will be available in all WSL 2 distributions.
+usbipd: info: Loading vhci_hcd module.
+usbipd: info: Detected networking mode 'mirrored'.
+usbipd: info: Using IP address 127.0.0.1 to reach the host.`
+```
+
+### WSL2 端准备 (Ubuntu 22.04)
+
+```bash
+sudo apt update
+sudo apt install linux-tools-virtual hwdata
+sudo -E update-alternatives --install /usr/local/bin/usbip usbip `ls /usr/lib/linux-tools/*/usbip | tail -n1` 20
+
+# 验证连接：
+lsusb
+```
+
+### 处理权限问题
+
+```bash
+#   WSL2 默认不给普通用户访问 HID 原始设备的权限。需要配置 udev 规则：
+sudo nano /etc/udev/rules.d/99-vibe.rules
+
+# 写入以下内容（将 YOUR_VID 和 YOUR_PID 替换为 lsusb 查到的 4 位 16 进制值）：
+SUBSYSTEM=="usb", ATTR{idVendor}=="359f", ATTR{idProduct}=="2120", MODE="0666"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="359f", ATTRS{idProduct}=="2120", MODE="0666"
+
+# 重新加载规则：
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+### 编译与运行 Vibe Bridge
+
+```bash
+# 安装 HID 开发库：
+sudo -E apt install libusb-1.0-0-dev libudev-dev
+
+sudo chmod 666 /dev/hidraw0
+
+# 来临时安装 Rust 环境
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source $HOME/.cargo/env
+
+sudo -E apt update
+sudo -E apt install -y build-essential pkg-config libusb-1.0-0-dev libudev-dev
+
+# 运行项目：
+cd Sipeed/rv_nano/tools/Vibe_Bridge
+car
+go run -- scan
+
+# 如果 scan 命令能正确打印出设备路径和 Usage Page (0xFF60)
+
+
+# 断开连接：如果你想让 Windows 重新拿回键盘控制权，在 Windows 终端执行：
+usbipd detach --busid 8-1
+usbipd detach --all
+
+# 自动连入 WSL
+usbipd attach --wsl --busid <BUSID> --auto-attach
+
+
+target/debug/vibe-bridge daemon --tcp 127.0.0.1:9797
+
+# 另一个 WSL 里生成 hook：
+target/debug/vibe-bridge hook-script --tcp 127.0.0.1:9797 > ~/.vibe-bridge-hook.sh
+```
+
+### 驱动卡住
+
+```bash
+wsl -l -v
+wsl --terminate Ubuntu-22.04
+wsl -d Ubuntu-22.04 -u root
+loginctl terminate-user rv_nano 2>/dev/null || true
+rm -rf /run/user/1000
+systemctl reset-failed
+systemctl daemon-reexec
+
+
+```
+
+<br />
+
+## SG2002
+
+* 系统架构
+
+  * RISC-V C906和ARM Cortex-A53
+
+* 启动和升级
+
+  * 芯片由内置 ROM (BOOTROM) 启动. 芯片在复位时会通过侦测两个管脚(EMMC\_DAT3,  EMMC\_DAT0) 上是否有弱上拉或弱下拉以确认目前选用使用的存储器件类型.   安全启动的芯片, 则会在开机及芯片升级时都会验签以确保执行或升级的软件是安全 的.
+
+<br />
+
+## 定义
+
+```bash
+→ wrapper 接管启动流程
+→ daemon 在后台管理会话
+→ session_id 标记这是哪个窗口
+→ mock_hid 模拟硬件通信
+→ VT100 routing 把终端输出送到正确窗口
+```
+
+### wrapper
+
+```bash
+用户输入 codex, 但实际执行的是tools/vibe-bridge/bin/codex, 这个bin\codex就是wrapper
+wrapper 不是 Codex 本体，,它是 Codex 启动前的“门卫”。
+1. 检查 vibe-bridge daemon 是否启动
+2. 如果没启动，就先启动 daemon
+3. 向 daemon 请求一个 session_id
+4. 把 session_id 写进环境变量
+5. 再启动真正的 codex CLI
+```
+
+### daemon
+
+```bash
+它不是每次运行完就退出，而是一直在后台等命令。
+daemon = Vibe Bridge 的大脑
+1. 管理 session_id
+2. 管理多个窗口
+3. 接收 wrapper 发来的数据
+4. 接收插件发来的 VT100 内容
+5. 决定内容应该进入哪个窗口
+6. 管理当前激活窗口
+7. 后续对接 HID / 屏幕 / 旋钮 / 震动 / 声音
+```
+
+<br />
+
+<br />
+
+<br />
+
+```bash
+
+
+"In a multi-master bus architecture, how can we resolve DMA conflicts and prevent bandwidth starvation for lower-priority masters? What arbitration mechanisms or QoS (Quality of Service) strategies are typically employed?"
+"How can we achieve 'zero-copy' memory sharing across heterogeneous multi-core processors while efficiently maintaining cache coherency? What are the common hardware architectures or software protocols used to handle this?"
+"How do we manage Dynamic Frequency Scaling (DFS) across a cross-heterogeneous-core physical clock tree? Specifically, how can we mitigate or suppress the burst synchronization jitter that occurs during these frequency transitions?"
+
+
+
+```
+
+<br />
+
+````bash
+看完你的 GitHub，我建议你**今天优先学 `vibe-bridge` 的“会话路由 + HID/VT100 协议”**。原因很简单：它是你当前最像“产品核心”的仓库，更新到 **2026-06-29**，而且 README 里已经明确它是把 Codex / Claude Code / OpenCode 等 CLI 工具和 HID 屏幕连接起来的多窗口 session router。([GitHub][1])
+
+## 今天最推荐方向：vibe-bridge 协议闭环
+
+你今天不要泛泛学 Rust、Tauri、嵌入式 Linux。就学一个具体东西：
+
+> **一个 AI agent 终端会话，如何从 PC 端变成板子屏幕上的一个可切换窗口。**
+
+你今天应该搞清楚这条链：
+
+```text
+codex / claude
+   ↓
+wrapper / plugin
+   ↓
+vibe-bridge daemon
+   ↓
+session_id 分配
+   ↓
+VT100 stream buffer
+   ↓
+HID packet
+   ↓
+AIKB board / LCD UI
+```
+
+这个方向最适合你，因为 `vibe-bridge` README 里已经把关键模块拆出来了：`hid_protocol.py` 负责包格式，`session_manager.py` 负责 sid 池和 TTL，`vt100_router.py` 负责多 session VT100 buffer，`daemon.py` 负责整体路由。([GitHub][2])
+
+今天的学习目标可以定成：
+
+> **我能画出 vibe-bridge 的完整数据流，并知道每个模块为什么存在。**
+
+建议你今天只做三件事：
+
+1. 读 `README.md` 里 Layout / Quick start / Board controls / Status 这几段。
+2. 跑一遍测试或 mock demo：
+
+   ```bash
+   PYTHONPATH=src python3 -m unittest discover -s tests
+   PYTHONPATH=src python3 -m vibe_bridge.main -vv daemon
+   ```
+3. 写一页自己的笔记，标题就叫：
+   **“AIKB 会话协议：session_id、VT100、HID packet 的分工”**
+
+这比继续堆功能更有价值。你现在很多问题其实不是“代码不会写”，而是**系统边界还没完全固化**：哪些东西属于 host，哪些属于 board，哪些只是 UI 状态，哪些是真协议。
+
+## 第二推荐：SG2002 / AIKB 的板端 USB Gadget 链路
+
+如果你今天更想贴近硬件，就学这个：
+
+> **SG2002 Linux 板子如何变成一个 USB HID / RNDIS / CDC 设备。**
+
+你的 `AIKB` 和 `vibe-coding` 仓库都还是 LicheeRV-Nano-Build 体系，里面包含 buildroot、linux_5.10、middleware、u-boot、fsbl 等完整板端构建树。([GitHub][3])
+
+今天不要去重新编译整个 SDK，太重了。你只需要学会这几个概念：
+
+```text
+USB gadget
+configfs
+hidg0
+hidraw
+RNDIS / NCM
+板端 daemon
+LCD UI FIFO / framebuffer
+```
+
+今天的产出可以是一个图：
+
+```text
+Windows host
+  ↓ USB HID / hidraw
+SG2002 Linux gadget
+  ↓ /dev/hidg0
+aikb_hid_input
+  ↓ FIFO / packet
+aikb_lcd_ui
+  ↓ framebuffer
+LCD screen
+```
+
+这个方向对你后面做 AIKB 真机稳定性很关键，但今天最好只做“链路理解”，不要顺手改内核、改 dts、改 rootfs，不然很容易又变成大工程。
+
+## 第三推荐：Serein Tools 的 Tauri 2 桌面工具架构
+
+如果你今天想学一个更容易当天出成果的方向，就看 `Serein-Tools`。它现在定位是本地优先工具箱，包含 OCR/PDF、TypeLab 字体工具、Agent 工作台三大模块。README 里写得比较清楚：桌面主线是 **Tauri 2 + React + Rust command 层**，OCR/PDF 通过 Rust command、本地 Tesseract、前端 pdf.js 等方式组合。([GitHub][4])
+
+这个方向今天可以学：
+
+> **Tauri 前端按钮点击后，如何调用 Rust command，再返回结果给 React。**
+
+这是很实用的能力。因为你以后不管做 Serein、Serein Tools、vibe-bridge 桌面端，都会反复遇到这个模式。
+
+今天的产出可以是：
+
+```text
+前端 React 页面
+  ↓ invoke(command)
+Rust command
+  ↓ 调本地工具 / 文件系统 / OCR
+返回 JSON
+  ↓
+前端渲染结果
+```
+
+这个方向比 `vibe-bridge` 简单，适合想快速获得成就感的时候。
+
+## 第四推荐：Serein Markdown 编辑器的产品化整理
+
+`Serein` 是一个本地 Markdown 桌面写作工具，技术栈是 Tauri 2、React、TypeScript、Milkdown，功能包括本地 Markdown 编辑、文件夹浏览、Plain/Rich Edit、outline、backlinks、本地图谱、中英双语 UI、字体和主题配置等。([GitHub][5])
+
+但我今天不建议你优先学这个。原因是它更偏“产品打磨”，容易陷入 UI、字体、布局、主题这种细节。你现在更需要补的是**系统链路能力**，不是继续优化一个桌面 App 的观感。
+
+## 我给你的今日选择
+
+今天只选一个，我建议：
+
+```text
+主线：vibe-bridge session router
+学习点：session_id + VT100 buffer + HID packet
+目标：画出完整链路，并能解释每个模块职责
+时间：2～4 小时
+产出：一页架构笔记 + 一张数据流图 + 跑通一次测试
+```
+
+今天不要追求“做完一个大功能”。你只要学会这个问题就够了：
+
+> **为什么 AIKB 需要 session_id，而不是直接把终端输出扔到屏幕上？**
+
+你能把这个问题讲清楚，今天就学到非常核心的东西了。
+
+[1]: https://github.com/Y-Serein?tab=repositories "Y-Serein (Serein_Y) / Repositories · GitHub"
+[2]: https://github.com/Y-Serein/vibe-bridge "GitHub - Y-Serein/vibe-bridge · GitHub"
+[3]: https://github.com/Y-Serein/AIKB "GitHub - Y-Serein/AIKB · GitHub"
+[4]: https://github.com/Y-Serein/Serein-Tools "GitHub - Y-Serein/Serein-Tools · GitHub"
+[5]: https://github.com/Y-Serein/Serein "GitHub - Y-Serein/Serein · GitHub"
+
+
+
+````
+
+<br />
+
+<br />
+
+```bash
+Terminal / CLI 派不是追求好看，而是追求四件事：
+
+可控 control
+可见 visibility
+可审计 auditability
+可回滚 recoverability
+```

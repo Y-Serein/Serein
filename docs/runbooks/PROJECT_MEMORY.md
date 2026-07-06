@@ -29,7 +29,7 @@
 - 禁用按钮的视觉反馈不能制造“程序卡住”的错觉。窗口按钮执行期间用 ref 防重复即可，不要把光标变成 `wait`。
 - PDF/图片导出、保存、链接跳转这些高频路径，必须让用户真实跑一遍；静态检查不能替代体验检查。
 - 对数据改写功能要确认式执行。重命名链接同步不能静默批量改文档，必须保护未保存内容和并发修改。
-- 复杂测试数据很有价值。`D_deliverables/serein-complex-vault/` 比简单 demo 更能发现发布前问题。
+- 复杂测试数据很有价值。`examples/complex-vault/` 比简单 demo 更能发现发布前问题。
 - 当空格、回车、删除、剪切、跨行选择一起表现为“光标偏移”时，不要继续修单个快捷键；优先怀疑底层坐标系、不可见字符、行尾、编码和编辑器模型映射。
 - 真实输入文件比复现脚本更重要。`Project_00_Serein.txt` 是 CRLF，浏览器 textarea/Playwright `.fill()` 可能自动规范成 LF，从而掩盖真实 Windows 文件路径的问题。
 - CodeMirror 与 ProseMirror 共存时，必须保证内部文档文本的行尾一致。CodeMirror 按 LF 计位，ProseMirror 若保留 CRLF，会在第二行后出现 offset 漂移。
@@ -38,20 +38,20 @@
 
 ## 项目关键约束
 
-- 正式交付物在 `D_deliverables/serein-desktop/`。
-- 旧原型 `D_deliverables/serein-prototype/` 默认不要修改。
+- 正式交付物在 `apps/serein-desktop/`。
+- 旧原型 `examples/serein-prototype/` 默认不要修改。
 - 技术栈：Tauri 2 + Rust + React 18 + TypeScript + Vite + Milkdown。
 - Windows `.exe` 推荐打包入口：
 
 ```powershell
-.\T_tools\build_windows.ps1
+.\scripts\build_windows.ps1
 ```
 
 - `-SkipInstall` 是快速路径，不是不可以；发给别人前更推荐不加 `-SkipInstall`。
 - 当前测试命令：
 
 ```bash
-cd D_deliverables/serein-desktop
+cd apps/serein-desktop
 npm run test
 npm run typecheck
 npm run build
@@ -65,14 +65,14 @@ env CARGO_TARGET_DIR=/tmp/serein-tauri-target /home/slam/.cargo/bin/cargo check
 - 复杂内测 Vault：
 
 ```text
-D_deliverables/serein-complex-vault/
+examples/complex-vault/
 ```
 
 - 代码块编辑器关键路径：
-  - `D_deliverables/serein-desktop/src/components/sereinCodeBlockView.ts`
-  - `D_deliverables/serein-desktop/src/components/MilkdownEditor.tsx`
-  - `D_deliverables/serein-desktop/src/vault/workspace.ts`
-  - `D_deliverables/serein-desktop/src/App.tsx`
+  - `apps/serein-desktop/src/components/sereinCodeBlockView.ts`
+  - `apps/serein-desktop/src/components/MilkdownEditor.tsx`
+  - `apps/serein-desktop/src/vault/workspace.ts`
+  - `apps/serein-desktop/src/App.tsx`
 - 文本文件打开后，编辑器内部应统一 LF；`Note.lineEnding` 记录原始 `lf/crlf`，保存时用 `applyLineEnding` 写回。
 - Windows `.txt` 文件很可能是 CRLF，尤其是用户在 PowerShell/Windows 工具链里创建或维护的文件。
 
@@ -116,10 +116,10 @@ D_deliverables/serein-complex-vault/
 
 ### 项目关键约束和坑新增
 
-- 正式目录是 `D_deliverables/serein-desktop/`。当前 `D_deliverables/ys-writer-desktop/` 是旧规则里残留的历史路径，实际工作要以当前目录为准。
+- 正式目录是 `apps/serein-desktop/`。旧 `archive/ys-writer-desktop/` 仅作历史归档，实际工作要以当前目录为准。
 - `Serein_1.0.1_x64-setup.exe` 可能作为未跟踪安装包出现在仓库根目录；不要默认加入提交。
-- 当前没有 `C_context/KNOWN_FAILURES.md`。遇到重复问题时优先查 `C_context/PROJECT_MEMORY.md`、`HANDOFF.md` 和 `C_context/skills/`。
-- Windows 打包是关键验证面。WSL 的 `npm run build`、Linux `cargo check` 和源码搜索只能证明一部分，不能替代 `T_tools\build_windows.ps1` 和 release `.exe` 手测。
+- 当前没有 `docs/runbooks/KNOWN_FAILURES.md`。遇到重复问题时优先查 `docs/runbooks/PROJECT_MEMORY.md`、`HANDOFF.md` 和 `docs/runbooks/skills/`。
+- Windows 打包是关键验证面。WSL 的 `npm run build`、Linux `cargo check` 和源码搜索只能证明一部分，不能替代 `scripts\build_windows.ps1` 和 release `.exe` 手测。
 - Rich Edit 中 Tab/Shift+Tab、Ctrl+A、Ctrl+Z、粘贴、代码块内编辑都容易被浏览器默认行为、ProseMirror selection、CodeMirror selection 三套模型互相影响；修复时必须统一成编辑器语义。
 - Ctrl+Z 滚动修复不能在滚动层擅自改 ProseMirror selection。上一轮用“撤销后 selection 靠近文首就 restore 到撤销前位置”的补偿逻辑导致真实环境里无论在哪里撤销都跳文首；正确边界是 history 负责 selection，滚动层只判断当前 selection 是否可见并按需滚动。
 - Vault 标签索引语义：启用状态来自 frontmatter `status: active` / `status: inactive`。未启用标签不应被搜索命中；标签不应只因当前文件打开而被索引。
@@ -128,7 +128,7 @@ D_deliverables/serein-complex-vault/
 ### 下次一次性达到这个效果的提示词
 
 ```text
-你是 Serein 桌面编辑器回归修复负责人。请先读 AGENTS.md、HANDOFF.md、C_context/PROJECT_MEMORY.md 和 C_context/skills/serein-editor-regression-control/SKILL.md；如果项目有 preflight 就先跑。不要先猜，不要只修我指出的一个按钮。
+你是 Serein 桌面编辑器回归修复负责人。请先读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md 和 docs/runbooks/skills/serein-editor-regression-control/SKILL.md；如果项目有 preflight 就先跑。不要先猜，不要只修我指出的一个按钮。
 
 目标：把 Serein 的编辑器行为从浏览器默认态收敛到桌面写作工具语义。Rich Edit、Plain Edit、代码块、普通文本、标题、列表、菜单命令、快捷键都要一致。
 
@@ -145,7 +145,7 @@ D_deliverables/serein-complex-vault/
 ### 本次沉淀出的项目 skill
 
 ```text
-C_context/skills/serein-editor-regression-control/SKILL.md
+docs/runbooks/skills/serein-editor-regression-control/SKILL.md
 ```
 
 触发场景：
@@ -177,12 +177,12 @@ C_context/skills/serein-editor-regression-control/SKILL.md
   - 光标可见：`Ctrl+Z` 后 `scrollTop` 不变。
   - 光标离屏：`Ctrl+Z` 后滚回光标附近。
   - 撤销后继续输入：token 留在文尾，不跑到文首。
-- `tests/vault.test.mjs` 已有真实 `../../C_context/test/new.md` 未打开文件 `@remark` fixture，但 Tauri release 中“搜索面板触发索引”仍需 Windows 手测确认。
+- `tests/vault.test.mjs` 已有真实 `../../tests/fixtures/rich-edit/new.md` 未打开文件 `@remark` fixture，但 Tauri release 中“搜索面板触发索引”仍需 Windows 手测确认。
 
 ## 下次一次性达到类似效果的提示词
 
 ```text
-你是这个项目的发布审核者和工程控制论式接手者。请先阅读 AGENTS.md、HANDOFF.md、C_context/PROJECT_MEMORY.md、C_context/KNOWN_FAILURES.md（如存在），运行项目 preflight。目标是判断 Serein 是否能发内测，不要急着改代码。
+你是这个项目的发布审核者和工程控制论式接手者。请先阅读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md、docs/runbooks/KNOWN_FAILURES.md（如存在），运行项目 preflight。目标是判断 Serein 是否能发内测，不要急着改代码。
 
 我的优先级是：沉浸式写作体验第一，Vault/知识工作流第二；数据安全不能妥协；UI 简洁，不要重复入口；必须以 Windows release .exe 体验为准。
 
@@ -191,14 +191,14 @@ C_context/skills/serein-editor-regression-control/SKILL.md
 2. 如果发现阻断内测的问题，做最小可回滚修复。
 3. 每个修复必须说明验证命令或无法验证原因。
 4. 对 Vault/链接/保存/导出/窗口控制要优先保护真实用户数据。
-5. 不要修改旧原型 `D_deliverables/serein-prototype/`。
+5. 不要修改旧原型 `examples/serein-prototype/`。
 6. 完成后更新 HANDOFF 和项目 memory，并给我可执行的 Windows 手测清单。
 ```
 
 ### 针对 Rich Edit / 代码块偏移的更强提示词
 
 ```text
-你是 Serein Rich Edit 编辑器问题排查者。请先读 AGENTS.md、HANDOFF.md、C_context/PROJECT_MEMORY.md，运行 preflight。我的问题发生在 Windows release .exe，不要只用浏览器 dev server 结论替代。
+你是 Serein Rich Edit 编辑器问题排查者。请先读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md，运行 preflight。我的问题发生在 Windows release .exe，不要只用浏览器 dev server 结论替代。
 
 请按闭环定位，不要先猜快捷键：
 目标：代码块内光标、选区、输入、删除、剪切、跨行选择都必须和视觉位置一致。
@@ -218,9 +218,9 @@ C_context/skills/serein-editor-regression-control/SKILL.md
 
 ## 跨项目设计沉淀
 
-- 通用设计方法论：`C_context/PROJECT_DESIGN_PLAYBOOK.md`
-- 可复制到新项目的通用 skill：`C_context/skills/product-control-design/SKILL.md`
-- Serein release/bug triage skill：`C_context/skills/serein-release-control/SKILL.md`
+- 通用设计方法论：`docs/design/PROJECT_DESIGN_PLAYBOOK.md`
+- 可复制到新项目的通用 skill：`docs/runbooks/skills/product-control-design/SKILL.md`
+- Serein release/bug triage skill：`docs/runbooks/skills/serein-release-control/SKILL.md`
 - 全局记忆：`/home/slam/.codex/memories/project_engineering_design_playbook.md`
 
 下次新项目不应照搬 Serein 的具体功能，而应复用它的判断标准：主矛盾优先、数据安全优先、主路径体验优先、UI 简洁克制、架构边界清楚、验证贴近真实风险。
@@ -266,29 +266,29 @@ C_context/skills/serein-editor-regression-control/SKILL.md
 
 ### 项目关键约束和坑新增
 
-- 当前正式目录是 `D_deliverables/serein-desktop/`，不是旧规则里的 `ys-writer-desktop`。
-- 2026-06-18 起当前仓库已有 `C_context/KNOWN_FAILURES.md`；重复问题必须先查该文件，再查 `HANDOFF.md`、`C_context/PROJECT_MEMORY.md` 和 `C_context/skills/`。
+- 当前正式目录是 `apps/serein-desktop/`，不是旧规则里的 `ys-writer-desktop`。
+- 2026-06-18 起当前仓库已有 `docs/runbooks/KNOWN_FAILURES.md`；重复问题必须先查该文件，再查 `HANDOFF.md`、`docs/runbooks/PROJECT_MEMORY.md` 和 `docs/runbooks/skills/`。
 - `python3 /home/slam/Sipeed/T_tools/agent_preflight.py --project typora` 可运行，但脚本内置路径仍指向 `/home/rv_nano/Sipeed/...`，会报告目标路径缺失；不要把这个误判为当前仓库不存在。
 - `rg` 在当前环境可能不可用；按全局习惯优先 `rg`，失败后直接退到 `grep/find`，不要卡住。
 - 代码块相关关键路径：
-  - `D_deliverables/serein-desktop/src/components/MilkdownEditor.tsx`
-  - `D_deliverables/serein-desktop/src/components/sereinCodeBlockView.ts`
-  - `D_deliverables/serein-desktop/src/components/codeBlockConfig.ts`
-  - `D_deliverables/serein-desktop/src/styles.css`
+  - `apps/serein-desktop/src/components/MilkdownEditor.tsx`
+  - `apps/serein-desktop/src/components/sereinCodeBlockView.ts`
+  - `apps/serein-desktop/src/components/codeBlockConfig.ts`
+  - `apps/serein-desktop/src/styles.css`
 - 顶部菜单栏关键路径：
-  - `D_deliverables/serein-desktop/src/features/window-chrome/WindowChrome.tsx`
-  - `D_deliverables/serein-desktop/src/App.tsx` 中的 `isWindowDragBlockedTarget` / `handleChromeDragMouseDown`
-  - `D_deliverables/serein-desktop/src/styles.css` 中的 `.menu-popover` / `.command-bar`
+  - `apps/serein-desktop/src/features/window-chrome/WindowChrome.tsx`
+  - `apps/serein-desktop/src/App.tsx` 中的 `isWindowDragBlockedTarget` / `handleChromeDragMouseDown`
+  - `apps/serein-desktop/src/styles.css` 中的 `.menu-popover` / `.command-bar`
 - 侧栏/简洁 UI 关键路径：
-  - `D_deliverables/serein-desktop/src/features/vault-sidebar/VaultSidebar.tsx`
-  - `D_deliverables/serein-desktop/src/features/shell/WorkspaceRibbon.tsx`
-  - `D_deliverables/serein-desktop/src/styles.css`
+  - `apps/serein-desktop/src/features/vault-sidebar/VaultSidebar.tsx`
+  - `apps/serein-desktop/src/features/shell/WorkspaceRibbon.tsx`
+  - `apps/serein-desktop/src/styles.css`
 - 当前发布状态：`v1.0.3` 是本地 commit + 本地 tag；GitHub 可见需要 push 分支和 tag。
 
 ### 下次一次性达到这轮效果的提示词
 
 ```text
-你是 Serein 桌面编辑器和发布回归负责人。请先读 AGENTS.md、HANDOFF.md、C_context/PROJECT_MEMORY.md，以及 C_context/skills/serein-editor-regression-control/SKILL.md；如果 preflight 可运行就跑，但不要被旧路径误导。请默认中文、直接、以结果为导向。
+你是 Serein 桌面编辑器和发布回归负责人。请先读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md，以及 docs/runbooks/skills/serein-editor-regression-control/SKILL.md；如果 preflight 可运行就跑，但不要被旧路径误导。请默认中文、直接、以结果为导向。
 
 目标：收敛 Rich Edit/代码块/窗口 chrome/UI 细节到可发内测状态。不要只修我指出的一个现象，要保护已有小细节，避免新架构吃掉旧体验。
 
@@ -310,7 +310,7 @@ C_context/skills/serein-editor-regression-control/SKILL.md
 已将本轮流程沉淀到：
 
 ```text
-C_context/skills/serein-editor-regression-control/SKILL.md
+docs/runbooks/skills/serein-editor-regression-control/SKILL.md
 ```
 
 下次以下场景应触发该 skill：
@@ -333,7 +333,7 @@ C_context/skills/serein-editor-regression-control/SKILL.md
 
 ### 下次处理原则
 
-- 先读 `C_context/KNOWN_FAILURES.md`，其中已经记录禁止恢复的标识和失败路径。
+- 先读 `docs/runbooks/KNOWN_FAILURES.md`，其中已经记录禁止恢复的标识和失败路径。
 - 继续优化 `Alt+W` 时先测 Windows release 包真实耗时，再决定是否减小 quick-note bundle、推迟设置读取或减少同步工作。
 - 不要把“启动速度优化”和“便签 UI 样式/位置优化”混在同一轮里改；否则很难判断卡顿来自窗口创建、前端加载、焦点切换还是样式/布局。
 - Linux/WSL 的 `cargo check` 不能覆盖 Windows-only Rust 模块；改 `#[cfg(target_os = "windows")]` 代码后必须让 Windows 打包验证。
@@ -343,12 +343,12 @@ C_context/skills/serein-editor-regression-control/SKILL.md
 ### 本轮结果状态
 
 - 本轮修复 Rich Edit 中 Markdown link、escaped link、nested-bad link、autolink 的预览/展开/收回不一致问题。
-- 当前正式 app 目录仍是 `D_deliverables/serein-desktop/`。
+- 当前正式 app 目录仍是 `apps/serein-desktop/`。
 - 本轮涉及文件：
-  - `D_deliverables/serein-desktop/src/components/MilkdownEditor.tsx`
-  - `D_deliverables/serein-desktop/src/shared/markdown.ts`
-  - `D_deliverables/serein-desktop/src/App.tsx`
-  - `D_deliverables/serein-desktop/tests/vault.test.mjs`
+  - `apps/serein-desktop/src/components/MilkdownEditor.tsx`
+  - `apps/serein-desktop/src/shared/markdown.ts`
+  - `apps/serein-desktop/src/App.tsx`
+  - `apps/serein-desktop/tests/vault.test.mjs`
 - 本轮验证通过：`npm run test`、`npm run typecheck`、`npm run build`、`git diff --check`。
 - GUI 自动化未完成：当前环境缺 Python `playwright` 包。Windows release `.exe` 手测仍是最终体验面。
 - 根目录仍可能有未跟踪安装包 `Serein_1.0.4_x64-setup.exe`；不要默认纳入提交。
@@ -400,7 +400,7 @@ C_context/skills/serein-editor-regression-control/SKILL.md
 ### 下次一次性达到这轮效果的提示词
 
 ```text
-你是 Serein Rich Edit Markdown 链接状态机修复负责人。请先读 AGENTS.md、HANDOFF.md、C_context/PROJECT_MEMORY.md、C_context/KNOWN_FAILURES.md，以及 C_context/skills/serein-rich-edit-markdown-links/SKILL.md；运行 preflight，但不要被旧 /home/rv_nano 路径误导。默认中文，直接、以结果为导向。
+你是 Serein Rich Edit Markdown 链接状态机修复负责人。请先读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md、docs/runbooks/KNOWN_FAILURES.md，以及 docs/runbooks/skills/serein-rich-edit-markdown-links/SKILL.md；运行 preflight，但不要被旧 /home/rv_nano 路径误导。默认中文，直接、以结果为导向。
 
 目标：让 Rich Edit 的 Markdown link/autolink 行为接近 Typora：默认渲染 label 或 URL；普通点击在正文中临时展开源码方便编辑和复制；选区仍在链接内时保持展开；光标/焦点离开后收回；Ctrl/Cmd+点击才打开链接。
 
@@ -420,7 +420,7 @@ C_context/skills/serein-editor-regression-control/SKILL.md
 新增项目 skill：
 
 ```text
-C_context/skills/serein-rich-edit-markdown-links/SKILL.md
+docs/runbooks/skills/serein-rich-edit-markdown-links/SKILL.md
 ```
 
 下次以下场景应触发该 skill：
@@ -430,3 +430,86 @@ C_context/skills/serein-rich-edit-markdown-links/SKILL.md
 - 用户点击链接时“按下显示、松开消失”或无法拖选复制链接。
 - Rich Edit 保存后出现多余反斜杠，如 `\[...\]\(...)`、`https\:`、`\_`、`\<https...\>`。
 - 链接普通点击/编辑和 Ctrl/Cmd 跳转边界不清。
+
+## 2026-07-01 Rich Edit 光标跳文末 / nested fence 回归沉淀
+
+### 本轮结果状态
+
+- 用户反馈：最新版安装包中，打开 `tests/fixtures/rich-edit/Project_03_vibe-keyboard.txt`，Rich Edit 预览模式下任意位置输入字符或空格后，真实光标跳到文末；页面本身不立即滚动，按方向键后才滚过去。
+- 用户补充后修正判断：不是所有文件都触发，也不是代码块内部特有问题；目前只发现该复杂 `.txt` 文件触发。
+- 已修复并本地提交：`45979ad fix: stabilize rich edit cursor with nested fences`。
+- 用户复测确认：“确实是那个问题，现在可以了”。
+- 当前 main 本地领先 `origin/main` 5 个提交；未 push。
+- 根目录仍有未跟踪安装包 `Serein_1.0.4_x64-setup.exe`，不要默认纳入提交。
+
+### 用户偏好新增
+
+- 用户会先要求“别急着改代码、先接手汇报”，但一旦根因明确，就希望 AI 自主修复、验证、提交和沉淀。
+- 用户接受 AI 反驳和修正判断，但必须基于新事实。例如“任意位置都会跳”一开始像全局 Rich 回灌；用户补充“只有这一个文件”后必须立刻收窄到文件内容触发条件。
+- 用户重视真实用户文件。`tests/fixtures/rich-edit/Project_03_vibe-keyboard.txt` 这类复杂真实文档比简化字符串更能代表风险。
+- 用户不满意“保存光标再恢复”这种治标方案；更希望定位导致光标跳转的共享根因。
+- 用户希望完成后沉淀到 `HANDOFF.md`、`PROJECT_MEMORY.md` 和项目 skill，下次能 30 秒接上。
+- 用户愿意直接复测安装版并反馈结论；这种反馈优先级高于浏览器/dev server 推断。
+
+### 从错误里学到的最佳实践
+
+- “任意输入后光标跳文末”不应先修 selection restore。Rich Edit 里更应优先查是否触发了全文 `replaceAll(...)`、文档重设、父子 markdown A/B 回灌差异。
+- 如果问题只在某个文件触发，不能继续按全局事件 bug 推断；要分析该文件的 Markdown 结构、HTML、frontmatter、fenced code、链接、转义字符和行尾。
+- Rich serializer cleanup 和编辑器内部 `lastKnownMarkdownRef` 必须使用同一份最终归一化结果。否则 Milkdown 发出 A，App 存 B，下一轮 B 回传时会被误判为外部文档变化。
+- 归一化函数必须按 CommonMark fence 字符和长度处理 fenced code block：
+  - 三反引号只能关闭三反引号或更短的同字符 fence。
+  - 四反引号代码块里的三反引号是普通内容，不能反转 inFence 状态。
+  - 反引号 fence 和波浪线 fence 不能互相关闭。
+- `normalizeWikiLinkEscapes()` 和 `normalizeRichMarkdownEscapes()` 这类写作层归一化只能处理 code fence 外的行。代码块里的 `\[link]`、`https\:`、三反引号示例都是用户源码。
+- 修 Rich Edit 链接/归一化时，要同时验证“不会让当前真实文件发生无意义文本变化”。本轮用 `Project_03_vibe-keyboard.txt` 做 `normalizeRichMarkdownEscapes` 前后比较，结果 `same: true`。
+- 遇到复杂编辑器问题时，控制变量要小：本轮只改 fence 状态机、Rich change 出口和测试，没有碰代码块 UI、滚动补偿、链接点击状态机。
+
+### 项目关键约束和坑新增
+
+- `tests/fixtures/rich-edit/Project_03_vibe-keyboard.txt` 是 Rich Edit 回归样本，包含 frontmatter、`<br />`、大量 fenced code block、标准 Markdown link、autolink、反斜杠转义和四反引号包三反引号结构。
+- 最新 Rich 链接修复 `6863d44 fix: stabilize rich edit markdown links` 引入了 `normalizeRichMarkdownEscapes`，后续所有改动都必须注意 App 层归一化和编辑器内部同步边界。
+- `MilkdownEditor.tsx` 中 `emitMarkdownChange`、`lastKnownMarkdownRef`、`markdown` prop 同步 effect 和 `replaceAll(nextDocument.bodyMarkdown)` 是光标跳转类问题的关键链路。
+- `shared/markdown.ts` 中的 Markdown 归一化函数属于数据安全边界，不要把它写成全局反斜杠清洗器。
+- `npm run test` 能覆盖 parser/normalizer 回归，但不能证明 Windows WebView 下所有交互行为；用户安装版复测仍是重要反馈面。
+- 当前正式目录以 `apps/serein-desktop/`、`AGENTS.md` 和 `HANDOFF.md` 为准；旧 `archive/ys-writer-desktop/` 只作历史归档。
+
+### 下次一次性达到这轮效果的提示词
+
+```text
+你是 Serein Rich Edit 光标/归一化回归修复负责人。请先读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md、docs/runbooks/KNOWN_FAILURES.md，以及 docs/runbooks/skills/serein-rich-edit-cursor-stability/SKILL.md；运行 preflight，但不要被旧 /home/rv_nano 路径误导。默认中文，直接、以结果为导向。
+
+目标：定位并修复 Rich Edit 预览模式下输入字符后光标跳文末、跳文首、selection 丢失、页面不动但真实光标改变的问题。不要先做“保存光标再恢复”的治标方案。
+
+请按“目标→状态→误差→控制动作→反馈→修正→验证→沉淀”推进：
+1. 先确认正式 app 目录、当前 git 状态、用户复现文件、最近提交、Rich Edit 相关同步链路。
+2. 如果用户说只有某个文件触发，先分析该文件结构：frontmatter、行尾、HTML、fenced code、四反引号/三反引号嵌套、链接、autolink、反斜杠转义。
+3. 优先检查 `MilkdownEditor.tsx` 中 `emitMarkdownChange`、`lastKnownMarkdownRef`、`markdown` prop 同步 effect、`replaceAll(...)` 是否形成自回灌。
+4. 检查 `shared/markdown.ts` 中 Rich/Wiki 归一化是否只作用于 fenced code 外部，并按 fence 字符和长度处理关闭规则。
+5. 控制动作只改共享根因：同步边界、归一化状态机或 parser；不要同时改代码块 UI、滚动补偿、链接点击状态机。
+6. 必须用用户真实文件做归一化前后比较，确认不产生无意义文本变化。
+7. 验证至少跑 `npm run test`、`npm run typecheck`、`npm run build`、`git diff --check`；如果没有重新打 Windows 安装包，明确说明。
+8. 修复后更新 HANDOFF、PROJECT_MEMORY 和 skill。提交时只 stage 本轮源码/测试/文档，不要纳入根目录 `.exe` 安装包。
+```
+
+### 本轮沉淀到 skill 的方向
+
+新增项目 skill：
+
+```text
+docs/runbooks/skills/serein-rich-edit-cursor-stability/SKILL.md
+```
+
+同时应更新/参考：
+
+```text
+docs/runbooks/skills/serein-rich-edit-markdown-links/SKILL.md
+docs/runbooks/skills/serein-editor-regression-control/SKILL.md
+```
+
+下次以下场景应触发 `serein-rich-edit-cursor-stability`：
+
+- Rich Edit 预览模式输入字符、空格、删除或回车后光标跳文末/文首。
+- 页面不滚动但真实光标跳走，按方向键后页面才跟过去。
+- 只有某个复杂文件触发光标异常。
+- 修链接、frontmatter、wiki link、autolink 或 Rich serializer 后出现编辑器全文替换迹象。
+- `Project_03_vibe-keyboard.txt`、四反引号嵌套三反引号、fenced code 内 Markdown-like 内容相关问题。

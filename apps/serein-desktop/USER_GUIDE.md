@@ -188,11 +188,11 @@ If the panel says the index is partial, narrow the Vault or move heavy/generated
 From Windows PowerShell at the repository root:
 
 ```powershell
-.\T_tools\build_windows.ps1 -SkipInstall
+.\scripts\build_windows.ps1 -SkipInstall
 ```
 
 If dependencies are missing, run:
 
 ```powershell
-.\T_tools\build_windows.ps1
+.\scripts\build_windows.ps1
 ```

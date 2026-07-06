@@ -12,7 +12,7 @@
 
 ### 当前代码基线
 
-- 正式目录是 `D_deliverables/serein-desktop/`。
+- 正式目录是 `apps/serein-desktop/`。
 - quick note 仍走正常新建窗口路径：`open_quick_note_window`。
 - Rust 创建便签窗口时应保持 `visible(false)`，由前端 `QuickNoteWindow.prepareAndShow()` 准备尺寸/位置后再 `show()`。
 - `Alt+W` 默认快捷键应能在主窗口聚焦时也触发；不要因为 `main.is_focused()` 直接跳过。

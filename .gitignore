@@ -1,11 +1,15 @@
-# Local agent/session/context artifacts
+# Local agent/session artifacts
 AGENTS.md
 HANDOFF.md
-C_context/
-R_raw/
 
 # Local vault scratch notes
-D_deliverables/serein-complex-vault/References/mission.md
+examples/complex-vault/References/mission.md
+
+# Local archived legacy projects
+/archive/
+
+# Local installers
+Serein_*.exe
 
 # Dependencies
 node_modules/

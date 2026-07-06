@@ -250,18 +250,18 @@ Vault 索引当前识别这些格式：
 在 Windows PowerShell 中，从仓库根目录执行：
 
 ```powershell
-.\T_tools\build_windows.ps1 -SkipInstall
+.\scripts\build_windows.ps1 -SkipInstall
 ```
 
 如果缺少依赖，去掉 `-SkipInstall`：
 
 ```powershell
-.\T_tools\build_windows.ps1
+.\scripts\build_windows.ps1
 ```
 
 预期产物：
 
 ```text
-D_deliverables\serein-desktop\src-tauri\target\release\bundle\nsis\Serein_1.0.1_x64-setup.exe
-D_deliverables\serein-desktop\src-tauri\target\release\serein-desktop.exe
+apps\serein-desktop\src-tauri\target\release\bundle\nsis\Serein_1.0.4_x64-setup.exe
+apps\serein-desktop\src-tauri\target\release\serein-desktop.exe
 ```

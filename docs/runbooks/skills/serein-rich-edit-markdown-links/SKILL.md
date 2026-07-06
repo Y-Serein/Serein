@@ -14,14 +14,14 @@ Read these first:
 ```text
 AGENTS.md
 HANDOFF.md
-C_context/PROJECT_MEMORY.md
-C_context/KNOWN_FAILURES.md
+docs/runbooks/PROJECT_MEMORY.md
+docs/runbooks/KNOWN_FAILURES.md
 ```
 
 The current app is:
 
 ```text
-D_deliverables/serein-desktop/
+apps/serein-desktop/
 ```
 
 Do not work in old `ys-writer-desktop` paths unless the user explicitly asks.
@@ -93,17 +93,34 @@ Do not globally strip backslashes. Always skip fenced code blocks:
 ```
 ````
 
+Fence handling must follow marker and length rules:
+
+- A backtick fence only closes with backticks, not tildes.
+- A tilde fence only closes with tildes, not backticks.
+- A closing fence must be at least as long as the opening fence.
+- In a four-backtick block, inner triple-backtick examples are content, not fence closures.
+
+Known regression sample:
+
+```text
+tests/fixtures/rich-edit/Project_03_vibe-keyboard.txt
+```
+
+This file contains a four-backtick block with nested triple-backtick examples. A simple boolean `inFence = !inFence` state machine caused Rich normalization to rewrite code-block content, then triggered editor self-feedback and cursor jumps.
+
 Rich mode may use `normalizeRichMarkdownEscapes`; Plain mode should not inherit Rich serializer cleanup unless there is a specific Plain-mode bug.
+
+When changing Rich normalization, keep `MilkdownEditor`'s `lastKnownMarkdownRef` in sync with the exact normalized markdown emitted to `onChange`. If the editor records A but App stores B, the next prop update can trigger `replaceAll(...)` and move the cursor to the document end.
 
 ## Source Paths
 
 Primary files:
 
 ```text
-D_deliverables/serein-desktop/src/components/MilkdownEditor.tsx
-D_deliverables/serein-desktop/src/shared/markdown.ts
-D_deliverables/serein-desktop/src/App.tsx
-D_deliverables/serein-desktop/tests/vault.test.mjs
+apps/serein-desktop/src/components/MilkdownEditor.tsx
+apps/serein-desktop/src/shared/markdown.ts
+apps/serein-desktop/src/App.tsx
+apps/serein-desktop/tests/vault.test.mjs
 ```
 
 Functions to inspect in `MilkdownEditor.tsx`:
@@ -150,7 +167,7 @@ Expected normalized source:
 
 ## Verification
 
-Run from `D_deliverables/serein-desktop/`:
+Run from `apps/serein-desktop/`:
 
 ```bash
 npm run test
@@ -173,6 +190,8 @@ For interaction regressions, GUI verification should cover:
 - Moving cursor/focus away collapses source back to rendered link.
 - `Ctrl/Cmd + click` opens the link.
 - Saving does not introduce extra backslashes.
+- Typing in `tests/fixtures/rich-edit/Project_03_vibe-keyboard.txt` does not move the cursor to document end.
+- Running `normalizeRichMarkdownEscapes` on `Project_03_vibe-keyboard.txt` does not change the file when no Rich serializer escapes are present.
 
 If Playwright or Windows release GUI testing is unavailable, say so explicitly. Do not claim GUI behavior is verified from `npm run build` alone.
 
