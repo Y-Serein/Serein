@@ -16,6 +16,7 @@ export type Note = {
   savedMarkdown?: string;
   richSavedMarkdown?: string;
   dirty?: boolean;
+  placeholder?: boolean;
 };
 
 export type Card = Note;
@@ -41,7 +42,9 @@ export type EditorCommandAction =
   | "paste"
   | "undo"
   | "redo"
-  | "selectAllSmart";
+  | "selectAllSmart"
+  | "revealHeading"
+  | "revealSourceRange";
 
 export type EditorCommandSignal = {
   id: number;

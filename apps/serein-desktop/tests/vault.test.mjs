@@ -19,11 +19,14 @@ import {
 import {
   composeMarkdownWithFrontmatter,
   createYamlFrontmatter,
+  extractMarkdownHeadings,
   extractOutline,
   getHeadingOffsets,
+  markdownHeadingTargetAt,
   normalizeRichMarkdownEscapes,
   normalizeWikiLinkEscapes,
   parseYamlFrontmatterProperties,
+  resolveMarkdownHeading,
   setYamlPropertyValue,
   splitYamlFrontmatter,
   yamlListValueFromInput,
@@ -36,7 +39,10 @@ import {
 } from "../.test-dist/explorer/tree.js";
 import {
   applyLineEnding,
+  createDraftNote,
+  createEmptyNote,
   createFileNote,
+  isEmptyPlaceholder,
   mergeWorkspaceState,
   normalizeEditorLineEndings,
 } from "../.test-dist/vault/workspace.js";
@@ -89,6 +95,29 @@ test("normalizes CRLF files for editor state while preserving save line endings"
   assert.equal(note.savedMarkdown, note.markdown);
   assert.equal(applyLineEnding(note.markdown, note.lineEnding), response.content);
   assert.equal(normalizeEditorLineEndings(response.content), note.markdown);
+});
+
+test("distinguishes the initial empty placeholder from an editable cleared draft", () => {
+  const placeholder = createEmptyNote();
+  const draft = createDraftNote("Untitled", "md");
+  const clearedDraft = {
+    ...draft,
+    markdown: "",
+    savedMarkdown: "",
+    dirty: false,
+  };
+  const emptyFile = createFileNote({
+    path: `${root}/empty.md`,
+    fileName: "empty.md",
+    fileExt: "md",
+    content: "",
+    modifiedAtMs: 1,
+    size: 0,
+  });
+
+  assert.equal(isEmptyPlaceholder(placeholder), true);
+  assert.equal(isEmptyPlaceholder(clearedDraft), false);
+  assert.equal(isEmptyPlaceholder(emptyFile), false);
 });
 
 test("preserves loaded lazy directory children when refreshing a parent directory", () => {
@@ -676,6 +705,51 @@ test("ignores YAML frontmatter when extracting outline headings", () => {
   const offsets = getHeadingOffsets(markdown);
   assert.equal(markdown.slice(offsets[0].start, offsets[0].end), "# First");
   assert.equal(markdown.slice(offsets[1].start, offsets[1].end), "## Second");
+});
+
+test("keeps outline headings consistent around nested and pending fences", () => {
+  const nested = [
+    "# Before",
+    "",
+    "- item",
+    "",
+    "  > ````bash",
+    "  > # code heading",
+    "  > ```",
+    "  > ````",
+    "",
+    "## After",
+  ].join("\n");
+  assert.deepEqual(extractOutline(nested), [
+    { level: 1, text: "Before" },
+    { level: 2, text: "After" },
+  ]);
+
+  const pending = "# Before\n\n```bash\n## Still visible";
+  assert.deepEqual(extractOutline(pending), [
+    { level: 1, text: "Before" },
+    { level: 2, text: "Still visible" },
+  ]);
+});
+
+test("does not treat list text or a lone dash as a Setext outline heading", () => {
+  assert.deepEqual(extractOutline("- Fictional audio\n-"), []);
+  assert.deepEqual(extractOutline("Plain text\n-"), []);
+  assert.deepEqual(extractOutline("Plain text\n---"), [
+    { level: 2, text: "Plain text" },
+  ]);
+});
+
+test("resolves a deferred outline identity against current Markdown offsets", () => {
+  const before = "# First\n\n```\necho\n```\n\n## Target";
+  const headings = extractMarkdownHeadings(before);
+  const target = markdownHeadingTargetAt(headings, 1);
+  assert.ok(target);
+
+  const current = before.replace("```\n", "```bash\n");
+  const resolved = resolveMarkdownHeading(current, target);
+  assert.ok(resolved);
+  assert.equal(current.slice(resolved.start, resolved.end), "## Target");
 });
 
 test("merges older workspace state with graph defaults", () => {

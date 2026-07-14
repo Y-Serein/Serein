@@ -10,6 +10,15 @@ import type {
   VaultWorkspaceState,
 } from "../app/types";
 
+function isTauriRuntime() {
+  return typeof window !== "undefined"
+    && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+}
+
+function isBrowserOpenTarget(target: string) {
+  return /^(https?:|mailto:)/i.test(target);
+}
+
 export function readMarkdownFile(path: string) {
   return invoke<MarkdownFileResponse>("read_markdown_file", { path });
 }
@@ -145,5 +154,12 @@ export function writeVaultWorkspaceState(root: string, workspace: VaultWorkspace
 }
 
 export function openExternalTarget(target: string) {
+  if (!isTauriRuntime() && isBrowserOpenTarget(target)) {
+    const opened = window.open(target, "_blank", "noopener,noreferrer");
+    return opened
+      ? Promise.resolve()
+      : Promise.reject(new Error("Browser blocked opening the external link."));
+  }
+
   return invoke<void>("open_external_target", { target });
 }

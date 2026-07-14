@@ -15,6 +15,7 @@ export function EditorWorkspace({
   activeNote,
   hasActiveDocument,
   editorMode,
+  useTextBufferEditor,
   richCommand,
   onRichCommandResult,
   editorSurfaceRef,
@@ -41,6 +42,7 @@ export function EditorWorkspace({
             t={t}
             activeNote={activeNote}
             editorMode={editorMode}
+            useTextBufferEditor={useTextBufferEditor}
             richCommand={richCommand}
             onRichCommandResult={onRichCommandResult}
             plainEditorRef={plainEditorRef}

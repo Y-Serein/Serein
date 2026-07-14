@@ -32,6 +32,7 @@ export function createEmptyNote(): Note {
     lineEnding: "lf",
     savedMarkdown: "",
     dirty: false,
+    placeholder: true,
   };
 }
 
@@ -90,7 +91,7 @@ export function isEmptyDraft(note: Note) {
 }
 
 export function isEmptyPlaceholder(note: Note | null | undefined) {
-  return Boolean(note && !note.filePath && !note.dirty && note.markdown.trim() === "");
+  return Boolean(note?.placeholder);
 }
 
 export function mergeWorkspaceState(

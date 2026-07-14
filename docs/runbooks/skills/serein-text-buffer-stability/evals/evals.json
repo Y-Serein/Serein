@@ -1,0 +1,64 @@
+{
+  "skill_name": "serein-text-buffer-stability",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "接手 Serein 单编辑器恢复。当前工作区有大量未提交改动，Windows 构建报 textBufferMarkdown.ts 编译错误，93590e3 的编辑行为最可靠。请先汇报状态，再修复并验证，但不要回滚我的其他代码。",
+      "expected_output": "读取项目交接和失败记录，区分当前代码基线与 93590e3 行为基线，检查 dirty worktree，避免 reset/restore；必要时用隔离 worktree，修复后必须回迁并在真实工作区运行 typecheck、test、build、diff check，明确 Windows 未验证项。",
+      "files": [
+        "HANDOFF.md",
+        "docs/runbooks/PROJECT_MEMORY.md",
+        "docs/runbooks/KNOWN_FAILURES.md"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Serein 里代码块 Ctrl+A 可以了，但标题第一次 Ctrl+A 仍直接全文；输入 bash 后立刻点大纲偶尔跳错；Markdown 的 - 被显示成小圆点。不要继续堆补丁，请按我的原设计优化。",
+      "expected_output": "稳定复现三项问题；把 Ctrl+A 收敛为所有语义单元的两级选择；大纲传标题身份并在 CodeMirror 当前 state 中解析；语言提交重取当前 block；保留原始 list marker；补纯函数测试和同一 Playwright 失败/成功证据。",
+      "files": [
+        "apps/serein-desktop/src/components/MarkdownTextBufferEditor.tsx",
+        "apps/serein-desktop/src/editor/textBufferMarkdown.ts",
+        "apps/serein-desktop/src/shared/markdown.ts",
+        "apps/serein-desktop/src/App.tsx",
+        "apps/serein-desktop/src/styles.css"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "真实 NanoUPS 文档里的 list -> quote -> ```bash 仍不像以前，空行会露出 >，代码块缩进和背景不对。请参考 93590e3 和 docs/images/v7-v9 修复，同时保护 EOF ArrowDown、语言控件和大文档性能。",
+      "expected_output": "使用真实 fixture 和截图对照；统一 container/fence 分析，隐藏空 quote 前缀，记录缩进和 quote depth；用 padding/伪元素恢复旧代码视觉，不在 cm-line 使用 margin；运行 root/list/quote/nested/EOF 回归、NanoUPS Playwright、截图检查、Milkdown fallback，并保留性能风险说明。",
+      "files": [
+        "tests/fixtures/rich-edit/nested_list_quote_code.md",
+        "tests/fixtures/rich-edit/00_raw.txt",
+        "docs/images/v7.png",
+        "docs/images/v8.png",
+        "docs/images/v9.png"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Serein 大纲点击后 selection 好像变了，但正文经常还停在旧标题，连续点击不同一级标题下面的同名二级标题更容易错。Source 行号有时也要点一下编辑区才恢复。不要用我的真实文件，请自己造测试文档，先复现再修。",
+      "expected_output": "遵守虚构文件边界；检查 cm-scroller 与 editor-surface 的 computed overflow 和真实 scrollTop；识别 selection 与 viewport 所有权分裂；不用 focus 顺序、延时或重复 RAF 补偿；使用 heading identity、CodeMirror lineBlockAt/documentTop 和真实滚动容器，快速点击时 latest wins；用干净 Vite 端口验证 Rich/Source、重复标题、60 次快速点击和 gutter top 误差，明确 Windows 未验证。",
+      "files": [
+        "apps/serein-desktop/src/components/MarkdownTextBufferEditor.tsx",
+        "apps/serein-desktop/src/App.tsx",
+        "apps/serein-desktop/src/styles.css",
+        "docs/images/v13.png",
+        "docs/images/v14.png",
+        "docs/images/v15.mp4"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Rich 模式在文末输入两个反引号还好，第三个就消失，输入框上下跳；我在 # 标题上面的空行输入三个反引号，下面标题会变成代码。设置里的快捷键还被拆成四行，太占空间。请一次修好并删除无效补偿。",
+      "expected_output": "逐字符复现 1/2/3 个反引号并检查 Source 真值、hidden line 和行高；加入后方既有 bash fence 的虚构场景；把 typed fence 建模为持久 pending 状态，保持可见且不借用远端 closer，Enter 本地闭合；区分同一行 InlineCode 与深缩进多行兼容；在 1100px 下将快捷键保持单行；用冷启动 UI smoke、cursor-leave、Enter、parser tests、typecheck/test/build 反证，并删除被最终方案替代的兜底。",
+      "files": [
+        "apps/serein-desktop/src/components/MarkdownTextBufferEditor.tsx",
+        "apps/serein-desktop/src/editor/textBufferMarkdown.ts",
+        "apps/serein-desktop/src/features/settings/SettingsDialog.tsx",
+        "apps/serein-desktop/src/styles.css",
+        "apps/serein-desktop/tests/text-buffer-markdown.test.mjs"
+      ]
+    }
+  ]
+}

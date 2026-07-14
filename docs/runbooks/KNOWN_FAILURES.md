@@ -194,3 +194,83 @@
 - autolink `<https://...>` 作为独立源码形态展开和收回。
 - 普通点击用于展开/编辑；`Ctrl/Cmd + 左键` 才打开链接。
 - selection 与展开链接相交时保持展开；光标/焦点离开后再收回。
+
+## 2026-07-08｜CodeMirror text-buffer Rich 行布局破坏 selection 坐标
+
+### 现象
+
+- 实验 text-buffer Rich mode 中，光标视觉位置和 `.cm-activeLine` 高亮不在同一行。
+- 点击可见的 `###` 标题，真实 selection 仍停在上一段 code line，导致上下键到不了标题。
+- 在代码块末尾输入字符时，真实位置可能落到隐藏 closing fence；closing fence 被改成 ```1 后，后续标题和正文被吞进代码块。
+
+### 失败原因
+
+- CodeMirror 可编辑行和行内 widget 上使用 CSS `margin` 做 Typora-like 间距，视觉坐标和 CodeMirror height/selection 映射脱节。
+- Rich mode 仅把 Markdown fence/heading marker 视觉隐藏，但没有保护隐藏 fence 行免受普通编辑事务改写。
+- 把这种问题继续当 Markdown parser case 处理，会变成“每个组合补一个例外”，不能解决点击、上下键、撤回 selection 的共同根因。
+
+### 禁止恢复
+
+- 不要在 `.cm-line`、heading line、code language widget 等 CodeMirror 可编辑行/行内 widget 上用 `margin-top/margin-bottom` 制造垂直间距。
+- 不要让普通 Rich 编辑事务直接修改隐藏 opening/closing fence 行。
+- 不要把隐藏 fence 行误编辑问题只用 parser 容错掩盖；必须保护编辑事务和 selection/坐标映射。
+
+### 当前允许状态
+
+- Typora-like 视觉间距用参与 CodeMirror DOM 测量的 padding 实现。
+- 结构性写回必须显式标注，例如代码块语言变更、EOF 退出、表格整体替换。
+- active line 高亮使用主题 accent 淡色，避免和代码块背景混淆。
+
+## 2026-07-13｜大纲 selection 与真实滚动容器分裂
+
+### 现象
+
+- 点击大纲后编辑区短暂跳动，但最终仍停在旧标题。
+- 连续点击不同 H1 下的标题时更明显；selection 可能已经改变，viewport 没有跟上。
+- Source/Rich 本地 Chromium smoke 可能通过，Windows WebView2 仍间歇失败。
+
+### 根因
+
+- `.cm-scroller` 使用 `overflow: visible`，不持有真实滚动条。
+- 实际滚动容器是外层 `.editor-surface { overflow: auto; }`。
+- 使用 `EditorView.scrollIntoView` 让 CodeMirror跨层推动祖先滚动，会依赖异步测量和浏览器滚动传播；连续命令可能丢失或互相覆盖。
+
+### 禁止恢复
+
+- 不要用 focus 顺序、固定延时、重复 `requestAnimationFrame` 或无目标 `requestMeasure` 代替滚动所有权修复。
+- 不要只验证 selection 或“标题最终看起来可见”；必须记录真正 overflow owner 的 `scrollTop`。
+- 不要在 `.editor-surface` 架构下恢复大纲 `EditorView.scrollIntoView` 作为主路径。
+
+### 当前允许状态
+
+- CodeMirror transaction 负责 selection。
+- 使用 `lineBlockAt()` / `documentTop` 计算目标位置，直接写 `.editor-surface.scrollTop`。
+- 连续 reveal 使用相同 measure key，只执行最后一次滚动。
+
+## 2026-07-13｜正在键入的 fence 被隐藏并借用远端 closer
+
+### 现象
+
+- Rich 文末输入第三个反引号后，` ``` ` 视觉消失，光标行高度变 0，编辑区弹跳。
+- 在标题上方输入 ` ``` `，如果文档后方已有代码块，中间标题可能立即变成代码内容。
+
+### 根因
+
+- pending fence 被立即应用 hidden-line decoration。
+- 新输入 opener 被普通 parser 与后方已有 closing fence 配对，parser 结构覆盖了用户尚未确认的编辑意图。
+- Lezer 对某些深缩进多行 fence 使用 `InlineCode` 节点；不能粗暴禁用所有 InlineCode 兼容路径。
+
+### 禁止恢复
+
+- 不要把正在键入的 pending fence 隐藏或压成 0 高度。
+- 不要让新输入 opener 在按 Enter 确认前借用远端 closing fence。
+- 不要用“禁用所有 InlineCode”修普通双反引号，这会破坏深缩进 list/quote fence。
+- 不要用长期 Vite HMR 页面判断本类修复；旧模块可能继续运行。
+
+### 当前允许状态
+
+- `typedPendingFenceLines` 持久跟踪新输入 opener；光标离开后仍保护该行。
+- pending marker 保持可见和普通行高。
+- 按 Enter 才在当前位置生成 local closer。
+- 普通同一行 InlineCode 与多行深缩进兼容路径分开处理。
+- UI 回归使用干净 Vite 端口冷启动。

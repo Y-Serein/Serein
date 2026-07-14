@@ -5,7 +5,7 @@ import { LanguageDescription } from "@codemirror/language";
 import type { LanguageSupport } from "@codemirror/language";
 import { languages as codeBlockLanguageData } from "@codemirror/language-data";
 import { classHighlighter, highlightTree } from "@lezer/highlight";
-import { commandsCtx, defaultValueCtx, Editor, editorViewCtx, rootCtx, serializerCtx } from "@milkdown/kit/core";
+import { commandsCtx, defaultValueCtx, Editor, editorViewCtx, remarkStringifyOptionsCtx, rootCtx, serializerCtx } from "@milkdown/kit/core";
 import { imageInlineComponent } from "@milkdown/kit/component/image-inline";
 import { tableBlock, tableBlockConfig } from "@milkdown/kit/component/table-block";
 import { listener, listenerCtx } from "@milkdown/kit/plugin/listener";
@@ -42,11 +42,13 @@ import { lift, setBlockType } from "@milkdown/kit/prose/commands";
 import { liftListItem, sinkListItem, splitListItem } from "@milkdown/kit/prose/schema-list";
 import { AllSelection, Plugin, PluginKey, Selection, TextSelection } from "@milkdown/kit/prose/state";
 import type { Command } from "@milkdown/kit/prose/state";
+import type { Node as ProsemirrorNode } from "@milkdown/kit/prose/model";
 import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import type { EditorView } from "@milkdown/kit/prose/view";
-import { $inputRule, $prose, $shortcut, replaceAll } from "@milkdown/kit/utils";
+import { $inputRule, $prose, $shortcut, insert, replaceAll } from "@milkdown/kit/utils";
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from "@milkdown/react";
 import type { EditorCommandResult, EditorCommandSignal } from "../domain/model";
+import { looksLikeMarkdownBlockPaste } from "../editor/markdownPaste";
 import type { YamlFrontmatterParts } from "../shared/markdown";
 import {
   composeMarkdownWithFrontmatter,
@@ -352,16 +354,27 @@ function selectedRichText(view: EditorView) {
   return view.state.doc.textBetween(from, to, "\n\n", "\n");
 }
 
-function copyRichSelection(view: EditorView) {
-  const text = selectedRichText(view);
+function selectedRichMarkdown(view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
+  const { from, to, empty } = view.state.selection;
+  if (empty) return "";
+
+  const slice = view.state.doc.slice(from, to, true);
+  const doc = view.state.schema.topNodeType.createAndFill(undefined, slice.content);
+  if (!doc) return selectedRichText(view);
+
+  return normalizeRichMarkdownEscapes(normalizeRichSerializedSpaces(serializer(doc)));
+}
+
+function copyRichSelection(view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
+  const text = selectedRichMarkdown(view, serializer);
   if (!text) return false;
   writeDesktopClipboardText(text);
   view.focus();
   return true;
 }
 
-function cutRichSelection(view: EditorView) {
-  if (!copyRichSelection(view)) return false;
+function cutRichSelection(view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
+  if (!copyRichSelection(view, serializer)) return false;
   view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
   view.focus();
   return true;
@@ -380,9 +393,61 @@ function pasteRichText(view: EditorView) {
   });
 }
 
+function writeRichClipboardEvent(event: ClipboardEvent, view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
+  const text = selectedRichMarkdown(view, serializer);
+  if (!text || !event.clipboardData) return false;
+
+  event.preventDefault();
+  event.stopPropagation();
+  event.clipboardData.setData("text/plain", text);
+  return true;
+}
+
 function clearNativeSelection(view?: EditorView) {
   const rootSelection = (view?.root as unknown as { getSelection?: typeof window.getSelection } | undefined)?.getSelection?.();
   (rootSelection ?? window.getSelection())?.removeAllRanges();
+}
+
+function editorScrollerForElement(element: HTMLElement) {
+  let node: HTMLElement | null = element.parentElement;
+  while (node && node !== document.body) {
+    const style = window.getComputedStyle(node);
+    if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) return node;
+    node = node.parentElement;
+  }
+  return document.scrollingElement instanceof HTMLElement ? document.scrollingElement : null;
+}
+
+function selectionHeadPosition(selection: Selection) {
+  return selection instanceof TextSelection ? selection.head : selection.from;
+}
+
+function proseMirrorSelectionVisible(view: EditorView, scroller: HTMLElement | null) {
+  if (!scroller) return true;
+  try {
+    const coords = view.coordsAtPos(selectionHeadPosition(view.state.selection));
+    const viewport = scroller === document.scrollingElement
+      ? { top: 0, bottom: window.innerHeight }
+      : scroller.getBoundingClientRect();
+    return coords.bottom >= viewport.top + 2 && coords.top <= viewport.bottom - 2;
+  } catch {
+    return true;
+  }
+}
+
+function centerProseMirrorSelection(view: EditorView, scroller: HTMLElement | null) {
+  if (!scroller) return;
+  try {
+    const coords = view.coordsAtPos(selectionHeadPosition(view.state.selection));
+    const viewport = scroller === document.scrollingElement
+      ? { top: 0, height: window.innerHeight }
+      : scroller.getBoundingClientRect();
+    const cursorCenter = (coords.top + coords.bottom) / 2;
+    const viewportCenter = viewport.top + viewport.height / 2;
+    scroller.scrollTop += cursorCenter - viewportCenter;
+  } catch {
+    // Native history may leave selection in a transient state; ignore scroll compensation then.
+  }
 }
 
 function codeBlockDomAtSelection(view: EditorView) {
@@ -393,6 +458,53 @@ function codeBlockDomAtSelection(view: EditorView) {
     return dom instanceof HTMLElement ? dom.closest<HTMLElement>(".milkdown-code-block") : null;
   }
   return null;
+}
+
+const richHistoryScrollJobs = new WeakMap<EditorView, { frames: number[]; timers: number[] }>();
+
+function clearRichHistoryScrollJob(view: EditorView) {
+  const job = richHistoryScrollJobs.get(view);
+  if (!job) return;
+  job.frames.forEach((frame) => window.cancelAnimationFrame(frame));
+  job.timers.forEach((timer) => window.clearTimeout(timer));
+  richHistoryScrollJobs.delete(view);
+}
+
+function runRichHistoryWithEditorScroll(view: EditorView, runHistory: () => void) {
+  const scroller = editorScrollerForElement(view.dom);
+  const scrollTopBefore = scroller?.scrollTop ?? 0;
+
+  const stabilizeSelectionScroll = () => {
+    if (!scroller) return;
+
+    scroller.scrollTop = scrollTopBefore;
+    if (proseMirrorSelectionVisible(view, scroller)) return;
+
+    centerProseMirrorSelection(view, scroller);
+  };
+
+  clearRichHistoryScrollJob(view);
+  runHistory();
+  stabilizeSelectionScroll();
+
+  const frames: number[] = [];
+  const timers: number[] = [];
+  const scheduleFrame = (callback: () => void) => {
+    const frame = window.requestAnimationFrame(callback);
+    frames.push(frame);
+  };
+  const scheduleTimer = (delay: number) => {
+    const timer = window.setTimeout(stabilizeSelectionScroll, delay);
+    timers.push(timer);
+  };
+
+  scheduleFrame(() => {
+    stabilizeSelectionScroll();
+    scheduleFrame(stabilizeSelectionScroll);
+  });
+  scheduleTimer(50);
+  scheduleTimer(120);
+  richHistoryScrollJobs.set(view, { frames, timers });
 }
 
 function refreshLocalImagePreviews(root: HTMLElement, imagePreviewMap: Record<string, string>) {
@@ -1825,6 +1937,7 @@ function runEditorCommand(editor: Editor, command: EditorCommandSignal, onResult
   editor.action((ctx) => {
     const commands = ctx.get(commandsCtx);
     const view = ctx.get(editorViewCtx);
+    const serializer = ctx.get(serializerCtx);
     let handled = false;
     view.focus();
 
@@ -1879,10 +1992,10 @@ function runEditorCommand(editor: Editor, command: EditorCommandSignal, onResult
         }
         break;
       case "cut":
-        handled = cutRichSelection(view);
+        handled = cutRichSelection(view, serializer);
         break;
       case "copy":
-        handled = copyRichSelection(view);
+        handled = copyRichSelection(view, serializer);
         break;
       case "paste":
         pasteRichText(view);
@@ -2362,6 +2475,9 @@ function EditorSurface({
         const isPlainArrowDown = event.key === "ArrowDown" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
         const isPlainArrowUp = event.key === "ArrowUp" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
         const isPlainTab = event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey;
+        const key = event.key.toLowerCase();
+        const isUndo = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && key === "z";
+        const isRedo = (event.ctrlKey || event.metaKey) && !event.altKey && (key === "y" || (event.shiftKey && key === "z"));
         if (codeBlock) scheduleActiveCodeBlockRefresh(event.target);
 
         if (isPlainArrowUp && pendingCodeBlockTopLine) {
@@ -2409,6 +2525,17 @@ function EditorSurface({
           event.preventDefault();
           event.stopPropagation();
           focusFrontmatterEnd();
+          return;
+        }
+
+        if (isUndo || isRedo) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          runRichHistoryWithEditorScroll(view, () => {
+            commands.call(isUndo ? undoCommand.key : redoCommand.key);
+          });
+          view.focus();
           return;
         }
 
@@ -2739,6 +2866,25 @@ function EditorSurface({
         replaceAll(nextBodyMarkdown)(ctx);
         window.requestAnimationFrame(() => refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current));
       };
+      const handleMarkdownSourcePaste = (event: ClipboardEvent) => {
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        if (!text || codeBlockDomAtSelection(view) || !looksLikeMarkdownBlockPaste(text)) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        insert(text.replace(/\r\n?/g, "\n"))(ctx);
+        view.focus();
+        window.requestAnimationFrame(() => refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current));
+      };
+      const handleCopy = (event: ClipboardEvent) => {
+        writeRichClipboardEvent(event, view, ctx.get(serializerCtx));
+      };
+      const handleCut = (event: ClipboardEvent) => {
+        if (!writeRichClipboardEvent(event, view, ctx.get(serializerCtx))) return;
+        view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
+        view.focus();
+      };
       const handlePointerDown = (event: PointerEvent) => {
         const target = event.target instanceof Element ? event.target : null;
         setActiveTableFromTarget(target);
@@ -2839,6 +2985,9 @@ function EditorSurface({
       window.addEventListener("keydown", handleKeyDown, { capture: true });
       view.dom.addEventListener("keyup", handleKeyUp, { capture: true });
       view.dom.addEventListener("input", handleInput, { capture: true });
+      view.dom.addEventListener("copy", handleCopy, { capture: true });
+      view.dom.addEventListener("cut", handleCut, { capture: true });
+      view.dom.addEventListener("paste", handleMarkdownSourcePaste, { capture: true });
       view.dom.addEventListener("paste", handlePaste, { capture: true });
       view.dom.addEventListener("pointerdown", handlePointerDown, { capture: true });
       view.dom.addEventListener("focusout", handleFocusOut, { capture: true });
@@ -2854,6 +3003,9 @@ function EditorSurface({
         window.removeEventListener("keydown", handleKeyDown, { capture: true });
         view.dom.removeEventListener("keyup", handleKeyUp, { capture: true });
         view.dom.removeEventListener("input", handleInput, { capture: true });
+        view.dom.removeEventListener("copy", handleCopy, { capture: true });
+        view.dom.removeEventListener("cut", handleCut, { capture: true });
+        view.dom.removeEventListener("paste", handleMarkdownSourcePaste, { capture: true });
         view.dom.removeEventListener("paste", handlePaste, { capture: true });
         view.dom.removeEventListener("pointerdown", handlePointerDown, { capture: true });
         view.dom.removeEventListener("focusout", handleFocusOut, { capture: true });
@@ -2874,6 +3026,10 @@ function EditorSurface({
       .config((ctx) => {
         ctx.set(rootCtx, root);
         ctx.set(defaultValueCtx, initialMarkdownRef.current);
+        ctx.update(remarkStringifyOptionsCtx, (options) => ({
+          ...options,
+          bullet: "-" as const,
+        }));
         ctx.set(remarkGFMPlugin.options.key, { singleTilde: false });
         ctx.update(codeBlockConfig.key, (defaultConfig) => ({
           ...defaultConfig,

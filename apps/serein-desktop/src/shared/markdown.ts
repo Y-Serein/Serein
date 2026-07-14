@@ -2,6 +2,63 @@ import type { SaveFileExt } from "../app/types";
 
 export type OutlineItem = { level: 1 | 2 | 3 | 4 | 5 | 6; text: string };
 export type MarkdownHeading = OutlineItem & { start: number; end: number };
+export type MarkdownHeadingTarget = OutlineItem & { occurrence: number; fallbackIndex: number };
+export type MarkdownFenceInfo = {
+  char: "`" | "~";
+  length: number;
+  prefixLength: number;
+  markerLength: number;
+  info: string;
+};
+
+export function markdownContainerPrefixLength(text: string) {
+  let cursor = 0;
+  let moved = true;
+
+  while (moved) {
+    moved = false;
+    const slice = text.slice(cursor);
+    const blockquote = slice.match(/^( {0,3}>\s?)/);
+    if (blockquote) {
+      cursor += blockquote[1].length;
+      moved = true;
+      continue;
+    }
+
+    const list = slice.match(/^( {0,3}(?:[-*+]|\d+[.)])\s+)/);
+    if (list) {
+      cursor += list[1].length;
+      moved = true;
+    }
+  }
+
+  return cursor;
+}
+
+export function openingMarkdownFence(text: string): MarkdownFenceInfo | null {
+  const containerPrefix = markdownContainerPrefixLength(text);
+  const source = text.slice(containerPrefix);
+  const match = source.match(/^([ \t]*)(`{3,}|~{3,})(.*)$/);
+  if (!match) return null;
+  const marker = match[2];
+  const char = marker[0] as "`" | "~";
+  const info = match[3] ?? "";
+  if (char === "`" && info.includes("`")) return null;
+  return {
+    char,
+    length: marker.length,
+    prefixLength: containerPrefix + match[1].length,
+    markerLength: marker.length,
+    info,
+  };
+}
+
+export function closingMarkdownFence(text: string, opener: MarkdownFenceInfo) {
+  const containerPrefix = markdownContainerPrefixLength(text);
+  const source = text.slice(containerPrefix);
+  const match = source.match(new RegExp(`^[ \\t]*(${opener.char}{${opener.length},})[ \\t]*$`));
+  return Boolean(match);
+}
 
 export type MarkdownProperty = {
   key: string;
@@ -24,60 +81,118 @@ function stripAtxClosing(text: string) {
   return text.replace(/\s+#{1,}\s*$/, "").trim();
 }
 
+export function markdownSetextHeadingLevel(
+  textLine: string,
+  markerLine: string,
+): 1 | 2 | null {
+  const marker = markerLine.match(/^ {0,3}(=+|-+)[ \t]*$/);
+  if (!marker || !textLine.trim()) return null;
+  if (marker[1] === "-") return null;
+  if (markdownContainerPrefixLength(textLine) > 0) return null;
+  if (/^ {0,3}#{1,6}(?:[ \t]+|$)/.test(textLine)) return null;
+  if (/^(?: {4}|\t)/.test(textLine)) return null;
+  return marker[1].startsWith("=") ? 1 : 2;
+}
+
+function markdownSourceLines(markdown: string, start: number) {
+  let offset = start;
+  return markdown.slice(start).split("\n").map((text) => {
+    const line = { text, start: offset, end: offset + text.length };
+    offset = line.end + 1;
+    return line;
+  });
+}
+
+function matchingMarkdownFenceClose(
+  lines: ReturnType<typeof markdownSourceLines>,
+  startIndex: number,
+  opener: MarkdownFenceInfo,
+) {
+  for (let index = startIndex + 1; index < lines.length; index += 1) {
+    if (closingMarkdownFence(lines[index].text, opener)) return index;
+  }
+  return -1;
+}
+
 export function extractMarkdownHeadings(markdown: string): MarkdownHeading[] {
-  let offset = yamlFrontmatterBodyStart(markdown);
+  const bodyStart = yamlFrontmatterBodyStart(markdown);
+  const lines = markdownSourceLines(markdown, bodyStart);
   let previousLine: { text: string; start: number; end: number } | null = null;
-  let inFence = false;
   const headings: MarkdownHeading[] = [];
 
-  for (const line of markdown.slice(offset).split("\n")) {
-    const lineStart = offset;
-    const lineEnd = offset + line.length;
-    const fenceMatch = line.match(/^\s{0,3}(```+|~~~+)/);
-
-    if (fenceMatch) {
-      inFence = !inFence;
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const opener = openingMarkdownFence(line.text);
+    if (opener) {
+      const closeIndex = matchingMarkdownFenceClose(lines, index, opener);
       previousLine = null;
-      offset = lineEnd + 1;
+      index = closeIndex >= 0 ? closeIndex + 1 : index + 1;
       continue;
     }
 
-    if (!inFence) {
-      const atxMatch = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*$/);
-      if (atxMatch) {
-        const text = stripAtxClosing(atxMatch[2]);
-        if (text) {
-          headings.push({
-            level: atxMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6,
-            text,
-            start: lineStart,
-            end: lineEnd,
-          });
-        }
-        previousLine = null;
-        offset = lineEnd + 1;
-        continue;
-      }
-
-      const setextMatch = line.match(/^\s{0,3}(=+|-+)\s*$/);
-      if (setextMatch && previousLine?.text.trim()) {
+    const atxMatch = line.text.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*$/);
+    if (atxMatch) {
+      const text = stripAtxClosing(atxMatch[2]);
+      if (text) {
         headings.push({
-          level: setextMatch[1].startsWith("=") ? 1 : 2,
-          text: previousLine.text.trim(),
-          start: previousLine.start,
-          end: lineEnd,
+          level: atxMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6,
+          text,
+          start: line.start,
+          end: line.end,
         });
-        previousLine = null;
-        offset = lineEnd + 1;
-        continue;
       }
+      previousLine = null;
+      index += 1;
+      continue;
     }
 
-    previousLine = line.trim() ? { text: line, start: lineStart, end: lineEnd } : null;
-    offset = lineEnd + 1;
+    const setextLevel = previousLine
+      ? markdownSetextHeadingLevel(previousLine.text, line.text)
+      : null;
+    if (setextLevel && previousLine) {
+      headings.push({
+        level: setextLevel,
+        text: previousLine.text.trim(),
+        start: previousLine.start,
+        end: line.end,
+      });
+      previousLine = null;
+      index += 1;
+      continue;
+    }
+
+    previousLine = line.text.trim() ? line : null;
+    index += 1;
   }
 
   return headings;
+}
+
+export function markdownHeadingTargetAt(
+  headings: MarkdownHeading[],
+  index: number,
+): MarkdownHeadingTarget | null {
+  const heading = headings[index];
+  if (!heading) return null;
+  return {
+    level: heading.level,
+    text: heading.text,
+    occurrence: headings.slice(0, index).filter((item) => (
+      item.level === heading.level && item.text === heading.text
+    )).length,
+    fallbackIndex: index,
+  };
+}
+
+export function resolveMarkdownHeading(
+  markdown: string,
+  target: MarkdownHeadingTarget,
+) {
+  const headings = extractMarkdownHeadings(markdown);
+  return headings.filter((item) => (
+    item.level === target.level && item.text === target.text
+  ))[target.occurrence] ?? headings[target.fallbackIndex] ?? null;
 }
 
 function yamlFrontmatterBodyStart(markdown: string) {

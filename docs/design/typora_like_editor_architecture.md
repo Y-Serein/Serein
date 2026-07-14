@@ -1,6 +1,6 @@
 # Typora-like Editor Architecture
 
-最后更新：2026-07-06
+最后更新：2026-07-07
 
 ## 目标
 
@@ -78,13 +78,20 @@ Serein 的编辑器目标是 Typora-like 单编辑器体验：
 
 ## 决策
 
-当前采用方案 A。
+当前目标架构改为方案 B：CodeMirror 6 作为唯一 Markdown text buffer，Live Preview 由 decoration / widget / view plugin 实现。
 
 原因：
 
-- 当前最脆弱的不是缺少底层能力，而是 Plain/Rich 两套生命周期割裂。
-- Serein 已在 Milkdown 上积累大量 Typora-like 细节，直接迁到 CodeMirror 会丢失这些细节。
-- 项目记忆已明确禁止重新引入嵌套可编辑 CodeMirror 作为代码块主实现。
+- 用户确认最终目标应与 Typora 对齐：一个 Markdown 文本 buffer 承载内容、undo/redo、selection、scroll、IME 和保存。
+- `textarea + Milkdown/ProseMirror` 双实例只能做过渡补偿，无法从根上解决切换模式丢 undo、selection 生命周期割裂的问题。
+- 以文本 buffer 为核心能最大限度保留 Markdown 原文，避免 serializer 把用户文档重写成另一种 Markdown。
+- 代码块、链接、表格、图片等 Rich 呈现必须作为同一文本 buffer 的 decoration/交互层，而不是另一个编辑器实例。
+
+约束：
+
+- 目标是替换底层模型，不是降低最终呈现。最终视觉和交互不得低于当前 Rich Edit。
+- 迁移必须并行推进、可回退；默认 Milkdown 主路径在新 text-buffer 引擎达标前不能删除。
+- 新引擎不得重新引入代码块内部嵌套可编辑编辑器。代码块内容仍必须属于同一个 Markdown text buffer。
 
 ## 分阶段实施
 
@@ -93,49 +100,68 @@ Serein 的编辑器目标是 Typora-like 单编辑器体验：
 - App 层 Markdown undo/redo 栈兜底。
 - 嵌套代码块退出逻辑从 DOM 焦点补丁转向文档结构判断。
 
-### Phase 1：统一编辑器边界
+### Phase 1：并行落地 text-buffer 引擎骨架
 
 目标：
 
-- `EditorWorkspace` 不再把 plain/rich 当成两个无关编辑器入口。
-- 新增统一的 Editor Host 边界，集中处理：
-  - 当前 mode。
-  - 当前 note markdown。
-  - 命令入口。
-  - selection/focus 请求。
-  - 图片导入和链接打开。
+- 新增实验性 CodeMirror text-buffer editor。
+- plain/rich 两种显示模式都使用同一个 CodeMirror `EditorState`，切换模式不销毁编辑状态。
+- 默认 Milkdown 路径保持不变；实验引擎通过显式本地开关启用。
+- 第一阶段只证明：
+  - Markdown 原文是唯一数据源。
+  - 切换 plain/rich 不丢 CodeMirror undo/redo。
+  - 基础标题、引用、列表、代码块、链接有初步 decoration。
+  - 图片导入、链接打开、菜单命令有最小可用路径。
 
 要求：
 
-- 用户可见行为不变。
-- 不删除 `textarea`，只先把生命周期和命令分发收口。
-- 回归验证必须覆盖 Rich/Plain 切换、撤销、链接展开、代码块退出。
+- 默认用户可见行为不变。
+- 实验引擎必须明确标注能力缺口，不能伪装成完整替代。
+- 不删除 `textarea` 和 `MilkdownEditor`，只新增并行实现。
+- 回归验证必须覆盖默认路径仍可构建、实验路径能编译。
 
-### Phase 2：源码模式从独立状态降级为同源视图
+### Phase 2：补齐 Typora-like decoration
 
 目标：
 
-- Plain/source mode 不再拥有独立 undo/selection 主权。
-- 切换模式不重建文档状态。
-- 优先保留用户对源码模式的直接编辑体验。
+- Rich 呈现逐项追平当前 Milkdown：
+  - 标题、列表、引用、代码块视觉。
+  - 标准 Markdown link 局部展开/收回。
+  - Wiki link 展示、跳转和编辑。
+  - 图片预览。
+  - Frontmatter 顶部属性条。
+  - 表格可视化编辑。
 
-可选落地：
+要求：
 
-- 短期：保留 textarea UI，但通过统一 Editor Host 管理 selection snapshot、history 和 commit 边界。
-- 中期：探索 ProseMirror 内 source block/view mode，减少 textarea 生命周期影响。
+- 所有交互都作用于同一份 Markdown text buffer。
+- 光标进入局部源码范围时展开；离开后收回。
+- 不允许通过另一个隐藏编辑器维持 Rich 状态。
 
-### Phase 3：补齐 markdown.com.cn / Typora 基础能力
+### Phase 3：替换默认编辑器
+
+前置条件：
+
+- 新 text-buffer 引擎通过能力基线里的高风险路径：
+  - undo/redo、selection、scroll。
+  - 链接展开/收回/跳转。
+  - 代码块退出和语言控件。
+  - 表格编辑和保存。
+  - 图片导入/预览/路径。
+  - frontmatter 和 dirty baseline。
+- Windows release `.exe` 手测通过。
+- 用户确认新引擎可以替换默认路径。
+
+### Phase 4：补齐 markdown.com.cn / Typora 基础能力
 
 按优先级补：
 
-1. 任务列表 checkbox 交互和保存一致性。
-2. 表格键盘路径、行列操作、Markdown 保存一致性。
-3. KaTeX 数学公式。
-4. Mermaid 图表。
-5. `[TOC]` 自动目录。
-6. Markdown 思维导图视图，和现有知识图谱区分为两种能力。
+1. KaTeX 数学公式。
+2. Mermaid 图表。
+3. `[TOC]` 自动目录。
+4. Markdown 思维导图视图，和现有知识图谱区分为两种能力。
 
-这些能力涉及新依赖或新视图时必须单独评估，不能混入编辑器生命周期迁移。
+这些能力涉及新依赖或新视图时必须单独评估，不能混入 text-buffer 引擎替换。
 
 ## 验证矩阵
 
@@ -144,11 +170,11 @@ Serein 的编辑器目标是 Typora-like 单编辑器体验：
 - `npm run typecheck`
 - `npm run test`
 - `npm run build`
-- Rich 输入后保存。
-- Plain 输入后保存。
-- Rich -> Plain -> Rich 不丢内容。
-- Rich 输入 -> 切 Plain -> `Ctrl+Z`。
-- Plain 输入 -> 切 Rich -> `Ctrl+Z`。
+- 默认 Milkdown 路径仍可 Rich 输入后保存。
+- 默认 Plain 路径仍可输入后保存。
+- 实验 text-buffer 路径：Rich -> Plain -> Rich 不重建实例、不丢内容。
+- 实验 text-buffer 路径：Rich 输入 -> 切 Plain -> `Ctrl+Z`。
+- 实验 text-buffer 路径：Plain 输入 -> 切 Rich -> `Ctrl+Z`。
 - 标准 Markdown link 展开/跳转/收回。
 - `tests/fixtures/rich-edit/00_raw.txt` 中 `list > quote > code` 退出。
 - 代码块语言控件键盘编辑和候选选择。

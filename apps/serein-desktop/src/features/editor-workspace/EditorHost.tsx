@@ -8,12 +8,17 @@ const MilkdownEditor = lazy(() => import("../../components/MilkdownEditor").then
   default: module.MilkdownEditor,
 })));
 
+const MarkdownTextBufferEditor = lazy(() => import("../../components/MarkdownTextBufferEditor").then((module) => ({
+  default: module.MarkdownTextBufferEditor,
+})));
+
 type TextBundle = (typeof appText)[AppLanguage];
 
 export type EditorHostProps = {
   t: TextBundle;
   activeNote: Note;
   editorMode: EditorMode;
+  useTextBufferEditor: boolean;
   richCommand: EditorCommandSignal | null;
   onRichCommandResult: (result: EditorCommandResult) => void;
   plainEditorRef: RefObject<HTMLTextAreaElement>;
@@ -102,6 +107,29 @@ function RichMarkdownSurface({
 }
 
 export function EditorHost(props: EditorHostProps) {
+  if (props.useTextBufferEditor) {
+    return (
+      <Suspense fallback={<div className="editor-loading">{props.t.aria.loadingRichEditor}</div>}>
+        <MarkdownTextBufferEditor
+          t={props.t}
+          activeNote={props.activeNote}
+          editorMode={props.editorMode}
+          command={props.richCommand}
+          onCommandResult={props.onRichCommandResult}
+          onChange={props.onMarkdownChange}
+          onOpenLink={props.onOpenLink}
+          wikiLinkSuggestions={props.wikiLinkSuggestions}
+          onCreateWikiLink={props.onCreateWikiLink}
+          onImportImages={props.onImportImages}
+          imagePreviewMap={props.imagePreviewMap}
+          showImageSourceOnFocus={props.showImageSourceOnFocus}
+          normalizeWindowsImagePaths={props.normalizeWindowsImagePaths}
+          showFrontmatterTagRow={props.showFrontmatterTagRow}
+        />
+      </Suspense>
+    );
+  }
+
   if (props.editorMode === "plain") {
     return (
       <PlainMarkdownSurface

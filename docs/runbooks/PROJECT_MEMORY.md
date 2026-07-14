@@ -1,6 +1,6 @@
 # Serein Project Memory
 
-最后更新：2026-06-08 16:18
+最后更新：2026-07-10 19:00
 
 ## 用户偏好
 
@@ -513,3 +513,474 @@ docs/runbooks/skills/serein-editor-regression-control/SKILL.md
 - 只有某个复杂文件触发光标异常。
 - 修链接、frontmatter、wiki link、autolink 或 Rich serializer 后出现编辑器全文替换迹象。
 - `Project_03_vibe-keyboard.txt`、四反引号嵌套三反引号、fenced code 内 Markdown-like 内容相关问题。
+
+## 2026-07-07 Ctrl+Z 基础滚动语义回归沉淀
+
+### 本轮事实
+
+- 用户反馈：撤回内容位置基本正确，但 `Ctrl+Z` 后光标显示在编辑框最上方，而不是回到编辑区域中间附近。
+- 已确认旧行为曾经修过：`ca2d581` 引入 `runRichHistoryWithEditorScroll(...)`，策略是撤回前记录 `scrollTop`，执行 Milkdown/ProseMirror history 后先恢复原滚动；如果撤回后的真实 selection 不可见，再滚到 selection 附近/中间。
+- 回归来源：`2f6a8c7 fix: stabilize rich edit navigation and undo` 为了解 plain/rich 切换 undo 丢失，把 Rich 编辑器内部 undo keydown 和滚动补偿删掉，改成 App 层截获 `edit.undo/edit.redo` 后发 command signal。这个改动混淆了“Rich 内部撤回滚动语义”和“跨编辑模式 history”两个问题。
+- 当前最小修复方向：编辑器内标准 `Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z` 让 Rich Editor 自己处理，并恢复已验证过的滚动补偿；App 层不要截获 Rich 编辑器内标准撤回快捷键。
+
+### 必须记住的规则
+
+- 当前能力基线和改动确认协议已整理到 `docs/runbooks/CAPABILITY_BASELINE.md`；后续改已有能力前必须先对照该文件。
+- 基础编辑语义属于产品地基，不是实现细节。已经调通的撤回、光标、滚动、链接展开、代码块退出、语言控件、表格键盘路径等，不能因为架构整理、快捷键统一、模式切换或命令分发重构被顺手替换。
+- 如果确实需要改基础交互，必须先写清旧行为、目标行为、风险、最小验证；改完后必须恢复到等价或更好的用户体验，不能只说“默认 history 应该能处理”。
+- `Ctrl+Z / Redo` 的职责边界：history 负责内容和 ProseMirror selection；滚动补偿只读 selection 并调整 scroll，不得擅自改 selection。
+- 撤回滚动的目标语义：目标 selection 已经可见时保持当前滚动；目标离屏时滚到目标附近/中间；不能无条件 `scrollIntoView`，也不能让目标贴在编辑框最上方。
+- 不要为了修 plain/rich 两套实例切换丢 undo，把 Rich 内部已经验证过的 undo/scroll 路径删除。跨模式 history 是另一个问题，应单独设计和验证。
+
+### 下次排查提示
+
+- 如果用户说“以前修过，现在又坏了”，先用 `git log -S` / `git log -G` 查旧修复在哪个 commit 引入、在哪个 commit 删除，不要直接补新逻辑。
+- 针对本类问题优先查：
+  - `apps/serein-desktop/src/App.tsx` 中是否截获编辑器内 `edit.undo/edit.redo`。
+  - `apps/serein-desktop/src/components/MilkdownEditor.tsx` 中 Rich keydown 是否仍走带滚动补偿的 Milkdown history。
+  - 是否重新引入 Rich undo fallback 到 App markdown history、`replaceAll(...)` 后 selection restore、markdown offset 到 ProseMirror selection 映射等高风险补偿层。
+
+## 2026-07-07 Markdown text buffer 单编辑器实验沉淀
+
+### 本轮事实
+
+- 用户确认目标架构应改为：以 Markdown 文本 buffer 为核心，用 Typora-like decoration / widget 实现 Rich 呈现，而不是继续维护 `textarea + Milkdown` 两套编辑实例。
+- 已更新设计文档：`docs/design/typora_like_editor_architecture.md`，决策改为 CodeMirror 6 作为唯一 Markdown text buffer 目标架构。
+- 已新增实验组件：`apps/serein-desktop/src/components/MarkdownTextBufferEditor.tsx`。
+- 实验组件通过本地开关启用：
+
+```js
+localStorage.setItem("serein.experimentalTextBufferEditor", "1")
+```
+
+- 2026-07-07 补充：已在设置页增加可点入口：设置 -> 编辑器 -> 启用实验性单编辑器 text-buffer 引擎。这个设置仍写入同一个 localStorage 实验键，不进入正式 settings schema。
+- 默认路径仍不变：未设置开关时继续使用当前 `MilkdownEditor` + plain `textarea`。
+- 实验路径下，plain/rich 两种模式都进入同一个 CodeMirror `EditorState`；切换 mode 只重配 decoration，不卸载编辑器实例。
+- 已做最小 decoration：标题、引用、列表 marker、代码围栏/代码行、Markdown link/image、inline code、strong、strike。
+- 已做最小 command bridge：undo/redo、cut/copy/paste、select all、标题、段落、引用、列表、代码块、表格、link、image。
+- 已把实验 text-buffer rich mode 的保存/dirty 比较从旧 Rich serializer baseline 中隔离出来，避免 `normalizeRichMarkdownEscapes` 改写源码。
+
+### 已验证
+
+- `npm run typecheck`：通过。
+- `npm run test`：通过，5 个 Node test 文件通过。
+- `npm run build`：通过。
+- `git diff --check`：通过。
+- Playwright smoke：通过。流程是打开实验开关、新建文档、输入 `# Text Buffer Smoke / alpha`、点击模式按钮切到 Plain、按 `Ctrl+Z`，确认 `alpha` 被撤销，证明同一 CodeMirror history 跨模式保留。
+- Playwright settings smoke：通过。流程是从设置页启用实验引擎，再新建文档、输入、切 Plain、`Ctrl+Z` 撤销。
+
+### 必须记住的边界
+
+- 这只是 Phase 1 骨架，不是默认替换，也不能对外宣称已经完成 Typora-like 单编辑器。
+- 当前实验引擎还没追平 Milkdown Rich：
+  - 标准 Markdown link 的局部展开/收回状态机未完成。
+  - Wiki link、目录 link、Vault 跳转语义未完成。
+  - 代码块语言控件和 EOF/嵌套退出未完成。
+  - 表格可视化编辑未完成。
+  - 图片预览、frontmatter 顶部属性条未完成。
+  - KaTeX、Mermaid、TOC、mind map 未完成。
+- 默认 Milkdown 主路径必须保留，直到新 text-buffer 引擎逐项通过能力基线和 Windows release 手测。
+- 后续推进应继续采用并行替换策略：先在实验引擎补齐能力，再由用户确认是否切默认；不要直接删除 `MilkdownEditor` 或 plain `textarea`。
+
+### 2026-07-07 补充：text-buffer live preview 基础语义回归
+
+- 用户实测指出实验引擎的严重问题：输入 ```` ```bash ```` 后会把后续内容全部当成代码块；Rich 里标题已经变大但仍显示 `#`；围栏 marker 也仍可见，说明 Source/Rich 呈现边界没守住。
+- 本轮修正的控制变量只限实验 text-buffer parser/decorations：
+  - 新增 `src/editor/textBufferMarkdown.ts` 的 pending fence 状态：未闭合 fence opener 在 Rich 里隐藏 marker，但不把后续整篇吞进代码块。
+  - 完整 fenced block 继续隐藏 opening/closing fence，只把中间内容标为 code。
+  - 标题 `#`/`##`/`###` marker 作为 `richHiddenRanges`，Rich 隐藏、Source 保留。
+  - README 常见的四反引号包三反引号示例加入 fixture，避免示例代码块把后续标题吞掉。
+- 已补测试：`tests/text-buffer-markdown.test.mjs` 和 `tests/fixtures/text-buffer-markdown/readme-fences.md`。
+- 已验证：`npm run test`、`npm run typecheck`、`npm run build`、`git diff --check` 通过；Playwright smoke 通过 Rich/Source DOM 检查。
+- 仍然不能宣称实验引擎可替换默认编辑器。它只是修掉了 Markdown 基础预览语义的阻断问题；链接展开/收回、表格、图片、代码块语言控件、frontmatter、Vault 跳转仍未追平 Milkdown。
+
+### 2026-07-07 补充：Rich 粘贴 Markdown 源码被反斜杠转义
+
+- 用户复测指出长期问题：从源码模式/Typora 源码复制 Markdown，如 `# vibe-bridge`、```` ```bash ````、`ls /dev/hid*`，粘到 Serein 后会变成 `\# vibe-bridge`、`\`\`\`bash`、`hid\*`。
+- 根因不是保存层，也不是 `normalizeRichMarkdownEscapes()` 没有全局去反斜杠；根因是 Rich/Milkdown 默认 paste 把剪贴板 text/plain 当普通文本插入，serializer 为了保留普通文本语义会转义 Markdown 标点。
+- 禁止用“保存时全局去反斜杠”修这个问题，那会破坏用户确实想写普通文本的场景，也可能污染链接、代码块和转义语义。
+- 本轮正确边界：只在 Rich paste 阶段处理。多行剪贴板内容如果明显像 Markdown block（标题、fence、引用、列表、表格、图片），且当前不在代码块内，就阻止默认文本粘贴，走 Milkdown parser 插入 Markdown slice；Plain 源码模式继续原样粘贴。
+- 试过直接 `.use(clipboard)`，干净启动时报 `MilkdownError: Timer "SchemaReady" not found`，当前 kit 组合里不能直接挂该插件，已撤回。
+- 已补纯函数 `src/editor/markdownPaste.ts` 和 `tests/markdown-paste.test.mjs`，覆盖用户样例、单行 shell 注释不误判、普通多行文本不误判。
+- 已验证：Rich paste Playwright smoke 通过，切到源码后保留 `# vibe-bridge`、`### 设备挂载`、```` ```bash ````、`ls /dev/hid*`，没有 `\#`、`\`\`\``、`hid\*`。
+
+### 2026-07-07 补充：清空文档后编辑器消失
+
+- 用户复测指出：在测试网页里把文件内容清空后就不能继续编辑。
+- 根因是 `hasActiveDocument` 通过 `isEmptyPlaceholder(activeNote)` 判断，而旧 `isEmptyPlaceholder` 用 `!filePath && !dirty && markdown.trim() === ""` 推断无文档。新建草稿清空后会回到 `dirty=false` 且 markdown 为空，于是被误判成初始空占位页，编辑器被卸载。
+- 修法：给真正的初始占位 note 增加显式 `placeholder: true`，`isEmptyPlaceholder()` 只认这个标记；空草稿、清空后的草稿、空文件都仍是可编辑文档。
+- 后续规则：不要用“内容为空”判断“没有文档”。空文档是合法用户数据，必须能编辑、保存、另存为。
+- 已补 `tests/vault.test.mjs` 回归：初始 placeholder 为 true，清空后的 draft 和磁盘空文件都不是 placeholder。
+- 已验证：Playwright empty-clear smoke 覆盖 Rich 清空后继续输入、Source 清空后继续输入；`npm run test`、`npm run typecheck`、`npm run build`、`git diff --check` 通过。
+
+### 2026-07-07 补充：Rich 复制、跨模式撤回和浏览器外链
+
+- 用户复测指出：
+  - Source 模式复制 Markdown 正常，但 Rich/实时预览复制后再粘贴会丢 `#`、`-`、```` ```bash ```` 等 Markdown 源码标记。
+  - 模式内撤回正常，但 Rich/Source 切换后不能撤回。
+  - 测试网页里 Ctrl/单击标准外链 `[Improv Wi-Fi](https://www.improv-wifi.com)` 会提示没有可打开链接。
+- Rich copy 根因：`copyRichSelection()` 旧逻辑使用 `doc.textBetween(...)`，只能拿到可见文本，必然丢 Markdown 结构。已改为用 Milkdown serializer 序列化选区 Markdown，并接管 Rich 原生 `copy/cut` 事件；菜单 copy/cut 和快捷键 copy/cut 都走 Markdown 源码。
+- Milkdown serializer 默认把无序列表输出成 `*`，已配置 `remarkStringifyOptionsCtx.bullet = "-"`，让 Rich copy/save 更贴近常见 GitHub README 风格。
+- 跨模式撤回：默认路径仍是 Rich/Source 双实例，不能共享原生 undo stack。已加一个窄过渡桥：只在刚切换模式、且切换后没有新编辑时，`Ctrl+Z/Ctrl+Y` 走 App markdown history；模式内 undo 仍交给当前编辑器，避免再次破坏 Rich 内部滚动/selection。
+- 外链：测试网页不是 Tauri 环境，`openExternalTarget` 旧逻辑直接 invoke Tauri command 会失败。已给 `http/https/mailto` 增加浏览器 fallback `window.open`；Tauri release 仍走系统打开。
+- 链接点击语义没有改变：普通点击仍用于编辑/展开，`Ctrl/Cmd+点击`才跳转。这是当前能力基线，不能因浏览器测试 fallback 顺手改掉。
+- 已验证：
+  - Playwright Rich copy/link smoke：Rich 全选复制后包含 `#`、`-`、```` ```bash ```` 和外链 Markdown；Ctrl+点击外链触发 browser fallback。
+  - Playwright cross-mode undo smoke：Rich 输入后切 Source，`Ctrl+Z` 能撤回，`Ctrl+Y` 能恢复。
+  - `npm run test`、`npm run typecheck`、`npm run build`、`git diff --check` 通过。
+
+### 2026-07-07 补充：Source 模式视觉和 text-buffer 历史边界
+
+- 用户提供的 Typora `</>` 截图说明：源码模式不是纯 textarea，而是带设计的源码编辑器。源码 token 必须可见，同时应有行号、当前行/块感、语法着色、标题层级和代码块视觉。
+- 本轮实验 text-buffer 的 Source 模式增加 CodeMirror line number、active line / gutter；Source 保留 `#`、`-`、```、link URL 等源码 token，Rich 才通过 decoration 隐藏 marker。
+- Rich link 初步按 Typora-like 状态处理：默认只显示 label；光标/选区进入链接源码范围时展开 `[label](url)`；`Ctrl/Cmd+点击`仍跳转。后续仍需覆盖 wiki link、目录链接、拖选复制和 Windows release。
+- Markdown link 解析不能回到简单 regex。实验 text-buffer 已把 inline link scanner 放进 `src/editor/textBufferMarkdown.ts` 并补测试，覆盖 URL 中括号、转义 label 和 autolink。
+- 单编辑器路线中，CodeMirror `EditorState` 是 undo/redo 的所有者。若 CodeMirror undo 返回 false，不应再回落到 App 字符串 markdown history，否则会重新引入两套历史模型。
+- 切换文件必须重建或隔离 CodeMirror state，避免一个文件的 undo stack 串到另一个文件；切换 Rich/Source 只应 reconfigure decoration。
+- 已验证：`npm run test`、`npm run typecheck`、`npm run build`、`git diff --check`、Playwright text-buffer Source/Rich smoke 均通过。未验证 Windows release `.exe`。
+
+### 2026-07-07 补充：text-buffer 追平默认 Milkdown 的第一段核心能力
+
+- 用户要求先把实验 text-buffer 追平默认 Milkdown 路径里的代码块语言控件、EOF/嵌套退出、表格可视化、图片预览、frontmatter、wiki link、目录链接，不要给一个会崩的半成品。
+- 本轮有效结果：
+  - 代码块语言控件：Rich 中显示可编辑语言 input，候选包含 `bash`；输入 `BASH` 后写回 fence info。
+  - EOF 退出：代码块最后内容行 `ArrowDown` 进入语言控件，语言控件内再 `ArrowDown` 在 EOF 后创建新行。
+  - 嵌套退出：新增 `stripTextBufferContainerPrefix()`，用同一套 parser 容器前缀识别处理 `> `、`> - `、`> 1. ` 等空结构行。
+  - 表格：pipe table 在 Rich 中显示可编辑表格，支持单元格编辑、加行、加列，回 Source 后 Markdown 保真。
+  - 图片：standalone image Markdown 在 Rich 中显示预览或 missing placeholder，回 Source 后保留原始 `![alt](src)`。
+  - Frontmatter：Rich 顶部属性条读取当前 CodeMirror buffer，tags/aliases/status 编辑后写回 YAML。
+  - Wiki link / 目录 link：wiki link 有 Rich widget 并走 `serein-wiki:` 打开路径；标准 Markdown link / 目录 link 继续交给 App 层已有 Vault index / 目录 index / 本地外部分流。
+- CodeMirror 约束沉淀：
+  - 不要在 `ViewPlugin` decorations 里跨行 `Decoration.replace`，会报 `Decorations that replace line breaks may not be specified via plugins`。
+  - 当前 CM 版本下，block widget 也会触发 `Block decorations may not be specified via plugins`。本轮稳定方案是不用 block widget，改成行内 widget + 每行源码隐藏/折叠。
+  - widget 内 input 提交后 DOM 重建会触发 blur；如果 blur 再 dispatch，会报 `Calls to EditorView.update are not allowed while an update is in progress`。提交类 widget 必须记录 committed value，避免 Enter 后 blur 二次提交。
+- 已验证：
+  - `npm run test` 通过，7 个 Node test 文件通过。
+  - `npm run build` 通过。
+  - `git -c safe.directory=/home/slam/Project/Serein diff --check` 通过。
+  - Playwright text-buffer parity smoke 通过且无 pageerror；截图：`/tmp/serein-text-buffer-rich-parity.png`、`/tmp/serein-text-buffer-parity.png`。
+- 用户追问“是否大量测试、是否测 `-` 内嵌 ```bash / `>` 组合、文末是否意外”后，补了组合回归：
+  - 单测覆盖 list-contained fence、blockquote-contained fence、quote+list nested fence、pending nested fence 不吞后续 heading、空结构行退出。
+  - 浏览器 smoke 覆盖同一文档内 root/list/blockquote/quote+list/EOF 五个 fence；Rich 不露 `>`/结构缩进，EOF `ArrowDown` 退出并追加文本，回 Source 后 Markdown 保真。
+  - 长期运行的旧 Vite `5176` HMR 曾保留旧模块导致误报；干净启动 `5177` 后通过。做编辑器 smoke 时优先干净启动 dev server。
+- 仍未完成：
+  - 实验 text-buffer 还不是默认路径。
+  - 表格删除行/列、对齐保存、最后行键盘退出仍未追平。
+  - Wiki link 候选/创建未解析目标、目录链接真实 Vault 跳转、拖选复制、Windows release 行为仍需测。
+  - 大文档 decoration 性能还未压测。
+
+### 2026-07-08 补充：text-buffer Rich 坐标错位 / 隐藏 fence 误编辑
+
+- 用户反馈截图 `docs/images/v3.png`、`v4.png`、`v5.png`：光标看似在上一行，active line 高亮在下一行；在代码块末尾输入 `1` 后，隐藏 closing fence 被改成 ```1，后续 `### vibe` 被吞进代码块；上下键到不了标题，`Ctrl+Z` 也显得乱跳。
+- 这不是单纯 parser 问题。直接根因是 Rich mode 把 Markdown fence/heading marker 用 decoration 隐藏后，仍让隐藏行和带外边距的可编辑行参与 CodeMirror 坐标映射；CSS `margin-top` 和语言控件 `margin` 会让视觉位置与 CodeMirror selection line 不一致。
+- 当前修正边界：
+  - Rich mode 的隐藏 fence 行不能被普通编辑事务改写；语言变更、EOF 退出、表格替换这类明确结构写回必须显式标注。
+  - CodeMirror `.cm-line` / 行内 widget 不要用 CSS margin 制造 Typora-like 垂直间距；改用参与测量的 padding，避免点击标题仍选中上一段 code line。
+  - active line 颜色使用主题 accent 淡色，不再用和代码块背景混淆的色块。
+- 后续规则：凡是 text-buffer Rich 中出现“看得见但点不到、上下键跳不过去、Ctrl+Z selection 位置奇怪”，优先检查 decoration、隐藏行和 CSS 布局是否破坏 CodeMirror 坐标映射，不要先继续补 Markdown parser case。
+- 已验证：用户场景 Playwright smoke 通过，覆盖输入 `1` 不产生 ```1、`### vibe` 不被吞、点击标题可进入 active line、ArrowUp/ArrowDown 可回到标题、`Ctrl+Z` 撤回字符且不落到隐藏 fence 行；`npm run test`、`npm run typecheck`、`npm run build`、`git diff --check` 通过。
+
+## 2026-07-10 text-buffer 稳定化合作沉淀
+
+### 用户偏好和反复强调的产品原则
+
+- 用户的第一性原则优先于库/官方默认行为。CommonMark、CodeMirror、Milkdown 等库语义只能作为工具；如果库默认行为破坏 Serein 已经确认的写作体验，应加产品层状态机保护。
+- 用户已经调过的设计细节不能丢：代码块块感、左内缩、右下角语言控件、语言控件只跟随当前光标所在代码块、Rich 模式无源码 active line、源码模式才显示当前行高亮。
+- 用户不接受“我只修你截图里的一个 bug”。如果问题暴露的是架构/状态机缺陷，要主动检查同类路径，例如代码块输入、撤回、上下键、切文件、保存、复制粘贴和性能。
+- 用户接受反驳，但必须基于证据、复现和替代方案；不能用“官方就是这样”压过用户的已验证设计。
+- 用户希望按工程控制论闭环推进：目标 -> 状态 -> 误差 -> 控制动作 -> 反馈 -> 修正 -> 验证 -> 沉淀。
+- 用户更重视真实可写、可撤回、不卡、数据不坏，而不是“功能列表看起来完成”。
+- 用户明确鼓励不要害怕问题，应该解决问题；但不能为了推进而隐藏未验证风险。
+- 用户对“同一基础问题反复回来”极其敏感，尤其是 `Ctrl+Z` 滚动、代码块退出/语言控件、Rich/Source 边界、链接展开/跳转。
+
+### 从本次错误里学到的最佳实践
+
+- 单编辑器架构不能只搭骨架。`EditorState` 共用只是第一步，必须同步迁移旧路径已经验证过的行为契约：undo/redo 滚动、代码块语言控件、EOF/嵌套退出、链接展开、表格、图片、frontmatter、保存 dirty baseline。
+- Markdown parser 只能提供结构候选，不能直接决定编辑意图。用户在已有代码块内容里输入 ``` 时，产品语义应先保护“这是代码内容”，必要时自动升级外层 fence 长度，而不是让 parser 立刻重组整篇文档。
+- CodeMirror 可编辑行不能随便用 CSS `margin` 做 Typora-like 视觉间距。margin 会破坏 DOM 坐标与 selection 映射；应使用参与测量的 padding 或更明确的 widget/layout 策略。
+- Rich 模式和 Source 模式必须分清：Source 显示源码 token、行号、active line；Rich 隐藏语法标记、无源码 active line，只有当前编辑语义需要的控件。
+- `Ctrl+Z / Redo` 的滚动补偿必须明确职责：history 负责内容和 selection，滚动层只判断 selection 是否可见；可见则保持滚动，离屏才滚到附近/中间。
+- 代码块语言控件不是普通装饰。它是用户设计过的交互控件：只跟随当前光标所在代码块，最后一行 ArrowDown 进入控件，控件 ArrowDown 退出代码块，语言可键盘编辑且保留未知语言。
+- 大文档性能不能靠“功能过了 smoke”判断。当前 text-buffer 每次 selection/doc change 全量 `doc.toString()`、syntax tree analysis、link/table scan、line decoration，可能导致换文件卡死。下一轮必须优先做 viewport/cached/增量策略。
+- Playwright smoke 必须模拟用户真实操作，而不是只看 DOM 字符串。关键场景包括点击、输入、方向键、Ctrl+Z、切 Source、截图视觉检查、长文档滚动。
+- 临时 smoke 通过后，要把测试思想沉淀到项目测试或 skill；否则下一轮会再次依赖人工截图。
+- 不要把实验路径提升为默认，除非能力基线、性能、Windows release 真实手测都通过。
+
+### 项目关键约束和坑
+
+- 正式应用仍是 `apps/serein-desktop/`。旧原型和历史目录不要改。
+- 当前 text-buffer 仍是实验引擎，默认 Milkdown 主路径必须保留。
+- 代码块相关能力是高频写作路径，不是边缘功能。任何 Markdown 编辑器改动都必须覆盖 root/list/blockquote/nested/EOF code block。
+- 用户真实文件如 `Project_00_Serein.txt`、`Project_03_vibe-keyboard.txt` 比简化样例更重要，里面有中文、Windows 路径、shell 命令、代码块、标题、长文档、CRLF/路径等组合。
+- `docs/images/v1-v8` 是用户反馈截图，保留用于复现设计和回归。
+- 浏览器/Vite smoke 只能证明一部分；Windows release `.exe` 和真实 Vault 手测仍是最终体验面。
+- Preflight 脚本当前仍指向旧 `/home/rv_nano/...`，可作为流程提示，但不能把旧路径缺失当成当前仓库缺失。
+- 工作区存在大量前面 AI 实验改动和未跟踪文件；提交前必须精确审查，不要混入无关文件或构建产物。
+
+### 下次一次性达到本轮目标的提示词
+
+```text
+请接手 Serein text-buffer 单编辑器稳定化。先读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md、docs/runbooks/KNOWN_FAILURES.md，并使用 docs/runbooks/skills/serein-text-buffer-stability/SKILL.md。
+
+目标：不是继续堆功能，而是把实验 text-buffer 变成能写字的 Typora-like 单编辑器基础路径。请按“目标→状态→误差→控制动作→反馈→修正→验证→沉淀”推进。
+
+必须保护我的第一性原则：
+1. Rich/实时预览不显示源码 active line；Source 才有行号和当前行。
+2. Ctrl+Z/Redo：history 负责内容和 selection，滚动层只负责视口；离屏撤回要滚回光标附近/中间，不能贴顶部。
+3. 代码块内输入 ``` 是代码内容，不应重组文档或吞掉后续标题；必要时升级外层 fence。
+4. 代码块语言控件保留我的设计：只跟随当前光标所在代码块，右下角，bash 位置正确，ArrowDown 进入/退出逻辑稳定，未知语言保留。
+5. 代码块视觉必须保留块感、左内缩、留白和整体设计，不要变成一行一块的平铺背景。
+6. 切文件/大文档不能卡死，优先检查 decoration 是否全量扫描。
+
+请先用 Project_00_Serein.txt / docs/images/v7-v8 场景 / 长文档 undo 场景做复现，再改最小控制变量。每次改完必须跑 npm run typecheck、npm run test、npm run build、git diff --check，并用 Playwright smoke 验证 Rich 输入、Source 保真、Ctrl+Z 滚动、代码块 fence、语言控件显示条件。未做 Windows release 手测必须明确说未验证。
+```
+
+### 本次沉淀出的项目 skill
+
+```text
+docs/runbooks/skills/serein-text-buffer-stability/SKILL.md
+```
+
+触发场景：
+
+- 用户提到单编辑器、text-buffer、Typora-like decoration、Rich/Source 混淆。
+- 用户反馈代码块内输入 ```、EOF ArrowDown、嵌套 list/quote/code、语言控件、bash 位置、代码块视觉。
+- 用户反馈 Ctrl+Z/Redo 跳顶部、光标离屏撤回、Rich active line、上下键到不了标题。
+- 用户反馈换文件卡死、大文档卡顿、text-buffer decoration 性能。
+
+## 2026-07-10 18:40 单编辑器语义收敛与合作完整总结
+
+### 用户的底层逻辑和长期偏好
+
+- 用户要的不是“CodeMirror 能编辑 Markdown”，而是保留 Serein 已经反复调好的写作语义，再把它们迁移到一个 Markdown buffer。新架构只能减少状态源，不能借机删除旧行为。
+- Markdown 源码是唯一真相。Rich/实时预览只是源码的语义化呈现层，不能偷偷改写 Markdown、另存一份结构、维护第二套 undo 或让 widget 成为独立真相。
+- 所有派生 UI 必须服从编辑器即时 state：正文、语言控件、大纲、保存状态、selection 和 history 不能各自缓存坐标或 Markdown 快照。
+- 用户希望 `Ctrl+A` 是统一的两级语义选择，而不是代码块特例：
+  - 代码块第一次选代码内容，不含 opening/closing fence 和 list/quote container；第二次全文。
+  - ATX 标题第一次选可见标题内容，保留隐藏的 `# ` 结构；第二次全文。
+  - Setext 标题、普通段落行、列表项正文、引用正文和空行遵守同一规则。
+  - 替换首次选区后应保留标题、列表、引用和代码块结构。
+- 用户反复调整过的代码块设计属于产品契约：块感、代码字体、内容内缩、上下留白、quote 边界、右下角语言控件、候选 `bash`、任意大小写/未知语言保留、ArrowDown 进入和退出。
+- Markdown marker 的身份也属于设计：`-`、`*`、`+` 不应被新 CSS 全部强制显示成小圆点。Rich 可以隐藏语法，但不能在没有产品依据时改变用户选择的 marker。
+- 用户重视高效、精致、Obsidian-like 的工作台，但优先级始终是：数据安全和编辑正确性 > 流畅度 > 功能完整 > UI 美化。
+- 用户不接受“只修截图中的一个点”。当截图暴露状态机或架构问题时，应主动检查同类路径：selection、undo、方向键、语言控件、大纲、保存、切文件和大文档性能。
+- 用户允许并欢迎技术反驳，但反驳必须给出证据、复现、替代方案和利弊；不能用库默认行为或“标准 Markdown 就这样”否定已经确认的产品设计。
+- 用户不希望 AI 删除他已有的特殊设定代码，也不希望为了代码看起来更漂亮而整体重写。应先找稳定基线，再做最小、可回滚、可验证的结构改进。
+- 用户对同一问题反复回归非常敏感。每次恢复过的行为都应进入测试、memory 或 skill，不能只留在对话记忆里。
+
+### 从本次错误里学到的最佳实践
+
+- “单编辑器”不能只理解成共享一个 `EditorState`。真正完成条件是：内容、selection、history、语义选择、派生 UI 和保存都围绕同一个即时 state 工作。
+- 不要把 React `useDeferredValue(markdown)` 产生的 source offset 直接发给 CodeMirror。语言从空值改为 `bash` 会立刻增加 4 字符，而 deferred outline 仍是旧坐标；用户同一事件周期点击标题时会选中 closing fence 和半截标题。
+- 正确的大纲协议是“传标题身份，不传旧坐标”：
+  - UI 传 level、text、同名 occurrence 和 fallback index。
+  - CodeMirror 在自己的当前 `view.state.doc` 中重新解析并得到 start/end。
+  - 重复标题、语言长度变化和 React 延迟更新都不再依赖旧 offset。
+- parser、outline 和 widget 不能各写一套 fence/container 规则。应把 opening/closing fence、marker length、list/quote prefix 和 pending fence 语义收敛到共享实现。
+- 未闭合的 typed fence 是编辑中的 pending 结构，不应把后续全文和大纲吞掉；只有找到合法 matching close 后，才把中间范围视为完整代码块。
+- widget 不能长期相信构造时的 block 坐标。语言提交前要用 opener identity 在当前 state 中重新定位 code block，再执行事务。
+- widget 输入应作为正常 history 事务提交，并防止 Enter 后 DOM 重建触发 blur 二次 dispatch。
+- 语义选择应由纯函数计算边界，组件只负责 dispatch 和空范围的第二阶段状态。这样标题、列表、引用和代码块不需要各自在 keydown 中堆条件。
+- 修改前先写一个能稳定失败的 Playwright 复现脚本。本轮脚本一次性证明了三件事：标题首次直接全文、marker 被强制为 `•`、语言提交后大纲使用旧 offset。修改后用同一脚本验证输出反转，比人工“看起来好了”可靠。
+- 真实视觉要截图检查。DOM 结构正确不等于设计正确；本轮第一次恢复 quote border 后，背景仍从顶层起点铺开，视觉检查才发现容器边界和背景不一致。
+- CodeMirror 可编辑行不要使用 margin 做层级和间距。使用参与测量的 padding，以及不遮挡内容的伪元素表达 quote 背景/边界。
+- 长文档 undo 的 UI 测试若把目标放在文档绝对 EOF，浏览器可能因达到最大 `scrollTop` 而无法把光标几何居中；严格验证居中时应在目标后保留足够内容，EOF 场景则验证光标已回到可见区域且没有贴在顶部，避免把滚动边界误判成产品回归。
+- 先在隔离 worktree 恢复是正确的，但验证通过不等于主工作区已经修好。本轮 Windows 仍报 `hiddenPrefixText`，根因就是候选没有回迁。结束前必须在用户实际工作区重新跑 typecheck/test/build。
+- 工作区有大量 WIP 时，正确回迁方式是：先备份将触碰文件；完整替换只属于实验引擎自身的未跟踪文件；App/CSS/tests 按 hunk 合并；禁止 reset/restore 覆盖用户工作。
+- 测试编译使用 Node ESM 直接运行 `.test-dist`。新增运行时模块的相对 import 必须保留 `.js` 后缀；不要为一个抽象顺手升级 tsconfig、Node target 或测试体系。
+- 不要把“优化整个代码”理解成全仓重构。应找出导致用户问题的重复真相并合并：本轮只收敛了 selection、heading/fence identity、language transaction 和 container presentation。
+- 验证矩阵至少需要四层：纯函数单测、生产 build/typecheck、Playwright 真实操作、真实长文档和截图。Windows release 仍是最终平台验证，Linux/Vite 不能替代。
+
+### 本项目当前关键约束和坑
+
+- 正式应用是 `apps/serein-desktop/`；旧原型和 archive 默认禁止修改。
+- 当前 Git HEAD 是 `b6fe725`，但用户认可的稳定行为参考是 `93590e3`。代码基线和行为基线不同，不能直接把整个仓库 checkout 到旧 commit。
+- 工作区有大量既有修改和未跟踪文件。不要使用 `git reset --hard`、`git checkout --`、批量 restore、`git add .`。
+- text-buffer 仍是实验路径；默认 Milkdown fallback 必须保留，直到 Windows release、性能和完整能力基线都通过。
+- `MarkdownTextBufferEditor.tsx`、`textBufferMarkdown.ts` 及部分测试仍是未跟踪文件，提交前必须确认纳入范围。
+- CodeMirror decoration 必须全局排序；隐藏 fence 需要 atomic ranges；普通编辑事务不能改隐藏 opening/closing fence。
+- ViewPlugin 不能做跨行 replace decoration；当前版本也不允许随意从 plugin 提供 block decoration。不要恢复已经失败的 block widget 方案。
+- `.cm-line`、heading line、code-language widget 上的 CSS margin 会破坏点击、selection 和上下键坐标。
+- text-buffer 当前仍有全文 `doc.toString()`、全量 line/link/table 分析路径；大文档和换文件性能风险未根治。
+- 代码块回归必须覆盖 root、list、blockquote、list+quote、EOF、真空块、长 fence 包短 fence、代码内容输入 fence。
+- 大纲回归必须覆盖：语言长度变化后立即点击、同名标题、Setext、nested/long fence、pending fence。
+- 真实 fixtures 优先于玩具样例：
+  - `tests/fixtures/rich-edit/00_raw.txt`
+  - `tests/fixtures/rich-edit/nested_list_quote_code.md`
+  - `tests/fixtures/rich-edit/Project_03_vibe-keyboard.txt`
+  - 用户真实 NanoUPS 文档
+- `docs/images/v1-v9` 是行为和视觉证据，不要删除或把当前截图当成目标设计；需结合 `93590e3` 和用户口述判断。
+- preflight 脚本仍指向旧 `/home/rv_nano/...`，只能当流程提示，不能据此判断当前仓库缺失。
+- Windows 用户已经安装过上一轮包，但每轮新修改后必须重新生成/安装 release 才能验证；不要把旧安装包结果当成当前源码结果。
+- 不自动 commit、tag 或 push。用户明确要求前只维护可审查 diff 和验证记录。
+
+### 下次一次性达到当前效果的推荐提示词
+
+```text
+请接手 /home/slam/Project/Serein 的 Serein 单编辑器稳定化，并直接完成调查、实现和验证，不要停在方案阶段；只有会覆盖用户 WIP、改变公开格式或需要破坏性 Git 操作时才停下确认。
+
+开工前必须：
+1. 阅读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md、docs/runbooks/KNOWN_FAILURES.md。
+2. 使用 docs/runbooks/skills/serein-text-buffer-stability/SKILL.md。
+3. 运行 python3 /home/slam/Sipeed/T_tools/agent_preflight.py --project typora；知道它的旧路径映射可能失效，不能据此误判仓库。
+4. 检查 git status；禁止 reset/checkout/restore 覆盖现有 WIP。
+5. 代码基线以当前 main/b6fe725 为准，行为对照 93590e3；需要大范围比较时先建隔离 worktree。
+
+按“目标→状态→误差→控制动作→反馈→修正→验证→沉淀”闭环推进。先用一条简短状态汇报说明目标、现状、误差、最小控制变量和验证方法，然后直接执行。
+
+产品底层逻辑：
+- 一份 Markdown、一个 CodeMirror EditorState、一套 history。Rich/Source 只能改变 decoration，不能产生第二编辑器或第二份真相。
+- 用户已有交互高于库默认行为，不得删除 Milkdown fallback 或用户特殊设定。
+- Ctrl+A 统一为“当前语义单元→全文”：代码块选内容且不含 fence/container；标题选可见标题内容并保留 # 结构；段落、列表、引用、Setext、空行同理。
+- 正文、语言控件、大纲、保存必须读取同一即时 state。大纲禁止传 deferred Markdown 的旧 offset；传标题身份，由 CodeMirror 当前文档解析。
+- 语言控件提交前重定位当前 code block；保留大小写和未知语言，候选含 bash，ArrowDown 进入/退出稳定。
+- Markdown marker 保留原身份：- 是 -，* 是 *，+ 是 +，不要统一改成圆点。
+- list/quote/code 必须参考 93590e3 的缩进、quote 边界、代码字体、块背景、留白和右下角语言栏；禁止用 cm-line margin 造视觉。
+- 代码块内输入 ``` 是代码内容，不能吞后续标题；必要时升级外层 fence。
+- undo/redo 的 history 管内容和 selection，滚动层只管视口。
+
+实现要求：
+- 先写或运行能稳定失败的纯函数/Playwright 复现，再改代码。
+- 消除重复状态源和重复 parser 规则，不要继续堆 if patch；但也不要扩大成全仓重构。
+- 保护 Vault IO、保存、链接、表格、图片和默认 Milkdown 路径。
+- 真实测试至少覆盖 00_raw.txt、nested_list_quote_code.md、Project_03_vibe-keyboard.txt、NanoUPS 和 docs/images/v7-v9。
+
+完成前必须运行：
+cd apps/serein-desktop
+npm run test
+npm run build
+cd ../..
+git -c safe.directory=/home/slam/Project/Serein diff --check
+
+UI 必须用干净 production preview/Playwright 验证：
+1. 标题第一次 Ctrl+A 只选标题，第二次全文。
+2. 代码块第一次 Ctrl+A 只选代码内容，替换/undo 后容器仍合法。
+3. 输入或修改 bash 后同一事件周期点击后方大纲，必须准确跳转。
+4. -/*/+ 显示原 marker；list/quote/code 的边界和背景与旧设计一致。
+5. EOF/空行 Enter/ArrowDown、语言控件、Milkdown fallback 无回归。
+
+最终回复列出：修改文件、行为结果、执行过的命令、Playwright 证据、未验证风险。不要 commit/push。Windows release 未实测必须明确说明，并给出 .\scripts\build_windows.ps1 -SkipInstall。
+```
+
+### 本轮 skill 沉淀
+
+- 继续使用并增强现有 skill：
+  - `docs/runbooks/skills/serein-text-buffer-stability/SKILL.md`
+- 不新建重复的“single-editor”skill，因为选择、大纲、语言控件、代码块退出和性能本质上属于同一个 text-buffer 稳定性闭环。
+- skill 新增重点：
+  - 当前代码基线与稳定行为基线的区分。
+  - 隔离 worktree 恢复与安全回迁。
+  - 所有内容的两级语义选择。
+  - 标题 identity/current-state 大纲协议。
+  - 原始 list marker 和 list/quote/code 视觉契约。
+  - 修改前失败复现、修改后同脚本反证。
+  - Node ESM `.js` import、CodeMirror decoration/layout 等工程坑。
+- skill 的未来评估用例保存到：
+  - `docs/runbooks/skills/serein-text-buffer-stability/evals/evals.json`
+
+## 2026-07-13 v13-v15 大纲滚动、pending fence、紧凑快捷键合作沉淀
+
+### 用户偏好（本轮再次确认）
+
+- 用户要求先真正复现，再修复。没有复现用户描述的现象时，不应继续用静态检查或“理论上应该”宣称修好。
+- 用户接受技术反驳，但反驳必须有截图、视频时间轴、运行日志、DOM/selection/scroll 数据或历史代码证据；不能用库默认行为代替产品判断。
+- 用户反复调过的体验属于产品资产：大纲连续点击、Rich/Source 行号、代码块视觉与退出、语言控件、标题间距、caret、快捷键密度都不能被新架构顺手替换。
+- UI 偏好是紧凑、克制、桌面工具感。快捷键一项应保持单行，不接受“命令、按键、启用、默认”拆成四行占满页面。
+- 编辑输入必须稳定：用户键入的字符不能视觉消失，光标所在行不能突然变 0 高度，输入框不能因 decoration 重解释而弹跳。
+- 用户明确要求测试隔离：后续不得读取、复制或修改其真实文档；应创建完全虚构的 Markdown 测试文件。当前样本位于 `out/outline-repro/`。
+- 用户没有授权时，不要操作 Windows 进程或启动其桌面实例。即使只关闭 AI 自己启动的测试进程，也要先确认权限边界。
+- 用户希望长任务结束时主动清理无效代码，并把失败方案写清楚；不能只留下最终修法，让下一轮再次走错路。
+- 用户希望 `HANDOFF.md` 真正做到 3 天后 30 秒接上，因此交接文件应短、当前、可执行，不应继续累积成历史长文。
+
+### 从错误里学到的最佳实践
+
+#### 1. 先证明现象，复现不了就没有资格宣称修复
+
+- v15 视频明确显示：点击 `Serein` 后正文仍停在 `Typora`，连续点击时旧章节持续可见，之后某次点击又偶然成功。
+- 这排除了“用户点错”和“只在重复标题发生”的解释；唯一标题也会失败，说明是 viewport 提交问题。
+- Linux Chromium 通过不能替代 Windows WebView2。前一轮只调整 focus 顺序，本地通过但用户仍失败，说明测试只覆盖了一个假设。
+
+#### 2. 调试滚动先找真正的滚动所有者
+
+- 当前 CSS 是：`.cm-scroller { overflow: visible; }`，`.editor-surface { overflow: auto; }`。
+- 日志曾出现 `cm-scroller.scrollTop = 0`、DOM top 为负值。这已经证明 CodeMirror scroller 没有滚，实际滚动发生在外层；当时没有及时抓住这条证据，是判断错误。
+- selection 属于 CodeMirror，但 viewport 属于 `.editor-surface`。使用 `EditorView.scrollIntoView` 跨层滚动，会依赖异步测量和浏览器祖先滚动传播，连续点击时容易丢失或被覆盖。
+- 正确边界：CodeMirror transaction 只提交 selection；通过 `lineBlockAt()`、`documentTop` 和 surface rect 计算位置，直接设置 `.editor-surface.scrollTop`。
+- 连续命令使用同一个 measure key，只保留最后一次滚动，避免旧目标覆盖新目标。
+- 验证不能只看标题是否最终可见，还要记录真实 scroll owner 的 `scrollTop`。本轮正确证据是 `.editor-surface.scrollTop` 随目标变化，而 `.cm-scroller.scrollTop` 始终为 0。
+
+#### 3. parser 结构不等于用户正在表达的编辑意图
+
+- 输入第三个反引号后，源码没有丢；是 pending fence 被 Rich decoration 隐藏并压成 0 高度，造成视觉消失和输入框弹跳。
+- 如果文档后方已有 closing fence，新输入的裸 opener 会按 Markdown 规则与远端 closer 配对，导致中间标题被当成代码。
+- 对已保存文档，parser 结构是事实；对用户刚键入的 ` ``` `，它首先是未确认编辑状态，不能立刻重组后续文档。
+- 正确状态机：
+  - 第三个反引号后建立持久 `typedPendingFenceLines` 状态。
+  - pending marker 保持可见、保持普通行高，不参与远端 closer 配对。
+  - 光标离开后 pending 状态仍保留，不能只用“当前 selection 在 opener 行”临时兜底。
+  - 按 Enter 才在当前位置生成 local opening/blank/closing，并把光标放到空代码行。
+- 同一行普通 InlineCode 与多行深缩进 fence 必须区分。不能简单禁止所有 Lezer `InlineCode` 进入兼容路径；只排除 opener/closer 在同一行的普通 inline code，多行兼容仍保留。
+
+#### 4. 长期 HMR 进程可能制造假失败
+
+- 旧 5182 Vite 进程没有加载最新 text-buffer 模块，导致 pending fence 修复看起来完全无效。
+- 判断依据：连最基础的“pending 行不再 hidden”都没有变化，说明不是状态机边界错，而是运行代码不是当前源码。
+- 编辑器核心回归必须使用干净端口冷启动；不要在长期 HMR 实例上反复判断成败。
+- 如果代码、类型检查和运行 DOM 完全矛盾，先验证 bundle/module 是否新鲜，再继续改代码。
+
+#### 5. 清理必须基于反证，不要凭感觉删
+
+- `typedPendingFenceLines` 经过“光标移出 opener”验证：pending 行仍为 26px，标题仍为 H1，后方代码块独立，因此它是必要状态，不能删。
+- 因旧 HMR 假失败临时加入的“selection 位于 fence 行就强制 pending”兜底，在持久字段有效后属于重复真相，还可能误判合法 fence，已删除。
+- `.editor-surface` 缺失时回退旧 `EditorView.scrollIntoView` 的分支在正式组件结构中不会使用，还会重新引入错误滚动所有权，已删除。
+- 删除后必须用同一 fence/persistence/outline 脚本冷启动重跑；本轮全部通过后才确认清理安全。
+
+#### 6. 响应式 UI 要验证真实窗口宽度
+
+- 快捷键四行不是 React 内容问题，而是 `<1180px` media query 把 `.shortcut-row` 强制设成 `grid-template-columns: 1fr`。
+- 正确做法是保持四个功能单元同一行，命令元数据同行显示并省略，不让窄窗口退化为四行卡片。
+- 本轮在 1100px 视口验证：前 8 行高度均为 40px，四单元纵向中心差 0px。
+
+### 本项目关键约束和坑
+
+- 正式应用是 `apps/serein-desktop/`；默认 Milkdown fallback 仍必须保留，text-buffer 不能因本轮局部通过就提升为默认。
+- 当前 HEAD 仍是 `b6fe725`，工作区有大量未提交和未跟踪 WIP。禁止 reset/checkout/restore 覆盖用户改动，禁止 `git add .`。
+- `MarkdownTextBufferEditor.tsx`、`textBufferMarkdown.ts` 等核心 text-buffer 文件仍可能未跟踪；提交前必须逐文件审查。
+- 大纲协议仍是 heading identity：level + text + occurrence + fallback index；不能恢复 deferred Markdown offset。
+- 大纲的 scroll owner 是 `.editor-surface`，不是 `.cm-scroller`。后续布局修改若改变 overflow，必须同步重审滚动协议。
+- Source gutter 依赖稳定 decoration StateField；不要切模式时创建新的 field，也不要重新加无目标的 requestMeasure/RAF 补偿。
+- pending fence 是编辑状态，不应写成通用 Markdown parser 永久语义。保存/重新打开未闭合 Markdown 时仍需按源码事实处理。
+- CodeMirror 可编辑行禁止使用 margin 制造 Typora 间距；margin 会破坏 selection/坐标映射。
+- UI 验证要用干净 Vite server；Windows release 仍是最终平台，Linux Chromium 只证明同构逻辑。
+- 只使用虚构/仓库内测试文件。除非用户之后明确授权，不再使用 `Project_00_Serein.txt`、用户 Vault 或其他私人文档做自动化。
+- 不自动操作 Windows 进程、安装包、commit、tag 或 push。
+
+### 下次想一次性达到本轮效果的推荐提示词
+
+```text
+请接手 /home/slam/Project/Serein 的 Serein text-buffer 编辑器稳定化。先读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md、docs/runbooks/KNOWN_FAILURES.md，并使用 docs/runbooks/skills/serein-text-buffer-stability/SKILL.md；运行 typora preflight，但不要被旧 /home/rv_nano 路径误导。
+
+目标：修复大纲连续点击、Rich/Source gutter、正在键入的 Markdown fence 和紧凑设置 UI。先复现再修改，不能用 typecheck 或 Linux Chromium 通过替代 Windows 用户现象。
+
+硬约束：
+1. 只使用你自己创建的完全虚构 Markdown 文件，不读取、复制或修改我的真实文档/Vault。
+2. 不操作 Windows 进程、不启动桌面实例，除非我单独授权。
+3. 工作区有大量 WIP，禁止 reset/checkout/restore，禁止 git add .，不要删除 Milkdown fallback。
+4. 改动必须最小；无效方案要删除并记录原因，不要继续堆延时、RAF、requestMeasure 或 offset 补偿。
+
+排查要求：
+1. 大纲跳转同时记录 selection、最终可见标题、真正滚动容器及其 scrollTop。先检查谁拥有 overflow；如果 cm-scroller 是 overflow: visible、editor-surface 是 overflow: auto，就不能只调用 EditorView.scrollIntoView。
+2. 连续点击必须覆盖不同 H1 下的同名 H2/H3，至少 Rich/Source 各 12 次定点和 60 次快速点击；最终目标必须等于最后一次点击。
+3. fence 必须逐字符测 1/2/3 个反引号；覆盖 EOF、标题上方、后方已有 bash fence、光标移出 opener、Enter 本地闭合。第三个反引号不能消失或让行高变 0，标题不能被远端 closer 吞掉。
+4. 快捷键设置在 1100px 窗口下保持单行，测行高和四个单元中心，不只看 CSS 源码。
+5. UI 回归必须使用干净 Vite 端口冷启动；运行 DOM 与源码矛盾时先排除旧 HMR 模块。
+
+完成前运行 npm run typecheck、npm run test、npm run build、git diff --check；重跑同一失败脚本证明结果反转。最后更新 HANDOFF、PROJECT_MEMORY、KNOWN_FAILURES 和现有 text-buffer skill，列出 Windows release 未验证项。不要 commit/push。
+```
+
+### 本轮 skill 沉淀方向
+
+- 继续增强现有 `docs/runbooks/skills/serein-text-buffer-stability/SKILL.md`，不创建重复 skill。
+- 新增触发范围：v13-v15、大纲看似跳动但停在旧标题、Source gutter 点击后才恢复、第三个反引号消失、pending fence 吞标题、快捷键四行、长期 HMR 假失败。
+- 新增核心流程：真实 scroll owner 诊断、虚构文件优先、pending fence 编辑状态机、冷启动反证、删除无效补偿。
+- 新增 eval：大纲外层滚动所有权；pending fence + 紧凑快捷键联合回归。
