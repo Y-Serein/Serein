@@ -60,7 +60,34 @@ fn platform_read_text() -> Result<String, String> {
 }
 
 #[cfg(target_os = "windows")]
+const CLIPBOARD_WRITE_ATTEMPTS: usize = 4;
+
+#[cfg(target_os = "windows")]
+const CLIPBOARD_WRITE_RETRY_DELAY_MS: u64 = 8;
+
+#[cfg(target_os = "windows")]
 fn platform_write_text(text: &str) -> Result<(), String> {
+    use std::{thread::sleep, time::Duration};
+
+    let mut last_error = String::from("failed to write desktop clipboard");
+    for attempt in 0..CLIPBOARD_WRITE_ATTEMPTS {
+        if attempt > 0 {
+            sleep(Duration::from_millis(CLIPBOARD_WRITE_RETRY_DELAY_MS));
+        }
+
+        match write_windows_text_once(text) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+    }
+
+    Err(format!(
+        "{last_error} after {CLIPBOARD_WRITE_ATTEMPTS} attempts"
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn write_windows_text_once(text: &str) -> Result<(), String> {
     use windows_sys::Win32::{
         Foundation::{GetLastError, GlobalFree},
         System::{
@@ -98,19 +125,22 @@ fn platform_write_text(text: &str) -> Result<(), String> {
         GlobalUnlock(memory);
 
         if OpenClipboard(std::ptr::null_mut()) == 0 {
+            let error = GetLastError();
             GlobalFree(memory);
-            return Err(format!("failed to open clipboard: {}", GetLastError()));
+            return Err(format!("failed to open clipboard: {error}"));
         }
         let _guard = ClipboardGuard;
 
         if EmptyClipboard() == 0 {
+            let error = GetLastError();
             GlobalFree(memory);
-            return Err(format!("failed to empty clipboard: {}", GetLastError()));
+            return Err(format!("failed to empty clipboard: {error}"));
         }
 
         if SetClipboardData(CF_UNICODETEXT, memory).is_null() {
+            let error = GetLastError();
             GlobalFree(memory);
-            return Err(format!("failed to set clipboard data: {}", GetLastError()));
+            return Err(format!("failed to set clipboard data: {error}"));
         }
     }
 

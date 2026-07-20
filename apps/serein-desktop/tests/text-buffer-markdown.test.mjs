@@ -6,18 +6,31 @@ import { syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import {
   analyzeTextBufferMarkdown,
+  deleteTextBufferTableColumn,
+  deleteTextBufferTableRow,
+  insertTextBufferTableColumn,
+  insertTextBufferTableRow,
+  isTextBufferCodeBlockBlank,
   isTextBufferCodeBlockEmpty,
   isTextBufferCodeBlockPhysicalLastLine,
+  moveTextBufferTableColumn,
+  moveTextBufferTableRow,
+  nextTextBufferTableAlignment,
   normalizeTextBufferCodeBlockSelectionText,
+  normalizeTextBufferTable,
   scanTextBufferInlineLinks,
   scanTextBufferInlineLinksFromSyntaxTree,
   scanTextBufferTables,
   scanTextBufferTablesFromSyntaxTree,
+  serializeTextBufferTable,
+  setTextBufferTableAlignment,
   shouldExitTextBufferCodeBlockOnEnter,
   stripTextBufferContainerPrefix,
   textBufferCodeBlockContentRange,
   textBufferCodeBlockReplacementText,
+  textBufferSafeCutRanges,
   textBufferSmartSelectAllRange,
+  textBufferVisibleClipboardRanges,
 } from "../.test-dist/editor/textBufferMarkdown.js";
 
 function analyze(markdown, options) {
@@ -74,6 +87,18 @@ test("does not classify empty inline backticks as a fenced code block", () => {
   const analysis = analyze("``");
   assert.equal(analysis.codeBlocks.length, 0);
   assert.equal(analysis.lines[0].kind, "paragraph");
+});
+
+test("distinguishes an editable blank code line from code content", () => {
+  const markdown = "```bash\n\n```";
+  const block = analyze(markdown).codeBlocks[0];
+  assert.ok(block);
+  assert.equal(isTextBufferCodeBlockEmpty(block), false);
+  assert.equal(isTextBufferCodeBlockBlank(markdown, block), true);
+
+  const contentMarkdown = "```bash\necho fictional\n```";
+  const contentBlock = analyze(contentMarkdown).codeBlocks[0];
+  assert.equal(isTextBufferCodeBlockBlank(contentMarkdown, contentBlock), false);
 });
 
 test("keeps a newly typed fence pending instead of pairing with a later code block closer", () => {
@@ -225,6 +250,40 @@ test("preserves each unordered list marker identity", () => {
   const listLines = lines.filter((line) => line.kind === "list");
 
   assert.deepEqual(listLines.map((line) => line.listMarker), ["-", "*", "+"]);
+});
+
+test("builds continuous rich presentation metadata for quote and list continuations", () => {
+  const markdown = [
+    "> first quote",
+    "> second quote",
+    "lazy quote continuation",
+    "",
+    "- first item",
+    "  lazy list continuation",
+    "  - nested item",
+  ].join("\n");
+  const { lines } = analyze(markdown);
+
+  assert.deepEqual(lines.slice(0, 3).map((line) => ({
+    quoteDepth: line.richQuoteDepth,
+    quoteStart: line.richQuoteStart,
+    quoteEnd: line.richQuoteEnd,
+  })), [
+    { quoteDepth: 1, quoteStart: true, quoteEnd: false },
+    { quoteDepth: 1, quoteStart: false, quoteEnd: false },
+    { quoteDepth: 1, quoteStart: false, quoteEnd: true },
+  ]);
+  assert.equal(lines[4].richListDepth, 1);
+  assert.equal(lines[4].richListContinuation, false);
+  assert.equal(lines[5].richListDepth, 1);
+  assert.equal(lines[5].richListContinuation, true);
+  assert.equal(lines[6].richListDepth, 2);
+  assert.equal(lines[6].richListContinuation, false);
+
+  const quoteListLines = analyze(["> - quoted item", ">   quoted continuation"].join("\n")).lines;
+  assert.equal(quoteListLines[0].richListDepth, 1);
+  assert.equal(quoteListLines[1].richListDepth, 1);
+  assert.equal(quoteListLines[1].richListContinuation, true);
 });
 
 test("lets the markdown syntax tree own lazy list continuation semantics", () => {
@@ -704,6 +763,72 @@ test("keeps nested code containers valid when replacing the smart-select range",
   assert.equal(nextAnalysis.lines.at(-1)?.text, "after");
 });
 
+test("removes unmatched hidden fences from partial Rich clipboard selections", () => {
+  const markdown = [
+    "before",
+    "```plain",
+    "alpha",
+    "beta",
+    "```",
+    "",
+    "after",
+  ].join("\n");
+  const analysis = analyze(markdown);
+  const selection = {
+    from: markdown.indexOf("beta"),
+    to: markdown.indexOf("after") + 3,
+  };
+  const ranges = textBufferVisibleClipboardRanges(markdown, analysis, selection);
+  assert.equal(
+    ranges.map((range) => markdown.slice(range.from, range.to)).join(""),
+    "beta\n\naft",
+  );
+  assert.equal(ranges.length, 2);
+});
+
+test("keeps matched fences when the complete code block is selected", () => {
+  const markdown = [
+    "before",
+    "```plain",
+    "alpha",
+    "beta",
+    "```",
+    "after",
+  ].join("\n");
+  const analysis = analyze(markdown);
+  const block = analysis.codeBlocks[0];
+  const ranges = textBufferVisibleClipboardRanges(markdown, analysis, {
+    from: block.from,
+    to: block.to,
+  });
+  assert.deepEqual(ranges, [{ from: block.from, to: block.to }]);
+  assert.equal(markdown.slice(ranges[0].from, ranges[0].to), "```plain\nalpha\nbeta\n```");
+});
+
+test("keeps one structural newline when cutting through the hidden closing fence", () => {
+  const markdown = [
+    "```plain",
+    "alpha",
+    "beta",
+    "```",
+    "",
+    "after",
+  ].join("\n");
+  const analysis = analyze(markdown);
+  const selection = {
+    from: markdown.indexOf("beta"),
+    to: markdown.indexOf("after"),
+  };
+  const visibleRanges = textBufferVisibleClipboardRanges(markdown, analysis, selection);
+  const cutRanges = textBufferSafeCutRanges(markdown, analysis, visibleRanges);
+  assert.equal(visibleRanges[0].to, analysis.codeBlocks[0].closerFrom);
+  assert.equal(cutRanges[0].to, analysis.codeBlocks[0].closerFrom - 1);
+  const nextMarkdown = cutRanges.reduceRight((value, range) => (
+    `${value.slice(0, range.from)}${value.slice(range.to)}`
+  ), markdown);
+  assert.match(nextMarkdown, /alpha\n\n```/);
+});
+
 test("distinguishes a truly empty adjacent-fence block from a blank content line", () => {
   const adjacent = analyze("```bash\n```");
   const adjacentBlock = adjacent.codeBlocks[0];
@@ -807,4 +932,45 @@ test("scans links and pipe tables across the full deterministic document", () =>
   assert.equal(tables.length, 1);
   assert.deepEqual(tables[0].rows, [["A", "B"], ["1", "2"]]);
   assert.deepEqual(tables[0].alignments, ["default", "right"]);
+});
+
+test("edits pipe table structure without creating a second source of truth", () => {
+  const initial = normalizeTextBufferTable({
+    rows: [["Name", "Value"], ["alpha", "1"], ["beta", "2"]],
+    alignments: ["left", "right"],
+  });
+
+  const insertedRow = insertTextBufferTableRow(initial, 1);
+  assert.deepEqual(insertedRow.rows, [
+    ["Name", "Value"],
+    ["alpha", "1"],
+    ["", ""],
+    ["beta", "2"],
+  ]);
+  assert.deepEqual(deleteTextBufferTableRow(insertedRow, 2).rows, initial.rows);
+  assert.deepEqual(moveTextBufferTableRow(initial, 2, -1).rows.slice(1), [["beta", "2"], ["alpha", "1"]]);
+
+  const insertedColumn = insertTextBufferTableColumn(initial, 0);
+  assert.deepEqual(insertedColumn.rows[0], ["Name", "", "Value"]);
+  assert.deepEqual(insertedColumn.alignments, ["left", "default", "right"]);
+  assert.deepEqual(deleteTextBufferTableColumn(insertedColumn, 1), initial);
+  assert.deepEqual(moveTextBufferTableColumn(initial, 1, -1).rows[0], ["Value", "Name"]);
+  assert.deepEqual(moveTextBufferTableColumn(initial, 1, -1).alignments, ["right", "left"]);
+});
+
+test("cycles and serializes pipe table alignment while preserving escaped pipes", () => {
+  assert.equal(nextTextBufferTableAlignment("default"), "left");
+  assert.equal(nextTextBufferTableAlignment("left"), "center");
+  assert.equal(nextTextBufferTableAlignment("center"), "right");
+  assert.equal(nextTextBufferTableAlignment("right"), "default");
+
+  const aligned = setTextBufferTableAlignment({
+    rows: [["A|B", "C"], ["1", "2"]],
+    alignments: ["default", "default"],
+  }, 1, "center");
+  assert.equal(serializeTextBufferTable(aligned), [
+    "| A\\|B | C |",
+    "| --- | :---: |",
+    "| 1 | 2 |",
+  ].join("\n"));
 });

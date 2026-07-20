@@ -32,6 +32,13 @@ export type TextBufferLine = {
   codeBlockId?: number;
   fenceStatus?: "closed" | "pending";
   hiddenInRich?: boolean;
+  richQuoteDepth?: number;
+  richListDepth?: number;
+  richListKind?: "bullet" | "ordered";
+  richListMarker?: string;
+  richListContinuation?: boolean;
+  richQuoteStart?: boolean;
+  richQuoteEnd?: boolean;
   syntaxRanges: TextBufferRange[];
   richHiddenRanges: TextBufferRange[];
 };
@@ -98,6 +105,8 @@ export type TextBufferTableBlock = {
   alignments: TextBufferTableAlignment[];
 };
 
+export type TextBufferTableData = Pick<TextBufferTableBlock, "rows" | "alignments">;
+
 export type TextBufferInlineLink = {
   kind: "markdown" | "autolink";
   image: boolean;
@@ -154,6 +163,121 @@ function addSyntaxRange(line: TextBufferLine, from: number, to: number) {
 function addRichHiddenRange(line: TextBufferLine, from: number, to: number) {
   if (to <= from) return;
   line.richHiddenRanges.push({ from, to });
+}
+
+type TextBufferContainerPrefix = {
+  length: number;
+  quoteDepth: number;
+  listDepth: number;
+  listKind?: "bullet" | "ordered";
+  listMarker?: string;
+};
+
+function textBufferContainerPrefix(text: string): TextBufferContainerPrefix {
+  let cursor = 0;
+  let quoteDepth = 0;
+  let listDepth = 0;
+  let listKind: "bullet" | "ordered" | undefined;
+  let listMarker: string | undefined;
+
+  while (cursor < text.length) {
+    const source = text.slice(cursor);
+    const blockquote = source.match(/^( {0,3}>\s?)/);
+    if (blockquote) {
+      quoteDepth += 1;
+      cursor += blockquote[1].length;
+      continue;
+    }
+
+    const list = source.match(/^([ \t]*)([-*+]|\d+[.)])\s+/);
+    if (list) {
+      const indentation = list[1].replace(/\t/g, "  ").length;
+      listDepth = Math.max(listDepth + 1, Math.floor(indentation / 2) + 1);
+      listKind = /^\d/.test(list[2]) ? "ordered" : "bullet";
+      listMarker = list[2];
+      cursor += list[0].length;
+      continue;
+    }
+
+    break;
+  }
+
+  return { length: cursor, quoteDepth, listDepth, listKind, listMarker };
+}
+
+function replaceRichContainerPrefix(line: TextBufferLine, prefixLength: number) {
+  if (prefixLength <= 0) return;
+  const prefixTo = line.from + Math.min(prefixLength, line.text.length);
+  line.syntaxRanges = line.syntaxRanges.filter((range) => (
+    range.to <= line.from || range.from >= prefixTo
+  ));
+  line.richHiddenRanges = line.richHiddenRanges.filter((range) => (
+    range.to <= line.from || range.from >= prefixTo
+  ));
+  addSyntaxRange(line, line.from, prefixTo);
+  addRichHiddenRange(line, line.from, prefixTo);
+}
+
+function annotateRichContainerLines(lines: TextBufferLine[]) {
+  let previous: TextBufferLine | null = null;
+
+  lines.forEach((line) => {
+    if (line.kind === "code" || line.kind === "codeFence" || !line.text.trim()) {
+      previous = null;
+      return;
+    }
+
+    const prefix = textBufferContainerPrefix(line.text);
+    const hasExplicitQuote = line.kind === "blockquote";
+    const hasExplicitList = line.kind === "list"
+      || (line.kind === "blockquote" && prefix.listDepth > 0);
+    const isHeading = line.kind === "heading";
+
+    if (hasExplicitQuote || hasExplicitList) {
+      const inheritedList = prefix.listDepth === 0
+        && prefix.quoteDepth > 0
+        && previous?.richQuoteDepth === prefix.quoteDepth
+        && Boolean(previous.richListDepth);
+      line.richQuoteDepth = prefix.quoteDepth || (line.kind === "blockquote" ? 1 : 0);
+      line.richListDepth = prefix.listDepth || (line.kind === "list" ? 1 : 0)
+        || (inheritedList ? previous?.richListDepth : 0);
+      line.richListKind = prefix.listKind ?? line.listKind ?? (inheritedList ? previous?.richListKind : undefined);
+      line.richListMarker = prefix.listMarker ?? line.listMarker;
+      line.richListContinuation = inheritedList;
+      if (prefix.length > 0) {
+        replaceRichContainerPrefix(line, prefix.length);
+      }
+      previous = line;
+      return;
+    }
+
+    if (!isHeading && previous?.richQuoteDepth) {
+      line.richQuoteDepth = previous.richQuoteDepth;
+      line.richListDepth = previous.richListDepth;
+      line.richListKind = previous.richListKind;
+      line.richListContinuation = Boolean(previous.richListDepth);
+      previous = line;
+      return;
+    }
+
+    if (!isHeading && previous?.richListDepth) {
+      line.richListDepth = previous.richListDepth;
+      line.richListKind = previous.richListKind;
+      line.richListContinuation = true;
+      previous = line;
+      return;
+    }
+
+    previous = null;
+  });
+
+  lines.forEach((line, index) => {
+    if (!line.richQuoteDepth) return;
+    const previousLine = lines[index - 1];
+    const nextLine = lines[index + 1];
+    line.richQuoteStart = !previousLine || previousLine.richQuoteDepth !== line.richQuoteDepth;
+    line.richQuoteEnd = !nextLine || nextLine.richQuoteDepth !== line.richQuoteDepth;
+  });
 }
 
 function syntaxNodeFromCursor(cursor: TextBufferSyntaxCursor): TextBufferSyntaxNode {
@@ -508,6 +632,133 @@ export function scanTextBufferTables(
   }
 
   return tables;
+}
+
+export function textBufferTableColumnCount(table: TextBufferTableData) {
+  return Math.max(
+    2,
+    table.alignments.length,
+    ...table.rows.map((row) => row.length),
+  );
+}
+
+export function normalizeTextBufferTable(table: TextBufferTableData): TextBufferTableData {
+  const columnCount = textBufferTableColumnCount(table);
+  const sourceRows = table.rows.length ? table.rows : [[]];
+  return {
+    rows: sourceRows.map((row) => Array.from(
+      { length: columnCount },
+      (_, index) => row[index] ?? "",
+    )),
+    alignments: Array.from(
+      { length: columnCount },
+      (_, index) => table.alignments[index] ?? "default",
+    ),
+  };
+}
+
+export function serializeTextBufferTable(table: TextBufferTableData) {
+  const normalized = normalizeTextBufferTable(table);
+  const escapedRows = normalized.rows.map((row) => row.map((cell) => cell.replace(/\|/g, "\\|")));
+  const header = escapedRows[0];
+  const separator = normalized.alignments.map((alignment) => {
+    if (alignment === "center") return ":---:";
+    if (alignment === "right") return "---:";
+    if (alignment === "left") return ":---";
+    return "---";
+  });
+  return [header, separator, ...escapedRows.slice(1)]
+    .map((row) => `| ${row.join(" | ")} |`)
+    .join("\n");
+}
+
+export function insertTextBufferTableRow(table: TextBufferTableData, afterRow: number) {
+  const normalized = normalizeTextBufferTable(table);
+  const insertionIndex = Math.max(1, Math.min(afterRow + 1, normalized.rows.length));
+  const rows = normalized.rows.map((row) => [...row]);
+  rows.splice(insertionIndex, 0, Array.from({ length: normalized.alignments.length }, () => ""));
+  return { rows, alignments: [...normalized.alignments] } satisfies TextBufferTableData;
+}
+
+export function deleteTextBufferTableRow(table: TextBufferTableData, rowIndex: number) {
+  const normalized = normalizeTextBufferTable(table);
+  if (rowIndex <= 0 || rowIndex >= normalized.rows.length || normalized.rows.length <= 2) return normalized;
+  return {
+    rows: normalized.rows.filter((_, index) => index !== rowIndex),
+    alignments: [...normalized.alignments],
+  } satisfies TextBufferTableData;
+}
+
+export function moveTextBufferTableRow(table: TextBufferTableData, rowIndex: number, delta: -1 | 1) {
+  const normalized = normalizeTextBufferTable(table);
+  const targetIndex = rowIndex + delta;
+  if (rowIndex <= 0 || rowIndex >= normalized.rows.length || targetIndex <= 0 || targetIndex >= normalized.rows.length) {
+    return normalized;
+  }
+  const rows = normalized.rows.map((row) => [...row]);
+  [rows[rowIndex], rows[targetIndex]] = [rows[targetIndex], rows[rowIndex]];
+  return { rows, alignments: [...normalized.alignments] } satisfies TextBufferTableData;
+}
+
+export function insertTextBufferTableColumn(table: TextBufferTableData, afterColumn: number) {
+  const normalized = normalizeTextBufferTable(table);
+  const insertionIndex = Math.max(0, Math.min(afterColumn + 1, normalized.alignments.length));
+  const rows = normalized.rows.map((row) => {
+    const nextRow = [...row];
+    nextRow.splice(insertionIndex, 0, "");
+    return nextRow;
+  });
+  const alignments = [...normalized.alignments];
+  alignments.splice(insertionIndex, 0, "default");
+  return { rows, alignments } satisfies TextBufferTableData;
+}
+
+export function deleteTextBufferTableColumn(table: TextBufferTableData, columnIndex: number) {
+  const normalized = normalizeTextBufferTable(table);
+  if (columnIndex < 0 || columnIndex >= normalized.alignments.length || normalized.alignments.length <= 2) return normalized;
+  return {
+    rows: normalized.rows.map((row) => row.filter((_, index) => index !== columnIndex)),
+    alignments: normalized.alignments.filter((_, index) => index !== columnIndex),
+  } satisfies TextBufferTableData;
+}
+
+export function moveTextBufferTableColumn(table: TextBufferTableData, columnIndex: number, delta: -1 | 1) {
+  const normalized = normalizeTextBufferTable(table);
+  const targetIndex = columnIndex + delta;
+  if (
+    columnIndex < 0
+    || columnIndex >= normalized.alignments.length
+    || targetIndex < 0
+    || targetIndex >= normalized.alignments.length
+  ) return normalized;
+
+  const rows = normalized.rows.map((row) => {
+    const nextRow = [...row];
+    [nextRow[columnIndex], nextRow[targetIndex]] = [nextRow[targetIndex], nextRow[columnIndex]];
+    return nextRow;
+  });
+  const alignments = [...normalized.alignments];
+  [alignments[columnIndex], alignments[targetIndex]] = [alignments[targetIndex], alignments[columnIndex]];
+  return { rows, alignments } satisfies TextBufferTableData;
+}
+
+export function setTextBufferTableAlignment(
+  table: TextBufferTableData,
+  columnIndex: number,
+  alignment: TextBufferTableAlignment,
+) {
+  const normalized = normalizeTextBufferTable(table);
+  if (columnIndex < 0 || columnIndex >= normalized.alignments.length) return normalized;
+  const alignments = [...normalized.alignments];
+  alignments[columnIndex] = alignment;
+  return { rows: normalized.rows.map((row) => [...row]), alignments } satisfies TextBufferTableData;
+}
+
+export function nextTextBufferTableAlignment(alignment: TextBufferTableAlignment): TextBufferTableAlignment {
+  if (alignment === "default") return "left";
+  if (alignment === "left") return "center";
+  if (alignment === "center") return "right";
+  return "default";
 }
 
 function analyzeNonCodeLine(line: TextBufferLine) {
@@ -962,6 +1213,8 @@ export function analyzeTextBufferMarkdown(
     applyRegexBlockAnalysis(lines, codeBlocks, contentStart, options);
   }
 
+  annotateRichContainerLines(lines);
+
   return { lines, codeBlocks };
 }
 
@@ -1053,6 +1306,65 @@ export function normalizeTextBufferCodeBlockSelectionText(text: string, block: T
   )).join("\n");
 }
 
+function lineRangeWithBreak(markdown: string, from: number, to: number) {
+  return {
+    from,
+    to: to < markdown.length && markdown[to] === "\n" ? to + 1 : to,
+  };
+}
+
+function subtractTextBufferRange(
+  ranges: Array<{ from: number; to: number }>,
+  excluded: { from: number; to: number },
+) {
+  return ranges.flatMap((range) => {
+    if (excluded.to <= range.from || excluded.from >= range.to) return [range];
+    const remaining: Array<{ from: number; to: number }> = [];
+    if (range.from < excluded.from) remaining.push({ from: range.from, to: excluded.from });
+    if (excluded.to < range.to) remaining.push({ from: excluded.to, to: range.to });
+    return remaining;
+  });
+}
+
+export function textBufferVisibleClipboardRanges(
+  markdown: string,
+  analysis: TextBufferMarkdownAnalysis,
+  selection: { from: number; to: number },
+) {
+  let ranges = selection.to > selection.from ? [{ from: selection.from, to: selection.to }] : [];
+
+  analysis.codeBlocks.forEach((block) => {
+    if (selection.from <= block.from && selection.to >= block.to) return;
+    ranges = subtractTextBufferRange(
+      ranges,
+      lineRangeWithBreak(markdown, block.openerFrom, block.openerTo),
+    );
+    ranges = subtractTextBufferRange(
+      ranges,
+      lineRangeWithBreak(markdown, block.closerFrom, block.closerTo),
+    );
+  });
+
+  return ranges.filter((range) => range.to > range.from);
+}
+
+export function textBufferSafeCutRanges(
+  markdown: string,
+  analysis: TextBufferMarkdownAnalysis,
+  ranges: Array<{ from: number; to: number }>,
+) {
+  return ranges.map((range) => {
+    const block = analysis.codeBlocks.find((candidate) => (
+      range.from >= candidate.contentFrom
+      && range.from <= candidate.contentTo
+      && range.to === candidate.closerFrom
+      && range.to > range.from
+      && markdown[range.to - 1] === "\n"
+    ));
+    return block ? { from: range.from, to: range.to - 1 } : range;
+  }).filter((range) => range.to > range.from);
+}
+
 export function textBufferCodeBlockReplacementText(text: string, block: TextBufferCodeBlock) {
   if (!block.containerPrefix || !text.includes("\n")) return text;
   return text.replace(/\n/g, `\n${block.containerPrefix}`);
@@ -1060,6 +1372,12 @@ export function textBufferCodeBlockReplacementText(text: string, block: TextBuff
 
 export function isTextBufferCodeBlockEmpty(block: TextBufferCodeBlock) {
   return block.firstContentLine > block.lastContentLine;
+}
+
+export function isTextBufferCodeBlockBlank(markdown: string, block: TextBufferCodeBlock) {
+  if (isTextBufferCodeBlockEmpty(block)) return true;
+  const content = markdown.slice(block.contentFrom, block.contentTo);
+  return normalizeTextBufferCodeBlockSelectionText(content, block).trim().length === 0;
 }
 
 export function isTextBufferCodeBlockPhysicalLastLine(block: TextBufferCodeBlock, lineNumber: number) {

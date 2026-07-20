@@ -10,6 +10,7 @@ import {
   EditorSelection,
   EditorState,
   Facet,
+  Prec,
   StateField,
   Transaction,
   type Extension,
@@ -24,28 +25,45 @@ import {
   highlightActiveLineGutter,
   keymap,
   lineNumbers,
+  ViewPlugin,
   type DecorationSet,
+  type ViewUpdate,
 } from "@codemirror/view";
 import type { EditorMode } from "../app/types";
 import type { AppLanguage, appText } from "../app/i18n";
 import type { EditorCommandResult, EditorCommandSignal, Note } from "../domain/model";
 import {
   analyzeTextBufferMarkdown,
+  deleteTextBufferTableColumn,
+  deleteTextBufferTableRow,
+  insertTextBufferTableColumn,
+  insertTextBufferTableRow,
+  isTextBufferCodeBlockBlank,
   isTextBufferCodeBlockEmpty,
   isTextBufferCodeBlockPhysicalLastLine,
+  moveTextBufferTableColumn,
+  moveTextBufferTableRow,
+  nextTextBufferTableAlignment,
   normalizeTextBufferCodeBlockSelectionText,
+  normalizeTextBufferTable,
   scanTextBufferInlineLinks,
   scanTextBufferTables,
+  serializeTextBufferTable,
+  setTextBufferTableAlignment,
   shouldExitTextBufferCodeBlockOnEnter,
   stripTextBufferContainerPrefix,
   textBufferCodeBlockLineState,
   textBufferCodeBlockContentRange,
   textBufferCodeBlockReplacementText,
+  textBufferSafeCutRanges,
   textBufferSmartSelectAllRange,
+  textBufferVisibleClipboardRanges,
   type TextBufferCodeBlock,
   type TextBufferInlineLink,
   type TextBufferTableBlock,
+  type TextBufferTableData,
 } from "../editor/textBufferMarkdown";
+import { textBufferPasteTransaction } from "../editor/textBufferTransactions";
 import {
   composeMarkdownWithFrontmatter,
   createYamlFrontmatter,
@@ -57,7 +75,11 @@ import {
   yamlListValueFromInput,
   type MarkdownHeadingTarget,
 } from "../shared/markdown";
-import { readDesktopClipboardText, writeDesktopClipboardText } from "../services/clipboard";
+import {
+  hasDesktopClipboardRuntime,
+  readDesktopClipboardText,
+  writeDesktopClipboardText,
+} from "../services/clipboard";
 import type { WikiLinkSuggestion } from "./MilkdownEditor";
 
 type TextBundle = (typeof appText)[AppLanguage];
@@ -148,8 +170,6 @@ function analyzeTextBufferState(state: EditorState) {
   });
 }
 
-type PipeTableBlock = TextBufferTableBlock;
-
 type WikiLinkSource = {
   from: number;
   to: number;
@@ -217,8 +237,12 @@ type TyporaDecorationState = {
 };
 
 type TyporaDocumentAnalysis = ReturnType<typeof analyzeTyporaDocument>;
-type TyporaDecorationFieldState = TyporaDecorationState & {
+type TyporaDocumentDecorationFieldState = TyporaDecorationState & {
   document: TyporaDocumentAnalysis;
+  options: TextBufferDecorationOptions;
+};
+
+type TyporaActiveDecorationFieldState = TyporaDecorationState & {
   options: TextBufferDecorationOptions;
 };
 
@@ -323,25 +347,6 @@ function scanWikiLinks(text: string, lineFrom = 0): WikiLinkSource[] {
 
 function wikiLinkHref(target: string) {
   return `serein-wiki:${encodeURIComponent(target)}`;
-}
-
-function pipeTableMarkdown(rows: string[][], alignments: PipeTableBlock["alignments"]) {
-  const columnCount = Math.max(...rows.map((row) => row.length), alignments.length, 2);
-  const normalizedRows = rows.map((row) => Array.from({ length: columnCount }, (_, index) => (
-    (row[index] ?? "").replace(/\|/g, "\\|")
-  )));
-  const header = normalizedRows[0] ?? Array.from({ length: columnCount }, (_, index) => `Column ${index + 1}`);
-  const separator = Array.from({ length: columnCount }, (_, index) => {
-    const alignment = alignments[index] ?? "default";
-    if (alignment === "center") return ":---:";
-    if (alignment === "right") return "---:";
-    if (alignment === "left") return ":---";
-    return "---";
-  });
-  const body = normalizedRows.slice(1);
-  return [header, separator, ...body]
-    .map((row) => `| ${row.join(" | ")} |`)
-    .join("\n");
 }
 
 function rangeInside(ranges: Array<{ from: number; to: number }>, from: number, to: number) {
@@ -1131,15 +1136,41 @@ class WikiLinkWidget extends WidgetType {
   }
 }
 
+type PendingTableFocus = {
+  tableFrom: number;
+  row: number;
+  column: number;
+  scrollLeft: number;
+};
+
+const pendingTableFocus = new WeakMap<EditorView, PendingTableFocus>();
+const tableWidgetHeightCache = new Map<string, number>();
+
+function tableWidgetCacheKey(table: TextBufferTableBlock) {
+  return `${table.rows.length}:${Math.max(table.alignments.length, ...table.rows.map((row) => row.length))}`;
+}
+
+function tableAlignmentSymbol(alignment: TextBufferTableBlock["alignments"][number]) {
+  if (alignment === "left") return "↤";
+  if (alignment === "center") return "↔";
+  if (alignment === "right") return "↦";
+  return "—";
+}
+
 class PipeTableWidget extends WidgetType {
-  constructor(private readonly table: PipeTableBlock) {
+  constructor(private readonly table: TextBufferTableBlock) {
     super();
   }
 
   eq(other: PipeTableWidget) {
     return other.table.from === this.table.from
       && other.table.to === this.table.to
-      && JSON.stringify(other.table.rows) === JSON.stringify(this.table.rows);
+      && JSON.stringify(other.table.rows) === JSON.stringify(this.table.rows)
+      && JSON.stringify(other.table.alignments) === JSON.stringify(this.table.alignments);
+  }
+
+  get estimatedHeight() {
+    return tableWidgetHeightCache.get(tableWidgetCacheKey(this.table)) ?? -1;
   }
 
   toDOM(view: EditorView) {
@@ -1151,104 +1182,301 @@ class PipeTableWidget extends WidgetType {
     const toolbar = document.createElement("div");
     toolbar.className = "serein-buffer-table-toolbar";
 
-    const table = document.createElement("table");
-    const [header, ...bodyRows] = this.table.rows;
+    const tableElement = document.createElement("table");
+    const tableData = normalizeTextBufferTable(this.table);
+    const [header, ...bodyRows] = tableData.rows;
+    let activeCell = {
+      row: tableData.rows.length > 1 ? 1 : 0,
+      column: 0,
+    };
+    let suppressBlurCommit = false;
 
-    const replaceTable = (rows: string[][], alignments = this.table.alignments) => {
-      const nextMarkdown = pipeTableMarkdown(rows, alignments);
-      view.dispatch({
-        changes: { from: this.table.from, to: this.table.to, insert: nextMarkdown },
+    const focusCell = (row: number, column: number) => {
+      const input = wrapper.querySelector<HTMLInputElement>(`input[data-row="${row}"][data-column="${column}"]`);
+      if (!input) return false;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+      return true;
+    };
+
+    const rememberFocus = (row: number, column: number) => {
+      pendingTableFocus.set(view, {
+        tableFrom: this.table.from,
+        row,
+        column,
+        scrollLeft: wrapper.scrollLeft,
       });
     };
 
-    const updateCell = (rowIndex: number, cellIndex: number, value: string) => {
-      const rows = this.table.rows.map((row) => [...row]);
-      rows[rowIndex][cellIndex] = value;
-      replaceTable(rows);
+    const replaceTable = (nextTable: TextBufferTableData, focus?: { row: number; column: number }) => {
+      const normalized = normalizeTextBufferTable(nextTable);
+      const nextMarkdown = serializeTextBufferTable(normalized);
+      if (nextMarkdown === view.state.sliceDoc(this.table.from, this.table.to)) {
+        if (focus) focusCell(focus.row, focus.column);
+        return;
+      }
+      suppressBlurCommit = true;
+      if (focus) rememberFocus(focus.row, focus.column);
+      view.dispatch({
+        changes: {
+          from: this.table.from,
+          to: this.table.to,
+          insert: nextMarkdown,
+        },
+        annotations: Transaction.userEvent.of("input.table"),
+      });
     };
 
-    const addToolbarButton = (label: string, action: () => void) => {
+    const tableWithCellValue = (row: number, column: number, value: string) => {
+      const nextTable = normalizeTextBufferTable(tableData);
+      nextTable.rows[row][column] = value;
+      return nextTable;
+    };
+
+    const tableWithActiveCellValue = () => {
+      const input = wrapper.querySelector<HTMLInputElement>(
+        `input[data-row="${activeCell.row}"][data-column="${activeCell.column}"]`,
+      );
+      return input
+        ? tableWithCellValue(activeCell.row, activeCell.column, input.value)
+        : normalizeTextBufferTable(tableData);
+    };
+
+    const exitTableAfter = (nextTable: TextBufferTableData) => {
+      const nextMarkdown = serializeTextBufferTable(nextTable);
+      const suffix = view.state.sliceDoc(this.table.to, Math.min(view.state.doc.length, this.table.to + 2));
+      const hasBlankLine = suffix.startsWith("\n\n");
+      const hasSingleNewline = !hasBlankLine && suffix.startsWith("\n");
+      const to = this.table.to + (hasSingleNewline ? 1 : 0);
+      const insert = hasBlankLine ? nextMarkdown : `${nextMarkdown}\n\n`;
+      suppressBlurCommit = true;
+      view.dispatch({
+        changes: { from: this.table.from, to, insert },
+        selection: { anchor: this.table.from + nextMarkdown.length + 1 },
+        annotations: Transaction.userEvent.of("input.table.exit"),
+      });
+      view.focus();
+    };
+
+    const exitTableBefore = (nextTable: TextBufferTableData) => {
+      const nextMarkdown = serializeTextBufferTable(nextTable);
+      const prefix = view.state.sliceDoc(Math.max(0, this.table.from - 2), this.table.from);
+      let insert = nextMarkdown;
+      let anchor = Math.max(0, this.table.from - 1);
+      if (this.table.from === 0) {
+        insert = `\n\n${nextMarkdown}`;
+        anchor = 0;
+      } else if (!prefix.endsWith("\n\n")) {
+        const hasSingleNewline = prefix.endsWith("\n");
+        insert = `${hasSingleNewline ? "\n" : "\n\n"}${nextMarkdown}`;
+        anchor = this.table.from + (hasSingleNewline ? 0 : 1);
+      }
+      suppressBlurCommit = true;
+      view.dispatch({
+        changes: { from: this.table.from, to: this.table.to, insert },
+        selection: { anchor },
+        annotations: Transaction.userEvent.of("input.table.exit"),
+      });
+      view.focus();
+    };
+
+    const addToolbarButton = (label: string, title: string, action: () => void) => {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
-      button.addEventListener("mousedown", stopEditorEvent);
+      button.title = title;
+      button.setAttribute("aria-label", title);
+      button.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
       button.addEventListener("click", (event) => {
         event.stopPropagation();
         action();
       });
       toolbar.append(button);
+      return button;
     };
 
-    addToolbarButton("+ Row", () => {
-      const columnCount = Math.max(...this.table.rows.map((row) => row.length), this.table.alignments.length, 2);
-      replaceTable([
-        ...this.table.rows.map((row) => [...row]),
-        Array.from({ length: columnCount }, () => ""),
-      ]);
+    addToolbarButton("+ Row", "Insert row after the active row", () => {
+      const nextTable = insertTextBufferTableRow(tableWithActiveCellValue(), activeCell.row);
+      replaceTable(nextTable, { row: Math.min(activeCell.row + 1, nextTable.rows.length - 1), column: activeCell.column });
     });
-
-    addToolbarButton("+ Column", () => {
-      replaceTable(
-        this.table.rows.map((row) => [...row, ""]),
-        [...this.table.alignments, "default"],
-      );
+    addToolbarButton("− Row", "Delete the active row", () => {
+      const nextTable = deleteTextBufferTableRow(tableWithActiveCellValue(), activeCell.row);
+      replaceTable(nextTable, { row: Math.min(activeCell.row, nextTable.rows.length - 1), column: activeCell.column });
+    });
+    addToolbarButton("↑ Row", "Move the active row up", () => {
+      const nextTable = moveTextBufferTableRow(tableWithActiveCellValue(), activeCell.row, -1);
+      replaceTable(nextTable, { row: Math.max(1, activeCell.row - 1), column: activeCell.column });
+    });
+    addToolbarButton("↓ Row", "Move the active row down", () => {
+      const nextTable = moveTextBufferTableRow(tableWithActiveCellValue(), activeCell.row, 1);
+      replaceTable(nextTable, { row: Math.min(nextTable.rows.length - 1, activeCell.row + 1), column: activeCell.column });
+    });
+    addToolbarButton("+ Column", "Insert column after the active column", () => {
+      const nextTable = insertTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column);
+      replaceTable(nextTable, { row: activeCell.row, column: Math.min(activeCell.column + 1, nextTable.alignments.length - 1) });
+    });
+    addToolbarButton("− Column", "Delete the active column", () => {
+      const nextTable = deleteTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column);
+      replaceTable(nextTable, { row: activeCell.row, column: Math.min(activeCell.column, nextTable.alignments.length - 1) });
+    });
+    addToolbarButton("← Column", "Move the active column left", () => {
+      const nextTable = moveTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column, -1);
+      replaceTable(nextTable, { row: activeCell.row, column: Math.max(0, activeCell.column - 1) });
+    });
+    addToolbarButton("Column →", "Move the active column right", () => {
+      const nextTable = moveTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column, 1);
+      replaceTable(nextTable, { row: activeCell.row, column: Math.min(nextTable.alignments.length - 1, activeCell.column + 1) });
     });
 
     const createCellInput = (rowIndex: number, cellIndex: number, value: string) => {
       const input = document.createElement("input");
       input.value = value;
+      input.dataset.row = String(rowIndex);
+      input.dataset.column = String(cellIndex);
+      input.setAttribute("aria-label", `Table row ${rowIndex + 1}, column ${cellIndex + 1}`);
       let committedValue = value;
-      const commitCell = () => {
-        if (input.value === committedValue) return;
+
+      const commitCell = (focus?: { row: number; column: number }) => {
+        if (input.value === committedValue) return false;
         committedValue = input.value;
-        updateCell(rowIndex, cellIndex, input.value);
+        replaceTable(tableWithCellValue(rowIndex, cellIndex, input.value), focus);
+        return true;
       };
+
+      const moveFocus = (row: number, column: number) => {
+        if (commitCell({ row, column })) return;
+        focusCell(row, column);
+      };
+
+      input.addEventListener("focus", () => {
+        activeCell = { row: rowIndex, column: cellIndex };
+      });
       input.addEventListener("mousedown", stopEditorEvent);
       input.addEventListener("click", stopEditorEvent);
       input.addEventListener("keydown", (event) => {
         event.stopPropagation();
+
+        if (event.key === "Tab") {
+          event.preventDefault();
+          const currentIndex = rowIndex * tableData.alignments.length + cellIndex;
+          const nextIndex = currentIndex + (event.shiftKey ? -1 : 1);
+          if (nextIndex < 0) {
+            exitTableBefore(tableWithCellValue(rowIndex, cellIndex, input.value));
+            return;
+          }
+          if (nextIndex >= tableData.rows.length * tableData.alignments.length) {
+            const nextTable = insertTextBufferTableRow(tableWithCellValue(rowIndex, cellIndex, input.value), rowIndex);
+            replaceTable(nextTable, { row: nextTable.rows.length - 1, column: 0 });
+            return;
+          }
+          moveFocus(
+            Math.floor(nextIndex / tableData.alignments.length),
+            nextIndex % tableData.alignments.length,
+          );
+          return;
+        }
+
         if (event.key === "Enter") {
           event.preventDefault();
-          commitCell();
-          view.focus();
+          if (rowIndex >= tableData.rows.length - 1) {
+            const nextTable = insertTextBufferTableRow(tableWithCellValue(rowIndex, cellIndex, input.value), rowIndex);
+            replaceTable(nextTable, { row: nextTable.rows.length - 1, column: cellIndex });
+          } else {
+            moveFocus(rowIndex + 1, cellIndex);
+          }
+          return;
         }
+
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          if (rowIndex >= tableData.rows.length - 1) {
+            exitTableAfter(tableWithCellValue(rowIndex, cellIndex, input.value));
+          } else {
+            moveFocus(rowIndex + 1, cellIndex);
+          }
+          return;
+        }
+
+        if (event.key === "ArrowUp" && rowIndex > 0) {
+          event.preventDefault();
+          moveFocus(rowIndex - 1, cellIndex);
+          return;
+        }
+
         if (event.key === "Escape") {
           event.preventDefault();
-          view.focus();
+          exitTableAfter(tableWithCellValue(rowIndex, cellIndex, input.value));
         }
       });
       input.addEventListener("blur", () => {
-        commitCell();
+        if (!suppressBlurCommit) commitCell();
       });
       return input;
     };
 
-    const columnCount = Math.max(header.length, ...bodyRows.map((row) => row.length), this.table.alignments.length, 2);
-    const normalizedHeader = Array.from({ length: columnCount }, (_, index) => header[index] ?? "");
-
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
-    normalizedHeader.forEach((cell, cellIndex) => {
+    header.forEach((cell, cellIndex) => {
       const th = document.createElement("th");
-      th.append(createCellInput(0, cellIndex, cell));
+      const headerCell = document.createElement("div");
+      headerCell.className = "serein-buffer-table-header-cell";
+      const alignButton = document.createElement("button");
+      const alignment = tableData.alignments[cellIndex];
+      alignButton.type = "button";
+      alignButton.className = "serein-buffer-table-align";
+      alignButton.textContent = tableAlignmentSymbol(alignment);
+      alignButton.title = `Alignment: ${alignment}. Click to cycle.`;
+      alignButton.setAttribute("aria-label", alignButton.title);
+      alignButton.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      alignButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const nextTable = setTextBufferTableAlignment(
+          tableWithActiveCellValue(),
+          cellIndex,
+          nextTextBufferTableAlignment(alignment),
+        );
+        replaceTable(nextTable, { row: activeCell.row, column: cellIndex });
+      });
+      headerCell.append(createCellInput(0, cellIndex, cell), alignButton);
+      th.append(headerCell);
       headerRow.append(th);
     });
     thead.append(headerRow);
-    table.append(thead);
+    tableElement.append(thead);
 
     const tbody = document.createElement("tbody");
     bodyRows.forEach((row, bodyIndex) => {
       const rowElement = document.createElement("tr");
-      normalizedHeader.forEach((_, cellIndex) => {
+      header.forEach((_, cellIndex) => {
         const td = document.createElement("td");
         td.append(createCellInput(bodyIndex + 1, cellIndex, row[cellIndex] ?? ""));
         rowElement.append(td);
       });
       tbody.append(rowElement);
     });
-    table.append(tbody);
-    wrapper.append(toolbar, table);
+    tableElement.append(tbody);
+    wrapper.append(toolbar, tableElement);
+
+    const pending = pendingTableFocus.get(view);
+    if (pending?.tableFrom === this.table.from) {
+      pendingTableFocus.delete(view);
+      window.requestAnimationFrame(() => {
+        wrapper.scrollLeft = pending.scrollLeft;
+        focusCell(pending.row, pending.column);
+      });
+    }
+
     return wrapper;
+  }
+
+  destroy(dom: HTMLElement) {
+    tableWidgetHeightCache.set(tableWidgetCacheKey(this.table), dom.getBoundingClientRect().height);
   }
 
   ignoreEvent() {
@@ -1328,78 +1556,49 @@ function analyzeTyporaDocument(state: EditorState, options: TextBufferDecoration
   const tableBlocks = options.mode === "rich" ? scanTextBufferTables(markdown, analysis) : [];
   const tableStarts = new Map(tableBlocks.map((table) => [table.from, table]));
   const tableRanges = tableBlocks.map((table) => ({ from: table.from, to: table.to }));
-  const linksByLine = new Map<number, TextBufferInlineLink[]>();
-  scanTextBufferInlineLinks(markdown).forEach((link) => {
-    const fromLine = state.doc.lineAt(link.from);
-    const toLine = state.doc.lineAt(Math.max(link.from, link.to - 1));
-    if (fromLine.number !== toLine.number) return;
-    const analyzedLine = analysis.lines[fromLine.number - 1];
-    if (analyzedLine?.kind === "code" || analyzedLine?.kind === "codeFence") return;
-    const lineLinks = linksByLine.get(fromLine.number) ?? [];
-    lineLinks.push(link);
-    linksByLine.set(fromLine.number, lineLinks);
-  });
   return {
     markdown,
     analysis,
     frontmatterEnd,
     tableStarts,
     tableRanges,
-    linksByLine,
   };
 }
 
-function buildTyporaDecorations(
+function buildTyporaDocumentDecorations(
   state: EditorState,
   options: TextBufferDecorationOptions,
   document = analyzeTyporaDocument(state, options),
-): TyporaDecorationFieldState {
+): TyporaDocumentDecorationFieldState {
   const builder = new SortedDecorationBuilder();
   const {
-    markdown,
     analysis,
     frontmatterEnd,
     tableStarts,
     tableRanges,
-    linksByLine,
   } = document;
-  const frontmatterActive = frontmatterEnd > 0 && selectionTouchesRange(state, 0, frontmatterEnd);
-  const activeHead = state.selection.main.head;
-  const activeLine = analysis.lines.find((line) => activeHead >= line.from && activeHead <= line.to);
-  const activeCodeBlockId = analysis.codeBlocks.find((block) => (
-    activeHead >= block.from && activeHead <= block.to
-  ))?.id ?? activeLine?.codeBlockId;
   const codeBlocksById = new Map(analysis.codeBlocks.map((block) => [block.id, block]));
   const codeBlocksByOpener = new Map(analysis.codeBlocks.map((block) => [block.openerFrom, block]));
 
+  if (options.mode === "rich") {
+    tableStarts.forEach((table) => {
+      builder.addAtomic(table.from, table.to, Decoration.replace({
+        widget: new PipeTableWidget(table),
+        block: true,
+      }));
+    });
+  }
+
   analysis.lines.forEach((line) => {
+    if (frontmatterEnd > 0 && line.from < frontmatterEnd) return;
+
+    const tableRange = tableRanges.find((item) => line.from >= item.from && line.to <= item.to);
+    if (options.mode === "rich" && tableRange) return;
+
     if (options.mode === "rich" && line.hiddenInRich) {
       builder.add(line.from, line.from, Decoration.line({
         class: "serein-buffer-hidden-line",
       }));
-    }
-
-    if (frontmatterEnd > 0 && line.from < frontmatterEnd) {
-      if (!frontmatterActive) {
-        builder.add(line.from, line.from, Decoration.line({
-          class: "serein-buffer-frontmatter-source-line serein-buffer-hidden-line",
-        }));
-        return;
-      }
-      builder.add(line.from, line.from, Decoration.line({
-        class: "serein-buffer-frontmatter-source-line",
-      }));
-    }
-
-    const table = tableStarts.get(line.from);
-    const tableRange = tableRanges.find((item) => line.from >= item.from && line.to <= item.to);
-    if (options.mode === "rich" && tableRange) {
-      if (table) builder.add(line.from, line.from, Decoration.widget({
-        widget: new PipeTableWidget(table),
-        side: -1,
-      }));
-      addSyntaxOrHide(builder, line.from, line.to, "rich");
-      return;
     }
 
     if (line.kind === "codeFence") {
@@ -1424,21 +1623,45 @@ function buildTyporaDecorations(
       const codeLineClasses = ["serein-buffer-code-line"];
       if (codeBlock?.firstContentLine === line.number) codeLineClasses.push("serein-buffer-code-first");
       if (codeBlock?.lastContentLine === line.number) codeLineClasses.push("serein-buffer-code-last");
-      if (codeBlock && codeBlock.id === activeCodeBlockId) codeLineClasses.push("serein-buffer-code-active");
       builder.add(line.from, line.from, Decoration.line({
         class: codeLineClasses.join(" "),
         attributes: codeBlock ? codeBlockLineAttributes(codeBlock) : undefined,
       }));
     } else if (line.kind === "heading") {
       builder.add(line.from, line.from, Decoration.line({ class: `serein-buffer-heading-line serein-buffer-h${line.headingLevel ?? 1}` }));
-    } else if (line.kind === "blockquote") {
-      builder.add(line.from, line.from, Decoration.line({ class: "serein-buffer-blockquote-line" }));
-    } else if (line.kind === "list") {
+    }
+
+    if (line.richQuoteDepth || line.richListDepth) {
+      const classes = ["serein-buffer-structure-line"];
+      if (line.richQuoteDepth) {
+        classes.push("serein-buffer-quote-line");
+        if (line.richQuoteStart) classes.push("serein-buffer-quote-start");
+        if (line.richQuoteEnd) classes.push("serein-buffer-quote-end");
+      }
+      if (line.richListDepth) classes.push("serein-buffer-list-line");
+      if (line.richListContinuation) classes.push("serein-buffer-list-continuation");
+
       builder.add(line.from, line.from, Decoration.line({
-        class: "serein-buffer-list-line",
+        class: classes.join(" "),
         attributes: {
-          "data-list-kind": line.listKind ?? "bullet",
-          "data-list-marker": line.listMarker ?? "-",
+          "data-list-kind": line.richListDepth
+            ? line.richListKind ?? line.listKind ?? "bullet"
+            : "",
+          "data-list-marker": line.richListDepth
+            ? line.richListContinuation
+              ? ""
+              : line.richListKind === "bullet" || line.listKind === "bullet"
+                ? "•"
+                : line.richListMarker ?? line.listMarker ?? "1."
+            : "",
+          "data-quote-depth": String(line.richQuoteDepth ?? 0),
+          "data-list-depth": String(line.richListDepth ?? 0),
+          style: [
+            `--serein-quote-depth: ${line.richQuoteDepth ?? 0}`,
+            `--serein-quote-indent: ${Math.max(0, (line.richQuoteDepth ?? 0) - 1) * 22}px`,
+            `--serein-list-depth: ${line.richListDepth ?? 0}`,
+            `--serein-list-indent: ${Math.max(0, (line.richListDepth ?? 0) - 1) * 24}px`,
+          ].join("; "),
         },
       }));
     }
@@ -1450,23 +1673,118 @@ function buildTyporaDecorations(
         .filter((range) => !line.richHiddenRanges.some((hidden) => hidden.from === range.from && hidden.to === range.to))
         .forEach((range) => addMark(builder, range.from, range.to, "serein-buffer-md-syntax"));
     }
+  });
 
-    if (options.mode === "rich") {
-      const codeBlock = line.kind === "code" && line.codeBlockId !== undefined
-        ? codeBlocksById.get(line.codeBlockId)
-        : null;
-      if (codeBlock && codeBlock.id === activeCodeBlockId && codeBlock.lastContentLine === line.number) {
-        builder.add(line.to, line.to, Decoration.widget({
-          widget: new CodeLanguageWidget(codeBlock),
+  return { ...builder.finish(), document, options };
+}
+
+const typoraDocumentDecorations = StateField.define<TyporaDocumentDecorationFieldState>({
+  create(state) {
+    const options = state.facet(textBufferDecorationOptions);
+    return buildTyporaDocumentDecorations(state, options);
+  },
+  update(value, transaction) {
+    const options = transaction.state.facet(textBufferDecorationOptions);
+    const optionsChanged = options !== value.options;
+    if (!transaction.docChanged && !optionsChanged) return value;
+    return buildTyporaDocumentDecorations(transaction.state, options);
+  },
+  provide: (field) => [
+    EditorView.decorations.from(field, (value) => value.decorations),
+    EditorView.atomicRanges.of((view) => view.state.field(field).atomicRanges),
+  ],
+});
+
+function buildTyporaActiveDecorations(state: EditorState): TyporaActiveDecorationFieldState {
+  const builder = new SortedDecorationBuilder();
+  const options = state.facet(textBufferDecorationOptions);
+  const document = state.field(typoraDocumentDecorations).document;
+  const { analysis, frontmatterEnd } = document;
+
+  if (frontmatterEnd > 0) {
+    const frontmatterActive = selectionTouchesRange(state, 0, frontmatterEnd);
+    analysis.lines.forEach((line) => {
+      if (line.from >= frontmatterEnd) return;
+      builder.add(line.from, line.from, Decoration.line({
+        class: frontmatterActive
+          ? "serein-buffer-frontmatter-source-line"
+          : "serein-buffer-frontmatter-source-line serein-buffer-hidden-line",
+      }));
+      if (!frontmatterActive) return;
+      line.richHiddenRanges.forEach((range) => addSyntaxOrHide(builder, range.from, range.to, options.mode));
+      if (options.mode !== "rich") {
+        line.syntaxRanges
+          .filter((range) => !line.richHiddenRanges.some((hidden) => hidden.from === range.from && hidden.to === range.to))
+          .forEach((range) => addMark(builder, range.from, range.to, "serein-buffer-md-syntax"));
+      }
+    });
+  }
+
+  if (options.mode === "rich") {
+    const activeHead = state.selection.main.head;
+    const activeLine = analysis.lines[state.doc.lineAt(activeHead).number - 1];
+    const activeBlock = analysis.codeBlocks.find((block) => (
+      activeHead >= block.from && activeHead <= block.to
+    )) ?? (activeLine?.codeBlockId !== undefined
+      ? analysis.codeBlocks.find((block) => block.id === activeLine.codeBlockId)
+      : undefined);
+
+    if (activeBlock) {
+      for (let lineNumber = activeBlock.firstContentLine; lineNumber <= activeBlock.lastContentLine; lineNumber += 1) {
+        const line = analysis.lines[lineNumber - 1];
+        if (!line) continue;
+        builder.add(line.from, line.from, Decoration.line({ class: "serein-buffer-code-active" }));
+      }
+      const lastLine = analysis.lines[activeBlock.lastContentLine - 1];
+      if (lastLine) {
+        builder.add(lastLine.to, lastLine.to, Decoration.widget({
+          widget: new CodeLanguageWidget(activeBlock),
           side: 1,
           block: true,
         }));
       }
     }
+  }
 
-    if (line.kind === "code" || line.kind === "codeFence") return;
+  return { ...builder.finish(), options };
+}
 
-    const lineLinks = linksByLine.get(line.number) ?? [];
+const typoraActiveDecorations = StateField.define<TyporaActiveDecorationFieldState>({
+  create: buildTyporaActiveDecorations,
+  update(value, transaction) {
+    const options = transaction.state.facet(textBufferDecorationOptions);
+    const optionsChanged = options !== value.options;
+    if (!transaction.docChanged && !transaction.selection && !optionsChanged) return value;
+    return buildTyporaActiveDecorations(transaction.state);
+  },
+  provide: (field) => [
+    EditorView.decorations.from(field, (value) => value.decorations),
+    EditorView.atomicRanges.of((view) => view.state.field(field).atomicRanges),
+  ],
+});
+
+function buildTyporaInlineDecorations(view: EditorView) {
+  const builder = new SortedDecorationBuilder();
+  const state = view.state;
+  const options = state.facet(textBufferDecorationOptions);
+  const document = state.field(typoraDocumentDecorations).document;
+  const visibleLineNumbers = new Set<number>();
+
+  view.visibleRanges.forEach((range) => {
+    const fromLine = state.doc.lineAt(range.from).number;
+    const toLine = state.doc.lineAt(Math.min(range.to, state.doc.length)).number;
+    for (let lineNumber = fromLine; lineNumber <= toLine; lineNumber += 1) {
+      visibleLineNumbers.add(lineNumber);
+    }
+  });
+
+  visibleLineNumbers.forEach((lineNumber) => {
+    const line = document.analysis.lines[lineNumber - 1];
+    if (!line || line.kind === "code" || line.kind === "codeFence") return;
+    if (document.frontmatterEnd > 0 && line.from < document.frontmatterEnd) return;
+    if (document.tableRanges.some((range) => line.from >= range.from && line.to <= range.to)) return;
+
+    const lineLinks = scanTextBufferInlineLinks(line.text, line.from);
     const standaloneImage = lineLinks.find((link) => (
       link.image
       && lineLinks.length === 1
@@ -1495,42 +1813,136 @@ function buildTyporaDecorations(
     addDelimitedInlineMarks(builder, state, line.from, line.text, /~~[^~\n]+~~/g, 2, "serein-buffer-strike", options);
   });
 
-  return { ...builder.finish(), document, options };
+  return builder.finish();
 }
 
-const typoraDecorations = StateField.define<TyporaDecorationFieldState>({
-  create(state) {
-    const options = state.facet(textBufferDecorationOptions);
-    return buildTyporaDecorations(state, options);
-  },
-  update(value, transaction) {
-    const options = transaction.state.facet(textBufferDecorationOptions);
-    const optionsChanged = options !== value.options;
-    if (!transaction.docChanged && !transaction.selection && !optionsChanged) return value;
-    const document = transaction.docChanged || optionsChanged
-      ? analyzeTyporaDocument(transaction.state, options)
-      : value.document;
-    return buildTyporaDecorations(transaction.state, options, document);
-  },
-  provide: (field) => [
-    EditorView.decorations.from(field, (value) => value.decorations),
-    EditorView.atomicRanges.of((view) => view.state.field(field).atomicRanges),
-  ],
+const typoraInlineDecorations = ViewPlugin.fromClass(class {
+  decorations: DecorationSet;
+  atomicRanges: DecorationSet;
+
+  constructor(view: EditorView) {
+    const decorations = buildTyporaInlineDecorations(view);
+    this.decorations = decorations.decorations;
+    this.atomicRanges = decorations.atomicRanges;
+  }
+
+  update(update: ViewUpdate) {
+    const optionsChanged = update.startState.facet(textBufferDecorationOptions)
+      !== update.state.facet(textBufferDecorationOptions);
+    if (!update.docChanged && !update.viewportChanged && !update.selectionSet && !optionsChanged) return;
+    const decorations = buildTyporaInlineDecorations(update.view);
+    this.decorations = decorations.decorations;
+    this.atomicRanges = decorations.atomicRanges;
+  }
+}, {
+  decorations: (value) => value.decorations,
+  provide: (plugin) => EditorView.atomicRanges.of((view) => (
+    view.plugin(plugin)?.atomicRanges ?? Decoration.none
+  )),
 });
 
-function selectedText(view: EditorView) {
+function textBufferClipboardSelection(view: EditorView) {
   const analysis = analyzeTextBufferState(view.state);
-  return view.state.selection.ranges
+  const markdown = view.state.doc.toString();
+  const ranges: Array<{ from: number; to: number }> = [];
+  const text = view.state.selection.ranges
     .map((range) => {
-      const text = view.state.sliceDoc(range.from, range.to);
-      const block = codeBlockForSelection(view.state, range, analysis);
-      return block ? normalizeTextBufferCodeBlockSelectionText(text, block) : text;
+      const visibleRanges = textBufferVisibleClipboardRanges(markdown, analysis, range);
+      ranges.push(...visibleRanges);
+      return visibleRanges.map((visibleRange) => {
+        const selected = view.state.sliceDoc(visibleRange.from, visibleRange.to);
+        const block = codeBlockForSelection(view.state, visibleRange, analysis);
+        return block ? normalizeTextBufferCodeBlockSelectionText(selected, block) : selected;
+      }).join("");
     })
     .join("\n");
+  return { text, ranges };
 }
 
-function replaceSelection(view: EditorView, text: string) {
-  view.dispatch(view.state.replaceSelection(text));
+type TextBufferCutSnapshot = ReturnType<typeof textBufferClipboardSelection> & {
+  markdown: string;
+  selection: EditorSelection;
+};
+
+const textBufferCutInFlight = new WeakSet<EditorView>();
+
+function captureTextBufferCut(view: EditorView) {
+  const clipboardSelection = textBufferClipboardSelection(view);
+  if (!clipboardSelection.text) return null;
+  return {
+    ...clipboardSelection,
+    markdown: view.state.doc.toString(),
+    selection: view.state.selection,
+  } satisfies TextBufferCutSnapshot;
+}
+
+function deleteTextBufferClipboardSelection(
+  view: EditorView,
+  ranges: Array<{ from: number; to: number }>,
+) {
+  const analysis = analyzeTextBufferState(view.state);
+  const safeRanges = textBufferSafeCutRanges(view.state.doc.toString(), analysis, ranges);
+  if (!safeRanges.length) return false;
+  view.dispatch({
+    changes: safeRanges.map((range) => ({ ...range, insert: "" })),
+    selection: { anchor: safeRanges[0].from },
+    annotations: richFenceMutation.of(true),
+    userEvent: "delete.cut",
+  });
+  view.focus();
+  return true;
+}
+
+async function commitTextBufferCut(
+  view: EditorView,
+  snapshot: TextBufferCutSnapshot,
+  allowWithoutDesktopClipboard = false,
+) {
+  if (textBufferCutInFlight.has(view)) return false;
+  textBufferCutInFlight.add(view);
+
+  try {
+    if (hasDesktopClipboardRuntime()) {
+      if (!await writeDesktopClipboardText(snapshot.text)) return false;
+    } else if (!allowWithoutDesktopClipboard) {
+      return false;
+    }
+
+    if (
+      view.state.doc.toString() !== snapshot.markdown
+      || !view.state.selection.eq(snapshot.selection)
+      || textBufferClipboardSelection(view).text !== snapshot.text
+    ) return false;
+
+    return deleteTextBufferClipboardSelection(view, snapshot.ranges);
+  } finally {
+    textBufferCutInFlight.delete(view);
+  }
+}
+
+let textBufferPerformanceMeasureId = 0;
+
+function measureTextBufferOperation<T>(name: string, operation: () => T): T {
+  const id = textBufferPerformanceMeasureId;
+  textBufferPerformanceMeasureId += 1;
+  const startMark = `${name}:start:${id}`;
+  const endMark = `${name}:end:${id}`;
+  performance.mark(startMark);
+  try {
+    return operation();
+  } finally {
+    performance.mark(endMark);
+    performance.measure(name, startMark, endMark);
+    performance.clearMarks(startMark);
+    performance.clearMarks(endMark);
+  }
+}
+
+function replaceSelection(view: EditorView, text: string, userEvent?: string) {
+  const replacement = view.state.replaceSelection(text);
+  view.dispatch(userEvent
+    ? { ...replacement, annotations: Transaction.userEvent.of(userEvent) }
+    : replacement);
   view.focus();
 }
 
@@ -1693,6 +2105,29 @@ function handleTextBufferEnter(view: EditorView) {
   return true;
 }
 
+function handleTextBufferBackspace(view: EditorView) {
+  if (!view.dom.classList.contains("serein-buffer-rich")) return false;
+  if (!view.state.selection.main.empty) return false;
+
+  const pos = view.state.selection.main.head;
+  const context = codeBlockContextAtPosition(view.state, pos);
+  if (!context || !isTextBufferCodeBlockBlank(view.state.doc.toString(), context.block)) return false;
+  if (pos < context.block.contentFrom || pos > context.block.contentTo) return false;
+
+  const replacement = context.block.containerPrefix;
+  view.dispatch({
+    changes: {
+      from: context.block.from,
+      to: context.block.to,
+      insert: replacement,
+    },
+    selection: { anchor: context.block.from + replacement.length },
+    annotations: richFenceMutation.of(true),
+    userEvent: "delete.backward",
+  });
+  return true;
+}
+
 function selectAllTextBuffer(view: EditorView) {
   const markdown = view.state.doc.toString();
   const selection = view.state.selection.main;
@@ -1789,17 +2224,14 @@ async function runTextBufferCommand(view: EditorView, command: EditorCommandSign
     case "redo":
       return redoTextBuffer(view);
     case "copy": {
-      const text = selectedText(view);
+      const { text } = textBufferClipboardSelection(view);
       if (!text) return false;
-      await writeDesktopClipboardText(text);
-      return true;
+      return writeDesktopClipboardText(text);
     }
     case "cut": {
-      const text = selectedText(view);
-      if (!text) return false;
-      await writeDesktopClipboardText(text);
-      replaceSelection(view, "");
-      return true;
+      const snapshot = captureTextBufferCut(view);
+      if (!snapshot) return false;
+      return commitTextBufferCut(view, snapshot);
     }
     case "paste": {
       const text = await readDesktopClipboardText();
@@ -1863,7 +2295,7 @@ async function runTextBufferCommand(view: EditorView, command: EditorCommandSign
     case "orderedList":
       return replaceSelectedLines(view, (text, index) => `${index + 1}. ${withoutMarkdownBlockPrefix(text)}`);
     case "codeBlock": {
-      const selection = selectedText(view);
+      const selection = textBufferClipboardSelection(view).text;
       replaceSelection(view, selection ? `\`\`\`\n${selection}\n\`\`\`` : "```\n\n```");
       return true;
     }
@@ -1940,17 +2372,21 @@ export function MarkdownTextBufferEditor({
     const domHandlers = EditorView.domEventHandlers({
       copy(event, view) {
         if (view.state.selection.main.empty || !event.clipboardData) return false;
+        const { text } = textBufferClipboardSelection(view);
         event.preventDefault();
         event.stopPropagation();
-        event.clipboardData.setData("text/plain", selectedText(view));
+        event.clipboardData.setData("text/plain", text);
+        void writeDesktopClipboardText(text);
         return true;
       },
       cut(event, view) {
         if (view.state.selection.main.empty || !event.clipboardData) return false;
+        const snapshot = captureTextBufferCut(view);
+        if (!snapshot) return false;
         event.preventDefault();
         event.stopPropagation();
-        event.clipboardData.setData("text/plain", selectedText(view));
-        replaceSelection(view, "");
+        event.clipboardData.setData("text/plain", snapshot.text);
+        void commitTextBufferCut(view, snapshot, true).catch(() => undefined);
         return true;
       },
       mousedown(event, view) {
@@ -1971,13 +2407,24 @@ export function MarkdownTextBufferEditor({
       },
       paste(event, view) {
         const files = Array.from(event.clipboardData?.files ?? []);
-        if (!files.length) return false;
+        if (files.length) {
+          event.preventDefault();
+          const noteId = activeNoteIdRef.current;
+          void onImportImagesRef.current(files).then((images) => {
+            if (activeNoteIdRef.current !== noteId) return;
+            const markdown = imageMarkdown(images);
+            if (markdown) replaceSelection(view, markdown, "input.paste.image");
+          });
+          return true;
+        }
+
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        if (!text) return false;
         event.preventDefault();
-        const noteId = activeNoteIdRef.current;
-        void onImportImagesRef.current(files).then((images) => {
-          if (activeNoteIdRef.current !== noteId) return;
-          const markdown = imageMarkdown(images);
-          if (markdown) replaceSelection(view, markdown);
+        event.stopPropagation();
+        measureTextBufferOperation("serein/editor/paste-text", () => {
+          view.dispatch(textBufferPasteTransaction(view.state, text));
+          view.focus();
         });
         return true;
       },
@@ -2005,6 +2452,10 @@ export function MarkdownTextBufferEditor({
       extensions: [
         history(),
         markdownSupport({ base: markdownLanguage, codeLanguages: codeBlockLanguageData }),
+        Prec.highest(keymap.of([
+          { key: "Enter", run: handleTextBufferEnter },
+          { key: "Backspace", run: handleTextBufferBackspace },
+        ])),
         keymap.of([
           { key: "Mod-a", run: selectAllTextBuffer },
           { key: "Mod-z", run: undoTextBuffer },
@@ -2012,7 +2463,6 @@ export function MarkdownTextBufferEditor({
           { key: "Mod-Shift-z", run: redoTextBuffer },
           { key: "ArrowUp", run: handleTextBufferArrowUp },
           { key: "ArrowDown", run: handleTextBufferArrowDown },
-          { key: "Enter", run: handleTextBufferEnter },
           indentWithTab,
           ...defaultKeymap,
           ...historyKeymap,
@@ -2021,7 +2471,9 @@ export function MarkdownTextBufferEditor({
         updateListener,
         domHandlers,
         typedPendingFenceLines,
-        typoraDecorations,
+        typoraDocumentDecorations,
+        typoraActiveDecorations,
+        typoraInlineDecorations,
         modeCompartment.of(extensionsForMode(options)),
       ],
     });
@@ -2057,7 +2509,9 @@ export function MarkdownTextBufferEditor({
       activeNoteIdRef.current = activeNote.id;
       latestMarkdownRef.current = activeNote.markdown;
       setCurrentMarkdown(activeNote.markdown);
-      view.setState(createState(activeNote.markdown, decorationOptions));
+      measureTextBufferOperation("serein/editor/open-note", () => {
+        view.setState(createState(activeNote.markdown, decorationOptions));
+      });
       return;
     }
 
@@ -2065,13 +2519,15 @@ export function MarkdownTextBufferEditor({
     if (activeNote.markdown === currentMarkdown) return;
     latestMarkdownRef.current = activeNote.markdown;
     setCurrentMarkdown(activeNote.markdown);
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: activeNote.markdown },
-      selection: selectionClampedToDocument(view.state.selection, activeNote.markdown.length),
-      annotations: [
-        externalMarkdownUpdate.of(true),
-        Transaction.addToHistory.of(false),
-      ],
+    measureTextBufferOperation("serein/editor/sync-markdown", () => {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: activeNote.markdown },
+        selection: selectionClampedToDocument(view.state.selection, activeNote.markdown.length),
+        annotations: [
+          externalMarkdownUpdate.of(true),
+          Transaction.addToHistory.of(false),
+        ],
+      });
     });
   }, [activeNote.id, activeNote.markdown, decorationOptions]);
 

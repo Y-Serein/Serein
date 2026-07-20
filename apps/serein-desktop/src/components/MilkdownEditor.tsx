@@ -60,7 +60,11 @@ import {
   yamlListValueFromInput,
 } from "../shared/markdown";
 import { codeBlockConfig } from "./codeBlockConfig";
-import { readDesktopClipboardText, writeDesktopClipboardText } from "../services/clipboard";
+import {
+  hasDesktopClipboardRuntime,
+  readDesktopClipboardText,
+  writeDesktopClipboardText,
+} from "../services/clipboard";
 import { sereinCodeBlockView } from "./sereinCodeBlockView";
 
 type MilkdownEditorProps = {
@@ -354,9 +358,84 @@ function selectedRichText(view: EditorView) {
   return view.state.doc.textBetween(from, to, "\n\n", "\n");
 }
 
+type RichCutSelectionSnapshot = {
+  selection: Selection;
+  text: string;
+};
+
+const richCutInFlight = new WeakSet<EditorView>();
+
+function syncRichSelectionFromDOM(view: EditorView) {
+  const rootSelection = (view.root as unknown as { getSelection?: typeof window.getSelection }).getSelection?.();
+  const domSelection = rootSelection ?? window.getSelection();
+  const anchorNode = domSelection?.anchorNode;
+  const focusNode = domSelection?.focusNode;
+  if (!domSelection || domSelection.isCollapsed || !anchorNode || !focusNode) {
+    return !view.state.selection.empty;
+  }
+  if (!view.dom.contains(anchorNode) || !view.dom.contains(focusNode)) {
+    return !view.state.selection.empty;
+  }
+
+  try {
+    const elementForNode = (node: Node) => node instanceof Element ? node : node.parentElement;
+    const anchorCodeBlock = elementForNode(anchorNode)?.closest<HTMLElement>(".milkdown-code-block") ?? null;
+    const focusCodeBlock = elementForNode(focusNode)?.closest<HTMLElement>(".milkdown-code-block") ?? null;
+    if (anchorCodeBlock && anchorCodeBlock === focusCodeBlock) {
+      const content = anchorCodeBlock.querySelector<HTMLElement>(".serein-code-content");
+      const codeBlockPos = content ? findCodeBlockPos(view, anchorCodeBlock) : null;
+      const codeBlockNode = codeBlockPos === null ? null : view.state.doc.nodeAt(codeBlockPos);
+      if (content && codeBlockPos !== null && codeBlockNode?.type.name === "code_block") {
+        const offsetAtDOM = (node: Node, offset: number) => {
+          const range = document.createRange();
+          range.selectNodeContents(content);
+          range.setEnd(node, offset);
+          return Math.max(0, Math.min(range.toString().length, codeBlockNode.textContent.length));
+        };
+        const anchorOffset = offsetAtDOM(anchorNode, domSelection.anchorOffset);
+        const headOffset = offsetAtDOM(focusNode, domSelection.focusOffset);
+        const nextSelection = TextSelection.create(
+          view.state.doc,
+          codeBlockPos + 1 + anchorOffset,
+          codeBlockPos + 1 + headOffset,
+        );
+        if (nextSelection.empty) return false;
+        view.dispatch(view.state.tr.setSelection(nextSelection));
+        return true;
+      }
+    }
+
+    const anchor = view.posAtDOM(anchorNode, domSelection.anchorOffset, -1);
+    const head = view.posAtDOM(focusNode, domSelection.focusOffset, 1);
+    const nextSelection = TextSelection.create(view.state.doc, anchor, head);
+    if (nextSelection.empty) return false;
+    view.dispatch(view.state.tr.setSelection(nextSelection));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function selectionIsInsideSingleCodeBlock(view: EditorView) {
+  const { from, to } = view.state.selection;
+  if (from === to) return false;
+
+  const $from = view.state.doc.resolve(from);
+  const $to = view.state.doc.resolve(to);
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const node = $from.node(depth);
+    if (node.type.name === "code_block" && $to.depth >= depth && $to.node(depth) === node) return true;
+  }
+  return false;
+}
+
 function selectedRichMarkdown(view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
   const { from, to, empty } = view.state.selection;
   if (empty) return "";
+
+  if (selectionIsInsideSingleCodeBlock(view)) {
+    return selectedRichText(view);
+  }
 
   const slice = view.state.doc.slice(from, to, true);
   const doc = view.state.schema.topNodeType.createAndFill(undefined, slice.content);
@@ -365,19 +444,60 @@ function selectedRichMarkdown(view: EditorView, serializer: (doc: ProsemirrorNod
   return normalizeRichMarkdownEscapes(normalizeRichSerializedSpaces(serializer(doc)));
 }
 
-function copyRichSelection(view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
+function captureRichSelection(view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
+  if (!syncRichSelectionFromDOM(view)) return null;
   const text = selectedRichMarkdown(view, serializer);
-  if (!text) return false;
-  writeDesktopClipboardText(text);
+  if (!text) return null;
+  return {
+    selection: view.state.selection,
+    text,
+  } satisfies RichCutSelectionSnapshot;
+}
+
+function richSelectionStillMatches(
+  view: EditorView,
+  serializer: (doc: ProsemirrorNode) => string,
+  snapshot: RichCutSelectionSnapshot,
+) {
+  return view.state.selection.eq(snapshot.selection)
+    && selectedRichMarkdown(view, serializer) === snapshot.text;
+}
+
+async function commitRichCut(
+  view: EditorView,
+  serializer: (doc: ProsemirrorNode) => string,
+  snapshot: RichCutSelectionSnapshot,
+) {
+  if (richCutInFlight.has(view)) return false;
+  richCutInFlight.add(view);
+
+  try {
+    if (hasDesktopClipboardRuntime() && !await writeDesktopClipboardText(snapshot.text)) {
+      return false;
+    }
+
+    if (!richSelectionStillMatches(view, serializer, snapshot)) return false;
+
+    view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
+    view.focus();
+    return true;
+  } finally {
+    richCutInFlight.delete(view);
+  }
+}
+
+function copyRichSelection(view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
+  const snapshot = captureRichSelection(view, serializer);
+  if (!snapshot) return false;
+  void writeDesktopClipboardText(snapshot.text);
   view.focus();
   return true;
 }
 
-function cutRichSelection(view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
-  if (!copyRichSelection(view, serializer)) return false;
-  view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
-  view.focus();
-  return true;
+async function cutRichSelection(view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
+  const snapshot = captureRichSelection(view, serializer);
+  if (!snapshot) return false;
+  return commitRichCut(view, serializer, snapshot);
 }
 
 function pasteRichText(view: EditorView) {
@@ -393,14 +513,18 @@ function pasteRichText(view: EditorView) {
   });
 }
 
-function writeRichClipboardEvent(event: ClipboardEvent, view: EditorView, serializer: (doc: ProsemirrorNode) => string) {
-  const text = selectedRichMarkdown(view, serializer);
-  if (!text || !event.clipboardData) return false;
+function prepareRichClipboardEvent(
+  event: ClipboardEvent,
+  view: EditorView,
+  serializer: (doc: ProsemirrorNode) => string,
+) {
+  const snapshot = captureRichSelection(view, serializer);
+  if (!snapshot || !event.clipboardData) return null;
 
   event.preventDefault();
   event.stopPropagation();
-  event.clipboardData.setData("text/plain", text);
-  return true;
+  event.clipboardData.setData("text/plain", snapshot.text);
+  return snapshot;
 }
 
 function clearNativeSelection(view?: EditorView) {
@@ -1992,8 +2116,10 @@ function runEditorCommand(editor: Editor, command: EditorCommandSignal, onResult
         }
         break;
       case "cut":
-        handled = cutRichSelection(view, serializer);
-        break;
+        void cutRichSelection(view, serializer)
+          .then((nextHandled) => onResult({ command, handled: nextHandled }))
+          .catch(() => onResult({ command, handled: false }));
+        return;
       case "copy":
         handled = copyRichSelection(view, serializer);
         break;
@@ -2472,10 +2598,10 @@ function EditorSurface({
         const languagePickerItem = target?.closest<HTMLElement>(".language-list-item[data-language]") ?? null;
         const isCodeBlockControlTarget = Boolean(languageButton || languagePickerItem || target?.closest(".language-picker"));
         const isCodeBlockContentTarget = Boolean(selectionCodeBlock && !isCodeBlockControlTarget);
+        const key = event.key.toLowerCase();
         const isPlainArrowDown = event.key === "ArrowDown" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
         const isPlainArrowUp = event.key === "ArrowUp" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
         const isPlainTab = event.key === "Tab" && !event.altKey && !event.ctrlKey && !event.metaKey;
-        const key = event.key.toLowerCase();
         const isUndo = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && key === "z";
         const isRedo = (event.ctrlKey || event.metaKey) && !event.altKey && (key === "y" || (event.shiftKey && key === "z"));
         if (codeBlock) scheduleActiveCodeBlockRefresh(event.target);
@@ -2878,12 +3004,17 @@ function EditorSurface({
         window.requestAnimationFrame(() => refreshLocalImagePreviews(view.dom, imagePreviewMapRef.current));
       };
       const handleCopy = (event: ClipboardEvent) => {
-        writeRichClipboardEvent(event, view, ctx.get(serializerCtx));
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("button, input, textarea, select, .language-picker")) return;
+        const snapshot = prepareRichClipboardEvent(event, view, ctx.get(serializerCtx));
+        if (snapshot) void writeDesktopClipboardText(snapshot.text);
       };
       const handleCut = (event: ClipboardEvent) => {
-        if (!writeRichClipboardEvent(event, view, ctx.get(serializerCtx))) return;
-        view.dispatch(view.state.tr.deleteSelection().scrollIntoView());
-        view.focus();
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("button, input, textarea, select, .language-picker")) return;
+        const snapshot = prepareRichClipboardEvent(event, view, ctx.get(serializerCtx));
+        if (!snapshot) return;
+        void commitRichCut(view, ctx.get(serializerCtx), snapshot).catch(() => undefined);
       };
       const handlePointerDown = (event: PointerEvent) => {
         const target = event.target instanceof Element ? event.target : null;

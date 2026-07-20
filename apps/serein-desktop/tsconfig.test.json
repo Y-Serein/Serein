@@ -17,6 +17,7 @@
     "src/editor/markdownPaste.ts",
     "src/editor/markdownHistory.ts",
     "src/editor/textBufferMarkdown.ts",
+    "src/editor/textBufferTransactions.ts",
     "src/explorer/tree.ts",
     "src/shared/markdown.ts",
     "src/vault/index.ts",

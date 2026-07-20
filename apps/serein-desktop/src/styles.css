@@ -2067,23 +2067,58 @@ button:disabled {
   font-size: 17px;
 }
 
-.serein-buffer-blockquote-line {
-  border-left: 3px solid color-mix(in srgb, var(--accent) 44%, transparent);
-  color: color-mix(in srgb, var(--ink) 82%, var(--muted));
+.serein-buffer-rich .serein-buffer-structure-line {
+  position: relative;
+  box-sizing: border-box;
+  margin-left: var(--serein-quote-indent, 0px);
+  padding-right: 16px;
+}
+
+.serein-buffer-rich .serein-buffer-quote-line {
+  border-left: 3px solid color-mix(in srgb, var(--accent-cool) 64%, var(--line));
+  background: color-mix(in srgb, var(--accent-cool) 7%, transparent);
+  color: color-mix(in srgb, var(--ink) 86%, var(--muted));
   padding-left: 14px;
 }
 
+.serein-buffer-rich .serein-buffer-quote-start {
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  padding-top: 7px;
+}
+
+.serein-buffer-rich .serein-buffer-quote-end {
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+  padding-bottom: 7px;
+}
+
 .serein-buffer-rich .serein-buffer-list-line {
-  position: relative;
-  padding-left: 24px;
+  padding-left: calc(30px + var(--serein-list-indent, 0px));
 }
 
 .serein-buffer-rich .serein-buffer-list-line::before {
   content: attr(data-list-marker);
   position: absolute;
-  left: 4px;
-  color: color-mix(in srgb, var(--accent) 64%, var(--muted));
+  left: calc(2px + var(--serein-list-indent, 0px));
+  width: 22px;
+  color: color-mix(in srgb, var(--muted) 88%, var(--ink));
   font: 650 1em / inherit var(--font-doc);
+  text-align: right;
+}
+
+.serein-buffer-rich .serein-buffer-list-line[data-list-kind="bullet"]::before {
+  width: 18px;
+  color: color-mix(in srgb, var(--accent) 68%, var(--muted));
+  text-align: center;
+}
+
+.serein-buffer-rich .serein-buffer-list-line[data-list-marker=""]::before {
+  content: none;
+}
+
+.serein-buffer-rich .serein-buffer-quote-line.serein-buffer-list-line {
+  padding-left: calc(30px + var(--serein-list-indent, 0px));
 }
 
 .serein-text-buffer-editor .serein-buffer-code-fence-line,
@@ -2132,10 +2167,14 @@ button:disabled {
 
 .serein-buffer-rich .serein-buffer-code-first {
   padding-top: 16px;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
 }
 
 .serein-buffer-rich .serein-buffer-code-last {
   padding-bottom: 16px;
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
 }
 
 .serein-buffer-code-tools {
@@ -2338,12 +2377,14 @@ button:disabled {
   gap: 6px;
   max-width: 920px;
   overflow-x: auto;
-  margin: 18px 0 22px;
+  margin: 0;
+  padding: 0;
 }
 
 .serein-buffer-table-toolbar {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -2379,6 +2420,30 @@ button:disabled {
 
 .serein-buffer-table-block th {
   background: color-mix(in srgb, var(--accent) 7%, var(--paper-soft));
+}
+
+.serein-buffer-table-header-cell {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(86px, 1fr) 24px;
+  align-items: stretch;
+}
+
+.serein-buffer-table-align {
+  min-width: 24px;
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--ink) 10%, var(--line));
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  font: 12px/1 var(--font-ui);
+}
+
+.serein-buffer-table-align:hover,
+.serein-buffer-table-align:focus-visible {
+  background: color-mix(in srgb, var(--accent-cool) 10%, transparent);
+  color: var(--ink);
+  outline: 0;
 }
 
 .serein-buffer-table-block input {
