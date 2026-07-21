@@ -1,6 +1,6 @@
 # Serein Capability Baseline
 
-最后更新：2026-07-07
+最后更新：2026-07-15
 适用范围：`apps/serein-desktop/`
 
 本文件记录当前 Serein 已有能力、能力边界和后续修改保护规则。
@@ -24,7 +24,7 @@
 
 | 能力 | 已有能力 | 当前问题 / 边界 | 保护级别 |
 | --- | --- | --- | --- |
-| 单编辑器顺滑感 | 默认路径有 `EditorHost` 统一入口；Rich/Plain 共用同一份 Markdown 数据；有 App 层 markdown history 过渡；实验 text-buffer 路径已用同一 CodeMirror buffer 覆盖基础 Rich/Source 切换、代码块语言、表格、图片、frontmatter、wiki/link 第一段能力 | 默认路径本质仍是 `textarea` + `Milkdown` 两套实例；实验路径未成为默认，表格高级操作、wiki 候选/创建、真实 Vault 目录跳转和 Windows release 仍未完整验证 | 高 |
+| 单编辑器顺滑感 | 默认路径有 `EditorHost` 统一入口；Rich/Plain 共用同一份 Markdown 数据；有 App 层 markdown history 过渡；实验 text-buffer 路径已用同一 CodeMirror buffer 覆盖基础 Rich/Source 切换、代码块语言、表格、图片、frontmatter、wiki/link；大文本 paste 改为 direct transaction，行内 decoration 限制在 `visibleRanges` | 默认路径本质仍是 `textarea` + `Milkdown` 两套实例；实验路径未成为默认，wiki 候选/创建、真实 Vault 目录跳转、图片/frontmatter 完整回归和 Windows release 仍未完整验证 | 高 |
 | Rich Edit 基础编辑 | Milkdown + CommonMark + GFM；支持标题、列表、引用、粗斜体、删除线、代码块、表格、图片、history | 自定义事件层较多，容易被重构破坏 | 高 |
 | Ctrl+Z / Redo | Rich 内部已恢复滚动补偿：目标可见则保持滚动，离屏则滚到附近/中间 | 需要 GUI/Windows release 复测；跨 Plain/Rich 切换 undo 仍未根治 | 高 |
 | 代码块编辑 | 代码文本和 selection 归 ProseMirror/Milkdown；NodeView 只做语言按钮、候选、复制、高亮 wrapper | EOF、嵌套 list/quote/code、语言控件焦点仍需回归 | 高 |
@@ -32,7 +32,7 @@
 | 代码块语言 | 支持右下语言控件、键盘编辑、候选选择、`bash` alias、未知语言保留、语法高亮加载 | 语言控件参与导航退出流程，事件路径脆弱 | 高 |
 | 链接编辑 | 标准 Markdown link 支持展开/收回；普通点击编辑，`Ctrl/Cmd+点击`跳转；支持 wiki link、目录 index、本地/外部跳转分流 | 状态机复杂，后续必须保护 | 高 |
 | Vault 链接能力 | 有反链、出链、未解析链接、未链接提及、歧义链接选择、创建未解析目标、重命名后确认更新链接 | 这是知识工作流能力，不等于 Markdown mind map | 中高 |
-| 表格 | Rich 里有 Milkdown `tableBlock`；有行列按钮、对齐按钮、导出表格；最后行 `ArrowDown` 有退出逻辑 | 需要系统回归：键盘退出、行列操作、保存一致性 | 中高 |
+| 表格 | 默认 Rich 有 Milkdown `tableBlock`；实验 text-buffer 支持单元格编辑、增删/移动行列、对齐、Tab/Shift+Tab、Enter 新增行、ArrowDown/Escape 退出、焦点与横向滚动恢复 | Chromium/Vite 已系统回归；Windows WebView2 和真实文件保存仍需验证 | 中高 |
 | 图片 | 支持粘贴、拖入、导入图片，复制到附件目录并写入 Markdown 图片路径；Rich 可预览本地图片 | 图片路径、安全、保存是高风险路径 | 高 |
 | Frontmatter | Rich 顶部属性条；支持 tags/aliases/status；Vault 标签索引按 `status: active/inactive` | Rich serializer 和 App 同步边界要谨慎 | 中高 |
 | 数学公式 | HTML/PDF 导出层能保留 `$x$` / `$$...$$`，渲成 `math-inline/math-block` 文本容器 | 当前没有 `katex` 依赖，不是 KaTeX 真渲染；Rich 里不是核心能力 | 低中 |

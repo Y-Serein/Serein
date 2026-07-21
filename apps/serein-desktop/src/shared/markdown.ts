@@ -94,6 +94,10 @@ export function markdownSetextHeadingLevel(
   return marker[1].startsWith("=") ? 1 : 2;
 }
 
+export function isMarkdownTableDelimiterCell(text: string) {
+  return /^:?-+:?$/.test(text.trim());
+}
+
 function markdownSourceLines(markdown: string, start: number) {
   let offset = start;
   return markdown.slice(start).split("\n").map((text) => {

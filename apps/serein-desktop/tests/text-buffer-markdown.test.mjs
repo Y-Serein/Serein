@@ -29,6 +29,7 @@ import {
   textBufferCodeBlockContentRange,
   textBufferCodeBlockReplacementText,
   textBufferSafeCutRanges,
+  textBufferTableCompletionFromPipeRow,
   textBufferSmartSelectAllRange,
   textBufferVisibleClipboardRanges,
 } from "../.test-dist/editor/textBufferMarkdown.js";
@@ -354,6 +355,37 @@ test("scans pipe tables from the CodeMirror markdown syntax tree", () => {
     ["1", "2"],
     ["escaped | pipe", "x"],
   ]);
+});
+
+test("scans short GFM table delimiters and preserves empty cells", () => {
+  const markdown = [
+    "| 模块         | 概念 | 推导 | 编程实验 | 工程应用 | 科研表达 |  总分 | 评级 |",
+    "| ---------- | -: | -: | ---: | ---: | ---: | --: | -- |",
+    "| 线性代数       |    |    |      |      |      | /20 |    |",
+  ].join("\n");
+  const analysis = analyzeTextBufferMarkdown(markdown);
+  const tables = scanTextBufferTables(markdown, analysis);
+
+  assert.equal(tables.length, 1);
+  assert.deepEqual(tables[0].rows, [
+    ["模块", "概念", "推导", "编程实验", "工程应用", "科研表达", "总分", "评级"],
+    ["线性代数", "", "", "", "", "", "/20", ""],
+  ]);
+  assert.deepEqual(tables[0].alignments, [
+    "default", "right", "right", "right", "right", "right", "right", "default",
+  ]);
+});
+
+test("creates a normalized table from a pipe row", () => {
+  assert.equal(
+    textBufferTableCompletionFromPipeRow("| 1 | 12 | 12 |"),
+    [
+      "| 1 | 12 | 12 |",
+      "| --- | --- | --- |",
+      "|  |  |  |",
+    ].join("\n"),
+  );
+  assert.equal(textBufferTableCompletionFromPipeRow("| --- | --- |"), null);
 });
 
 test("tracks fenced code block coordinates and language", () => {

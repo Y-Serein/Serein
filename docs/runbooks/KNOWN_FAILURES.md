@@ -274,3 +274,85 @@
 - 按 Enter 才在当前位置生成 local closer。
 - 普通同一行 InlineCode 与多行深缩进兼容路径分开处理。
 - UI 回归使用干净 Vite 端口冷启动。
+
+## 2026-07-15｜大文本原生 paste 走 contenteditable DOM mutation 导致分钟级冻结
+
+### 现象
+
+- 约 300-540 KB、5000 行 Markdown 一次性粘贴时，编辑器可能冻结两分钟左右。
+- 同一文档切换、方向键和普通编辑相对正常，容易被误报成“整个编辑器/解析器都慢”。
+
+### 根因
+
+- 原生 paste handler 过去只接管图片；纯文本返回 false，浏览器先修改 `contenteditable` DOM，再由 CodeMirror `readChange/findChild` 反向恢复 transaction。
+- 自定义 Markdown 结构、链接和表格扫描在 5000 行样本上只有毫秒级，不是分钟级冻结的主因。
+- selection 变化仍会触发全文 decoration 重建，虽然不是 paste 的首要根因，但会放大长文档高频导航成本。
+
+### 禁止恢复
+
+- 不要让 text-buffer 原生纯文本 paste 回落到浏览器 DOM mutation 路径。
+- 不要因为大 paste 卡顿就先重写 parser、引入 worker 或删除 Rich decoration；必须先测 transaction、parser、DOM 和 React 各层耗时。
+- 不要把跨行 replace 或 block widget 搬到 `ViewPlugin`；当前 CodeMirror 会拒绝这类 plugin decoration。
+- 不要用 Playwright 逐次远程 `keyboard.press` 的总墙钟时间作为编辑器内部方向键性能结论。
+
+### 当前允许状态
+
+- 图片 paste 优先走原附件导入；无文件时读取事件自身 `clipboardData.getData("text/plain")`，阻止默认行为并 dispatch 单个 `input.paste` transaction。
+- 全文 StateField 只负责代码块、表格、隐藏行等跨行结构；链接、Wiki、强调和图片等行内装饰使用 `visibleRanges`。
+- 使用 `performance` entries 区分 `serein/editor/paste-text`、`serein/editor/open-note`、`serein/editor/sync-markdown`。
+- 5000 行 direct transaction 有 Node 预算测试；真实 DOM paste、方向键和表格用干净 Vite + Playwright 验证。
+
+## 2026-07-16｜Rich 表格隐藏源码留下可点击幽灵行
+
+### 现象
+
+- Rich 表格下方出现与表格行数相关的大块空白。
+- 光标看似落在表格外，按 `Enter` 后表格只剩前几行，后续行以裸 Markdown 显示。
+- 该操作会让文档进入 dirty 状态，不是单纯视觉闪烁。
+
+### 根因
+
+- 表格 widget 只挂在 header 行，源码文字逐行用 replace decoration 隐藏。
+- 表格内部换行没有被整段替换，后续源码行仍各自保留正常行高和点击坐标。
+- 用户点击视觉空白时，CodeMirror selection 实际进入隐藏表格源码；下一次输入直接拆分 Markdown 表格。
+
+### 禁止恢复
+
+- 不要用“首行 widget + 每行隐藏文字”表达跨多行 Rich 表格。
+- 不要只把幽灵行 CSS 高度设为 0；表格源码仍可能通过键盘 selection 进入。
+- 不要把该问题误判为 table parser、blur commit 或用户点错；先记录 Rich DOM 行高和真实 selection。
+- 不要在跨行表格 widget 上恢复上下 margin；CodeMirror 测量不包含外部 margin，会让视觉行和 `posAtCoords` 错一行。
+- 不要把同样的间距机械搬成 widget padding；padding 属于不可编辑 widget 区域，会吞掉用户在视觉空白处的点击。
+
+### 当前允许状态
+
+- 在全文 decoration StateField 中，用覆盖完整 table source range 的原子 block replacement 渲染表格。
+- 表格 widget 自身保持 `margin: 0; padding: 0`；表格前后可编辑间距来自 Markdown 的真实空行。
+- Source 模式继续显示原始 Markdown；Rich widget 的编辑操作仍立即序列化回同一 Markdown buffer。
+- 回归必须检查：Rich DOM 不保留表格源码幽灵行；点击表格下方并输入不会拆表；表格编辑、行列操作、对齐、退出和 Source 保真仍通过。
+
+## 2026-07-17｜Rich 局部代码选区复制出 closing fence，Ctrl+X 无效
+
+### 现象
+
+- Rich 中只拖选代码块最后几行，粘贴结果末尾却出现 ` ``` `。
+- 同一选区按 `Ctrl+X` 后内容没有删除。
+- 随后继续输入时旧内容仍在，插入位置和用户看到的选区不一致。
+
+### 根因
+
+- closing fence 行在 Rich 中高度为 0 且不可见，但鼠标拖选终点落到块后空白/正文时，CodeMirror source range 仍跨过该行。
+- DOM selection 只显示可见代码；旧 clipboard 逻辑直接读取完整 source range，因此夹入隐藏 fence。
+- cut 随后删除包含部分 fence 的 source range，被 `protectRichCodeFenceLines()` 正确拒绝，表现为剪切失效。
+
+### 禁止恢复
+
+- 不要让 Rich copy/cut 直接使用未经可见范围映射的 `state.selection` 文本。
+- 不要为了让 cut 成功而放开普通事务修改 opening/closing fence。
+- 不要只删除 clipboard 中的字符串 ` ``` `；必须同步修正实际删除 ranges 和 cut 后 selection。
+
+### 当前允许状态
+
+- 部分选择代码块时，clipboard 映射剔除未配对的隐藏 opener/closer；完整代码块或全文选择仍保留成对 fence。
+- cut 只删除与 clipboard 相同的可见源码片段，并在 closing fence 前保留一个结构换行，形成可继续输入的合法空代码行。
+- DOM 快捷键、顶部菜单和 Tauri 原生 clipboard 使用同一映射与异步删除安全检查。

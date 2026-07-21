@@ -2,6 +2,7 @@ import {
   closingMarkdownFence as closingFence,
   markdownContainerPrefixLength,
   markdownSetextHeadingLevel,
+  isMarkdownTableDelimiterCell,
   openingMarkdownFence as openingFence,
   splitYamlFrontmatter,
   type MarkdownFenceInfo as FenceInfo,
@@ -523,7 +524,7 @@ function splitTextBufferPipeTableRow(text: string) {
 
 function parseTextBufferTableAlignment(cell: string): TextBufferTableAlignment | null {
   const value = cell.trim();
-  if (!/^:?-{3,}:?$/.test(value)) return null;
+  if (!isMarkdownTableDelimiterCell(value)) return null;
   if (value.startsWith(":") && value.endsWith(":")) return "center";
   if (value.endsWith(":")) return "right";
   if (value.startsWith(":")) return "left";
@@ -670,6 +671,17 @@ export function serializeTextBufferTable(table: TextBufferTableData) {
   return [header, separator, ...escapedRows.slice(1)]
     .map((row) => `| ${row.join(" | ")} |`)
     .join("\n");
+}
+
+export function textBufferTableCompletionFromPipeRow(text: string) {
+  const header = splitTextBufferPipeTableRow(text);
+  if (!header || header.length < 2) return null;
+  if (!header.some((cell) => cell.trim()) || header.every(isMarkdownTableDelimiterCell)) return null;
+
+  return serializeTextBufferTable({
+    rows: [header, Array.from({ length: header.length }, () => "")],
+    alignments: Array.from({ length: header.length }, () => "default"),
+  });
 }
 
 export function insertTextBufferTableRow(table: TextBufferTableData, afterRow: number) {

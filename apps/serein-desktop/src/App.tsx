@@ -34,14 +34,8 @@ import {
   writeShortcuts,
 } from "./command/shortcuts";
 import { resolveGlobalAppShortcuts } from "./command/globalShortcuts";
-import type { EditorCommandAction, EditorCommandResult, Note } from "./domain/model";
+import type { EditorCommandAction, Note } from "./domain/model";
 import { createDemoVault, readDemoMarkdownFile } from "./dev/demoVault";
-import {
-  recordMarkdownHistoryEntry,
-  takeMarkdownHistorySnapshot,
-  type MarkdownHistoryStore,
-} from "./editor/markdownHistory";
-import { applyPlainEditorCommand } from "./editor/plainCommands";
 import { directoryFromResponse, preserveLoadedDirectoryChildren, updateVaultNode } from "./explorer/tree";
 import { AppContextMenu } from "./features/context-menu/AppContextMenu";
 import type { AppContextMenuItem, ContextMenuIcon } from "./features/context-menu/AppContextMenu";
@@ -104,15 +98,12 @@ import {
   isSameOrChildPath,
   joinVaultPath,
   markdownHeadingTargetAt,
-  normalizeRichMarkdownEscapes,
   normalizeWikiLinkEscapes,
   normalizeFilePath,
   parentVaultDir,
   pathExtension,
   pathFileName,
-  resolveMarkdownHeading,
   stripExtension,
-  splitYamlFrontmatter,
   vaultFileNameCandidate,
 } from "./shared/markdown";
 import {
@@ -161,7 +152,6 @@ const QUICK_NOTE_MIN_HEIGHT = 240;
 const QUICK_NOTE_MAX_WIDTH = 1200;
 const QUICK_NOTE_MAX_HEIGHT = 1200;
 const QUICK_NOTE_MAX_POSITION = 100000;
-const EXPERIMENTAL_TEXT_BUFFER_EDITOR_KEY = "serein.experimentalTextBufferEditor";
 type PaletteMode = "quickOpen" | "command";
 type ContextMenuState = {
   x: number;
@@ -179,7 +169,7 @@ const SEARCH_SEED_MAX_LENGTH = 160;
 
 function isEditorTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
-    && Boolean(target.closest(".markdown-editor, .ProseMirror, .milkdown, .serein-text-buffer-editor, .cm-editor"));
+    && Boolean(target.closest(".serein-text-buffer-editor, .cm-editor"));
 }
 
 function elementFromNode(node: Node | null) {
@@ -229,7 +219,7 @@ function clearWindowSelectionSoon() {
 
 function isEditorTextControlTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
-    && Boolean(target.closest(".markdown-editor, .ProseMirror, .serein-text-buffer-editor, .cm-editor"));
+    && Boolean(target.closest(".serein-text-buffer-editor, .cm-editor"));
 }
 
 function nativeTextControlFromTarget(target: EventTarget | null) {
@@ -243,14 +233,6 @@ function nativeTextControlFromTarget(target: EventTarget | null) {
 
 function canUseNativeTextControl(control: HTMLInputElement | HTMLTextAreaElement | null): control is HTMLInputElement | HTMLTextAreaElement {
   return Boolean(control && document.contains(control) && !control.disabled && !control.readOnly);
-}
-
-function readExperimentalTextBufferEditorEnabled() {
-  try {
-    return window.localStorage.getItem(EXPERIMENTAL_TEXT_BUFFER_EDITOR_KEY) === "1";
-  } catch {
-    return false;
-  }
 }
 
 function nativeEditCommandFromCommandId(commandId: string): NativeEditCommand | null {
@@ -431,53 +413,19 @@ function markdownEqualForDirty(left: string, right: string) {
   return left === right || normalizeMarkdownDirtyText(left) === normalizeMarkdownDirtyText(right);
 }
 
-function firstMeaningfulMarkdownLine(markdown: string) {
-  return markdown
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .find(Boolean) ?? null;
-}
-
-function preserveSavedFrontmatter(note: Note, markdown: string) {
-  const savedParts = splitYamlFrontmatter(note.savedMarkdown ?? "");
-  if (!savedParts || !note.richSavedMarkdown) return markdown;
-
-  const bodyAnchor = firstMeaningfulMarkdownLine(savedParts.body);
-  if (!bodyAnchor) return markdown;
-
-  const richBodyStart = note.richSavedMarkdown.indexOf(bodyAnchor);
-  if (richBodyStart <= 0) return markdown;
-
-  const richFrontmatterPrefix = note.richSavedMarkdown.slice(0, richBodyStart);
-  if (!markdown.startsWith(richFrontmatterPrefix)) return markdown;
-
-  return `${savedParts.frontmatter}${markdown.slice(richFrontmatterPrefix.length)}`;
-}
-
-function noteDirtyForMarkdown(note: Note, markdown: string, options: { compareRichBaseline?: boolean } = {}) {
+function noteDirtyForMarkdown(note: Note, markdown: string) {
   const savedMarkdown = note.savedMarkdown ?? "";
   if (markdownEqualForDirty(markdown, savedMarkdown)) return false;
-  return !(options.compareRichBaseline
-    && note.richSavedMarkdown
-    && markdownEqualForDirty(markdown, note.richSavedMarkdown));
+  return true;
 }
 
-function noteWithMarkdown(note: Note, markdown: string, options: { compareRichBaseline?: boolean } = {}): Note {
-  const dirty = noteDirtyForMarkdown(note, markdown, options);
-  const savedMarkdown = note.savedMarkdown ?? "";
-  const editedMarkdown = dirty && options.compareRichBaseline
-    ? preserveSavedFrontmatter(note, markdown)
-    : markdown;
-  const nextMarkdown = !dirty && options.compareRichBaseline && !markdownEqualForDirty(markdown, savedMarkdown)
-    ? savedMarkdown
-    : editedMarkdown;
+function noteWithMarkdown(note: Note, markdown: string): Note {
+  const dirty = noteDirtyForMarkdown(note, markdown);
 
   return {
     ...note,
-    title: titleFromMarkdown(nextMarkdown, note.title),
-    markdown: nextMarkdown,
-    richSavedMarkdown: options.compareRichBaseline ? note.richSavedMarkdown : undefined,
+    title: titleFromMarkdown(markdown, note.title),
+    markdown,
     updatedAt: dirty ? new Date().toISOString() : note.updatedAt,
     dirty,
   };
@@ -495,7 +443,7 @@ function shellContextMenuTarget(target: EventTarget | null): ContextMenuState["t
   if (!element) return null;
   if (element.closest(".app-context-menu, .app-dialog-shell")) return null;
   if (element.closest(".app-chrome, .workspace-ribbon, .left-rail, .right-rail, .workspace-statusbar, .workspace-tabbar, .sidebar-resizer, .right-panel-resizer, .center-graph-resizer")) return null;
-  if (element.closest(".editor-surface, .markdown-editor, .milkdown, .ProseMirror, .serein-text-buffer-editor, .cm-editor, textarea")) return "editor";
+  if (element.closest(".editor-surface, .serein-text-buffer-editor, .cm-editor")) return "editor";
   if (element.closest(".workspace-leaf.markdown-leaf, .workspace-center")) return "workspace";
   return null;
 }
@@ -555,13 +503,6 @@ function sourceLineBounds(markdown: string, lineNumber: number) {
   };
 }
 
-function normalizeSourceMatchText(value: string) {
-  return value
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLocaleLowerCase();
-}
-
 function markdownSourceDisplayText(value: string) {
   return value
     .replace(/!\[\[([^\]]+)]]/g, (_, raw: string) => raw.split("|", 2)[1] ?? raw.split("#", 1)[0])
@@ -572,18 +513,6 @@ function markdownSourceDisplayText(value: string) {
     .replace(/[*_~>#-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function sourceMatchCandidates(lineText: string, targetText: string | null) {
-  return [
-    targetText ?? "",
-    lineText,
-    markdownSourceDisplayText(targetText ?? ""),
-    markdownSourceDisplayText(lineText),
-  ]
-    .map(normalizeSourceMatchText)
-    .filter((candidate, index, candidates) => candidate.length >= 2 && candidates.indexOf(candidate) === index)
-    .sort((left, right) => right.length - left.length);
 }
 
 function sourceSelectionCandidates(lineText: string, targetText: string | null) {
@@ -600,23 +529,6 @@ function sourceSelectionCandidates(lineText: string, targetText: string | null) 
   addCandidate(lineText);
 
   return candidates;
-}
-
-function findTextNodeMatch(root: HTMLElement, candidates: string[]) {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let node = walker.nextNode();
-  while (node) {
-    const text = node.textContent ?? "";
-    const lowerText = text.toLocaleLowerCase();
-    for (const candidate of candidates) {
-      const matchIndex = lowerText.indexOf(candidate.toLocaleLowerCase());
-      if (matchIndex >= 0) {
-        return { node, start: matchIndex, end: matchIndex + candidate.length };
-      }
-    }
-    node = walker.nextNode();
-  }
-  return null;
 }
 
 function normalizeMarkdownHrefTarget(href: string) {
@@ -762,12 +674,6 @@ function ensureExportExtension(path: string, format: "html" | "pdf") {
   return `${path}.${format}`;
 }
 
-function markdownImageText(src: string, alt: string) {
-  const cleanAlt = alt.replace(/[\]\n\r]/g, " ").trim();
-  const cleanSrc = /[\s\\()]/.test(src) ? `<${src}>` : src;
-  return `![${cleanAlt}](${cleanSrc})`;
-}
-
 function readableError(error: unknown) {
   if (error instanceof Error) return error.message;
   const message = String(error);
@@ -863,8 +769,8 @@ export default function App() {
     setTagFeaturesEnabled,
     showFrontmatterTagRow,
     setShowFrontmatterTagRow,
-    richCommand,
-    setRichCommand,
+    editorCommand,
+    setEditorCommand,
     defaultSaveExt,
     setDefaultSaveExt,
     quickNoteSaveExt,
@@ -898,12 +804,10 @@ export default function App() {
     shortcutEdits,
     setShortcutEdits,
   } = store;
-  const [textBufferEditorEnabled, setTextBufferEditorEnabled] = useState(readExperimentalTextBufferEditorEnabled);
   const menuBarRef = useRef<HTMLElement | null>(null);
   const appDialogInputRef = useRef<HTMLInputElement | null>(null);
   const appDialogResolverRef = useRef<((value: AppDialogResult) => void) | null>(null);
   const editorSurfaceRef = useRef<HTMLElement | null>(null);
-  const plainEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const lastFocusedNativeTextControlRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const saveBeforeContinueRef = useRef<(() => Promise<boolean>) | null>(null);
   const saveActiveNoteRef = useRef<((options?: { trustDirtyFlag?: boolean }) => Promise<boolean>) | null>(null);
@@ -916,10 +820,7 @@ export default function App() {
   const loadedDemoVaultRef = useRef(false);
   const pendingHeadingRef = useRef<string | null>(null);
   const sidebarRevealKeyRef = useRef<string | null>(null);
-  const richCommandIdRef = useRef(0);
-  const markdownHistoryRef = useRef<MarkdownHistoryStore>(new Map());
-  const previousEditorModeRef = useRef(editorMode);
-  const crossModeHistoryBridgeRef = useRef(false);
+  const editorCommandIdRef = useRef(0);
   const vaultIndexRefreshIdRef = useRef(0);
   const scheduledVaultIndexRefreshRef = useRef<{ idleId: number | null; timeoutId: number | null } | null>(null);
   const vaultIndexFileOverridesRef = useRef<Map<string, VaultIndexFileResponse>>(new Map());
@@ -959,7 +860,7 @@ export default function App() {
   const activeNoteRef = useRef<Note>(activeNote);
   activeNoteRef.current = activeNote;
   const deferredActiveMarkdown = useDeferredValue(activeNote.markdown);
-  const outlineMarkdown = textBufferEditorEnabled ? activeNote.markdown : deferredActiveMarkdown;
+  const outlineMarkdown = activeNote.markdown;
   const t = appText[language];
   const hasActiveDocument = !isEmptyPlaceholder(activeNote);
   const outline = useMemo(() => extractMarkdownHeadings(outlineMarkdown), [outlineMarkdown]);
@@ -1088,19 +989,6 @@ export default function App() {
     setEditorMode(mode);
     setDefaultEditorModeSetting(mode);
   }, [setDefaultEditorModeSetting, setEditorMode]);
-
-  const setExperimentalTextBufferEditor = useCallback((enabled: boolean) => {
-    setTextBufferEditorEnabled(enabled);
-    try {
-      if (enabled) {
-        window.localStorage.setItem(EXPERIMENTAL_TEXT_BUFFER_EDITOR_KEY, "1");
-      } else {
-        window.localStorage.removeItem(EXPERIMENTAL_TEXT_BUFFER_EDITOR_KEY);
-      }
-    } catch {
-      // localStorage can be unavailable in restricted WebView contexts; runtime state still updates.
-    }
-  }, []);
 
   const showInputDialog = useCallback((title: string, defaultValue = "", message?: string) => (
     new Promise<string | null>((resolve) => {
@@ -1592,46 +1480,14 @@ export default function App() {
     };
   }, [requestCloseWindow]);
 
-  const recordMarkdownHistory = useCallback((noteId: string, beforeMarkdown: string, afterMarkdown: string) => {
-    recordMarkdownHistoryEntry(markdownHistoryRef.current, noteId, beforeMarkdown, afterMarkdown);
-  }, []);
-
   const handleMarkdownChange = useCallback((markdown: string) => {
-    crossModeHistoryBridgeRef.current = false;
-    const normalizedMarkdown = editorMode === "rich" && !textBufferEditorEnabled
-      ? normalizeRichMarkdownEscapes(markdown)
-      : normalizeWikiLinkEscapes(markdown);
-    const compareRichBaseline = editorMode === "rich" && !textBufferEditorEnabled;
+    const normalizedMarkdown = normalizeWikiLinkEscapes(markdown);
     setNotes((currentNotes) => currentNotes.map((note) => {
       if (note.id !== activeNoteId) return note;
       if (note.markdown === normalizedMarkdown) return note;
-      if (!textBufferEditorEnabled) {
-        recordMarkdownHistory(note.id, note.markdown, normalizedMarkdown);
-      }
-      return noteWithMarkdown(note, normalizedMarkdown, { compareRichBaseline });
+      return noteWithMarkdown(note, normalizedMarkdown);
     }));
-  }, [activeNoteId, editorMode, recordMarkdownHistory, textBufferEditorEnabled]);
-
-  useEffect(() => {
-    if (previousEditorModeRef.current !== editorMode) {
-      crossModeHistoryBridgeRef.current = !textBufferEditorEnabled;
-      previousEditorModeRef.current = editorMode;
-    }
-  }, [editorMode, textBufferEditorEnabled]);
-
-  const handleRichMarkdownBaseline = useCallback((markdown: string) => {
-    const normalizedMarkdown = normalizeRichMarkdownEscapes(markdown);
-    setNotes((currentNotes) => currentNotes.map((note) => {
-      if (note.id !== activeNoteId || note.dirty) return note;
-      const savedMarkdown = note.savedMarkdown ?? "";
-      if (!markdownEqualForDirty(note.markdown, savedMarkdown)) return note;
-      if (note.richSavedMarkdown && markdownEqualForDirty(note.richSavedMarkdown, normalizedMarkdown)) return note;
-      return {
-        ...note,
-        richSavedMarkdown: normalizedMarkdown,
-      };
-    }));
-  }, [activeNoteId]);
+  }, [activeNoteId, setNotes]);
 
   const loadVaultDirectory = useCallback(async (relativePath = "", root = vaultRoot) => {
     if (!root) {
@@ -1961,7 +1817,6 @@ export default function App() {
     const normalizedPath = ensureSaveExtension(path, defaultSaveExt);
     const markdownToSave = note.dirty ? note.markdown : (note.savedMarkdown ?? note.markdown);
     const contentToWrite = applyLineEnding(markdownToSave, note.lineEnding ?? "lf");
-    const compareRichBaseline = editorMode === "rich" && !textBufferEditorEnabled;
     const isExistingFileSave = note.filePath
       ? normalizeFilePath(normalizedPath) === normalizeFilePath(note.filePath)
       : false;
@@ -1971,9 +1826,6 @@ export default function App() {
       isExistingFileSave ? note.fileModifiedAtMs : null,
       isExistingFileSave ? note.fileSize : null,
     );
-    const richSavedMarkdown = compareRichBaseline
-      ? (note.dirty ? markdownToSave : note.richSavedMarkdown)
-      : undefined;
     const nextNote: Note = {
       ...note,
       title: stripExtension(file.fileName) || extractFirstLineTitle(markdownToSave) || note.title,
@@ -1985,7 +1837,6 @@ export default function App() {
       fileSize: file.size,
       lineEnding: note.lineEnding ?? detectLineEnding(file.content),
       savedMarkdown: markdownToSave,
-      richSavedMarkdown,
       updatedAt: new Date().toISOString(),
       dirty: false,
     };
@@ -2004,13 +1855,12 @@ export default function App() {
           fileSize: file.size,
           lineEnding: item.lineEnding ?? note.lineEnding ?? "lf",
           savedMarkdown: markdownToSave,
-          richSavedMarkdown,
         };
 
         return {
           ...currentWithSavedMetadata,
           title: titleFromMarkdown(item.markdown, currentWithSavedMetadata.title),
-          dirty: noteDirtyForMarkdown(currentWithSavedMetadata, item.markdown, { compareRichBaseline }),
+          dirty: noteDirtyForMarkdown(currentWithSavedMetadata, item.markdown),
         };
       }));
     });
@@ -2056,7 +1906,7 @@ export default function App() {
     setSavedAt(new Date());
     setSaveError(null);
     setSaveStatus(savedSnapshotStillCurrent ? "saved" : "idle");
-  }, [defaultSaveExt, editorMode, loadVaultDirectory, persistVaultPatch, scheduleVaultIndexRefresh, setVaultIndex, textBufferEditorEnabled, vaultIndexStatus, vaultRoot, vaultWorkspace.recentFiles]);
+  }, [defaultSaveExt, loadVaultDirectory, persistVaultPatch, scheduleVaultIndexRefresh, setVaultIndex, vaultIndexStatus, vaultRoot, vaultWorkspace.recentFiles]);
 
   const syncActiveNoteFromDisk = useCallback(async () => {
     if (demoVaultMode || !activeNote?.filePath) return;
@@ -2090,7 +1940,6 @@ export default function App() {
         fileSize: file.size,
         lineEnding: detectLineEnding(file.content),
         savedMarkdown: normalizedDiskContent,
-        richSavedMarkdown: undefined,
         updatedAt: new Date().toISOString(),
         dirty: false,
       };
@@ -2155,7 +2004,7 @@ export default function App() {
       if (activeNote.filePath) {
         const dirty = options.trustDirtyFlag
           ? Boolean(activeNote.dirty)
-          : noteDirtyForMarkdown(activeNote, activeNote.markdown, { compareRichBaseline: editorMode === "rich" && !textBufferEditorEnabled });
+          : noteDirtyForMarkdown(activeNote, activeNote.markdown);
         if (!dirty) {
           setSavedAt(new Date());
           setSaveError(null);
@@ -2173,7 +2022,7 @@ export default function App() {
       setSaveStatus("error");
       return false;
     }
-  }, [activeNote, editorMode, handleSaveAs, saveNoteToPath, setSaveError, setSaveStatus, t.errors.saveFailed, textBufferEditorEnabled]);
+  }, [activeNote, handleSaveAs, saveNoteToPath, setSaveError, setSaveStatus, t.errors.saveFailed]);
 
   useEffect(() => {
     saveActiveNoteRef.current = handleSave;
@@ -2333,37 +2182,6 @@ export default function App() {
     imageAttachmentFolder,
     imagePathStyle,
   ]);
-
-  const handlePlainEditorImageFiles = useCallback(async (files: File[]) => {
-    if (!activeNote) return false;
-    try {
-      const images = await importImagesForEditor(files);
-      if (!images.length) return false;
-
-      const textarea = plainEditorRef.current;
-      const selectionStart = textarea?.selectionStart ?? activeNote.markdown.length;
-      const selectionEnd = textarea?.selectionEnd ?? selectionStart;
-      const insertion = images.map((image) => markdownImageText(image.src, image.alt)).join("\n\n");
-      const prefix = selectionStart > 0 && !activeNote.markdown.slice(0, selectionStart).endsWith("\n") ? "\n" : "";
-      const suffix = activeNote.markdown.slice(selectionEnd).startsWith("\n") ? "" : "\n";
-      const nextMarkdown = `${activeNote.markdown.slice(0, selectionStart)}${prefix}${insertion}${suffix}${activeNote.markdown.slice(selectionEnd)}`;
-      const nextCursor = selectionStart + prefix.length + insertion.length;
-
-      setNotes((currentNotes) => currentNotes.map((note) => (
-        note.id === activeNote.id
-          ? noteWithMarkdown(note, nextMarkdown)
-          : note
-      )));
-      window.requestAnimationFrame(() => {
-        textarea?.focus();
-        textarea?.setSelectionRange(nextCursor, nextCursor);
-      });
-      return true;
-    } catch (error) {
-      console.error("Failed to import image", error);
-      return false;
-    }
-  }, [activeNote, importImagesForEditor, setNotes]);
 
   const buildExportImageMap = useCallback(async () => {
     const sources = collectLocalImageSources(deferredActiveMarkdown);
@@ -2686,127 +2504,12 @@ export default function App() {
       });
   }, [activeNote.filePath, loadVaultDirectory, persistVaultPatch, refreshVaultIndex, showConfirmDialog, t.errors.deleteFailed, t.prompts, vaultRoot]);
 
-  const replacePlainEditorSelection = useCallback((insertText: string) => {
-    const textarea = plainEditorRef.current;
-    if (!textarea || !activeNote) return;
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const value = textarea.value;
-    const nextMarkdown = `${value.slice(0, start)}${insertText}${value.slice(end)}`;
-    const nextCursor = start + insertText.length;
-
-    setNotes((currentNotes) => currentNotes.map((note) => {
-      if (note.id !== activeNote.id) return note;
-      return noteWithMarkdown(note, nextMarkdown);
-    }));
-
-    window.requestAnimationFrame(() => {
-      textarea.focus();
-      textarea.setSelectionRange(nextCursor, nextCursor);
-    });
-  }, [activeNote, setNotes]);
-
-  const applyMarkdownHistory = useCallback((direction: "undo" | "redo") => {
-    const note = activeNoteRef.current;
-    if (!note) return false;
-
-    const plainSelection = editorMode === "plain" && !textBufferEditorEnabled && plainEditorRef.current
-      ? {
-        start: plainEditorRef.current.selectionStart,
-        end: plainEditorRef.current.selectionEnd,
-      }
-      : null;
-    const nextMarkdown = takeMarkdownHistorySnapshot(markdownHistoryRef.current, note.id, note.markdown, direction);
-    if (nextMarkdown === null) return false;
-
-    const compareRichBaseline = editorMode === "rich" && !textBufferEditorEnabled;
-    setNotes((currentNotes) => currentNotes.map((item) => {
-      if (item.id !== note.id) return item;
-      return noteWithMarkdown(item, nextMarkdown, { compareRichBaseline });
-    }));
-
-    window.requestAnimationFrame(() => {
-      if (editorMode === "plain" && !textBufferEditorEnabled) {
-        const textarea = plainEditorRef.current;
-        if (!textarea) return;
-        textarea.focus();
-        if (plainSelection) {
-          const nextStart = Math.min(plainSelection.start, textarea.value.length);
-          const nextEnd = Math.min(plainSelection.end, textarea.value.length);
-          textarea.setSelectionRange(nextStart, nextEnd);
-        }
-        return;
-      }
-
-      editorSurfaceRef.current?.querySelector<HTMLElement>(".ProseMirror, .cm-content")?.focus();
-    });
-    return true;
-  }, [editorMode, setNotes, textBufferEditorEnabled]);
-
-  const runPlainEditCommand = useCallback((command: "cut" | "copy" | "paste" | "undo" | "redo") => {
-    const textarea = plainEditorRef.current;
-    if (!textarea) return;
-    textarea.focus();
-
-    if (command === "undo" || command === "redo") {
-      if (applyMarkdownHistory(command)) return;
-      document.execCommand(command);
-      return;
-    }
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    if (command === "copy" || command === "cut") {
-      if (start === end) return;
-      writeDesktopClipboardText(textarea.value.slice(start, end));
-      if (command === "cut") replacePlainEditorSelection("");
-      return;
-    }
-
-    readDesktopClipboardText().then((text) => {
-      if (text) replacePlainEditorSelection(text);
-    });
-  }, [applyMarkdownHistory, replacePlainEditorSelection]);
-
-  const handleRichCommandResult = useCallback((result: EditorCommandResult) => {
-    if (textBufferEditorEnabled) return;
-    if (result.handled) return;
-    if (result.command.action !== "undo" && result.command.action !== "redo") return;
-    applyMarkdownHistory(result.command.action);
-  }, [applyMarkdownHistory, textBufferEditorEnabled]);
-
   const runEditorCommand = useCallback((action: EditorCommandAction, payload?: string, alt?: string) => {
     if (!activeNote) return;
 
-    if (editorMode === "plain" && !textBufferEditorEnabled) {
-      const textarea = plainEditorRef.current;
-      if (!textarea) return;
-
-      const result = applyPlainEditorCommand(
-        activeNote.markdown,
-        textarea.selectionStart,
-        textarea.selectionEnd,
-        action,
-        payload,
-        alt,
-      );
-
-      setNotes((currentNotes) => currentNotes.map((note) => {
-        if (note.id !== activeNote.id) return note;
-        return noteWithMarkdown(note, result.markdown);
-      }));
-
-      window.requestAnimationFrame(() => {
-        textarea.focus();
-        textarea.setSelectionRange(result.selectionStart, result.selectionEnd);
-      });
-      return;
-    }
-
-    richCommandIdRef.current += 1;
-    setRichCommand({ id: richCommandIdRef.current, action, payload, alt });
-  }, [activeNote, editorMode, textBufferEditorEnabled]);
+    editorCommandIdRef.current += 1;
+    setEditorCommand({ id: editorCommandIdRef.current, action, payload, alt });
+  }, [activeNote, setEditorCommand]);
 
   const nativeTextControlForEditCommand = useCallback(() => {
     const activeControl = nativeTextControlFromTarget(document.activeElement);
@@ -2822,13 +2525,8 @@ export default function App() {
     const nativeControl = nativeTextControlForEditCommand();
     if (nativeControl && runNativeTextEditCommand(nativeControl, command)) return;
 
-    if (editorMode === "plain" && !textBufferEditorEnabled) {
-      runPlainEditCommand(command);
-      return;
-    }
-
     runEditorCommand(command);
-  }, [editorMode, nativeTextControlForEditCommand, runEditorCommand, runPlainEditCommand, textBufferEditorEnabled]);
+  }, [nativeTextControlForEditCommand, runEditorCommand]);
 
   const runLinkCommand = useCallback(async () => {
     const href = await showInputDialog(t.prompts.linkUrl, "https://");
@@ -2931,19 +2629,14 @@ export default function App() {
   }, [openSidebarSearch, selectedTextForSearch]);
 
   const focusActiveEditor = useCallback(() => {
-    if (editorMode === "plain" && !textBufferEditorEnabled) {
-      plainEditorRef.current?.focus();
-      return;
-    }
-
-    const richEditor = editorSurfaceRef.current?.querySelector<HTMLElement>(".ProseMirror, .cm-content");
-    if (richEditor) {
-      richEditor.focus();
+    const editor = editorSurfaceRef.current?.querySelector<HTMLElement>(".cm-content");
+    if (editor) {
+      editor.focus();
       return;
     }
 
     editorSurfaceRef.current?.focus();
-  }, [editorMode, textBufferEditorEnabled]);
+  }, []);
 
   const handleSelectAll = useCallback(() => {
     const control = nativeTextControlForEditCommand();
@@ -3572,7 +3265,7 @@ export default function App() {
     const handleWheel = (event: WheelEvent) => {
       if (!event.ctrlKey) return;
       const target = event.target instanceof Element ? event.target : null;
-      if (!target?.closest(".editor-surface, .markdown-editor, .milkdown, .ProseMirror, .serein-text-buffer-editor, .cm-editor")) return;
+      if (!target?.closest(".editor-surface, .serein-text-buffer-editor, .cm-editor")) return;
       event.preventDefault();
       setEditorFontSize(clampEditorFontSize(editorFontSize + (event.deltaY < 0 ? 1 : -1)));
     };
@@ -3664,17 +3357,6 @@ export default function App() {
           || shortcut.commandId === "edit.redo"
         )
       ) {
-        if (
-          (shortcut.commandId === "edit.undo" || shortcut.commandId === "edit.redo")
-          && !textBufferEditorEnabled
-          && crossModeHistoryBridgeRef.current
-        ) {
-          const direction = shortcut.commandId === "edit.undo" ? "undo" : "redo";
-          if (applyMarkdownHistory(direction)) {
-            event.preventDefault();
-            event.stopPropagation();
-          }
-        }
         return;
       }
 
@@ -3710,30 +3392,13 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [appDialog, applyMarkdownHistory, closeAppDialog, closeContextMenu, commands, contextMenu, dispatchCommand, shortcuts, textBufferEditorEnabled]);
+  }, [appDialog, closeAppDialog, closeContextMenu, commands, contextMenu, dispatchCommand, shortcuts]);
 
   const handleOutlineClick = useCallback((index: number) => {
     const requested = markdownHeadingTargetAt(outline, index);
     if (!requested) return;
-
-    if (textBufferEditorEnabled) {
-      runEditorCommand("revealHeading", JSON.stringify(requested));
-      return;
-    }
-
-    const target = resolveMarkdownHeading(activeNote.markdown, requested);
-    if (!target) return;
-
-    if (editorMode === "plain" && !textBufferEditorEnabled) {
-      plainEditorRef.current?.focus();
-      plainEditorRef.current?.setSelectionRange(target.start, target.end);
-      return;
-    }
-
-    const headings = editorSurfaceRef.current?.querySelectorAll(".milkdown h1, .milkdown h2, .milkdown h3, .milkdown h4, .milkdown h5, .milkdown h6, .serein-text-buffer-editor .serein-buffer-heading-line");
-    const heading = headings?.item(index);
-    heading?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [activeNote.markdown, editorMode, outline, runEditorCommand, textBufferEditorEnabled]);
+    runEditorCommand("revealHeading", JSON.stringify(requested));
+  }, [outline, runEditorCommand]);
 
   const scrollToHeading = useCallback((heading: string) => {
     const index = findHeadingIndex(activeNote.markdown, heading);
@@ -3741,24 +3406,9 @@ export default function App() {
 
     const sourceTarget = getHeadingOffsets(activeNote.markdown)[index];
     if (!sourceTarget) return false;
-
-    if (textBufferEditorEnabled) {
-      runEditorCommand("revealSourceRange", String(sourceTarget.start), String(sourceTarget.end));
-      return true;
-    }
-
-    if (editorMode === "plain" && !textBufferEditorEnabled) {
-      plainEditorRef.current?.focus();
-      plainEditorRef.current?.setSelectionRange(sourceTarget.start, sourceTarget.end);
-      return true;
-    }
-
-    const headings = editorSurfaceRef.current?.querySelectorAll(".milkdown h1, .milkdown h2, .milkdown h3, .milkdown h4, .milkdown h5, .milkdown h6, .serein-text-buffer-editor .serein-buffer-heading-line");
-    const target = headings?.item(index);
-    if (!target) return false;
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    runEditorCommand("revealSourceRange", String(sourceTarget.start), String(sourceTarget.end));
     return true;
-  }, [activeNote.markdown, editorMode, runEditorCommand, textBufferEditorEnabled]);
+  }, [activeNote.markdown, runEditorCommand]);
 
   const scrollToSourceLocation = useCallback((target: SourceLocationTarget) => {
     const line = sourceLineBounds(activeNote.markdown, target.line);
@@ -3772,88 +3422,9 @@ export default function App() {
     const selectionStart = selection ? line.start + selection.index : line.start;
     const selectionEnd = selection ? selectionStart + selection.candidate.length : line.end;
 
-    if (textBufferEditorEnabled) {
-      runEditorCommand("revealSourceRange", String(selectionStart), String(selectionEnd));
-      return true;
-    }
-
-    if (editorMode === "plain" && !textBufferEditorEnabled) {
-      const textarea = plainEditorRef.current;
-      if (!textarea) return false;
-
-      const lineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 22;
-      textarea.focus();
-      textarea.setSelectionRange(selectionStart, selectionEnd);
-      textarea.scrollTop = Math.max(0, (target.line - 4) * lineHeight);
-      return true;
-    }
-
-    const surface = editorSurfaceRef.current;
-    const proseMirror = surface?.querySelector<HTMLElement>(".ProseMirror");
-    if (!surface || !proseMirror) return false;
-
-    const candidates = sourceMatchCandidates(line.text, target.text);
-    const highlightId = `${Date.now()}-${target.line}`;
-    const findMatchedBlock = () => {
-      const blocks = [...surface.querySelectorAll<HTMLElement>([
-        ".milkdown .ProseMirror p",
-        ".milkdown .ProseMirror li",
-        ".milkdown .ProseMirror h1",
-        ".milkdown .ProseMirror h2",
-        ".milkdown .ProseMirror h3",
-        ".milkdown .ProseMirror h4",
-        ".milkdown .ProseMirror h5",
-        ".milkdown .ProseMirror h6",
-        ".milkdown .ProseMirror blockquote",
-        ".milkdown .ProseMirror pre",
-        ".milkdown .ProseMirror table",
-      ].join(", "))].filter((node) => (node.textContent ?? "").trim());
-
-      return blocks.find((block) => {
-        const blockText = normalizeSourceMatchText(block.textContent ?? "");
-        return candidates.some((candidate) => blockText.includes(candidate) || candidate.includes(blockText));
-      }) ?? null;
-    };
-    const markMatchedBlock = (scroll: boolean) => {
-      const matched = findMatchedBlock();
-      if (!matched) return false;
-
-      surface.querySelectorAll<HTMLElement>(".source-location-target").forEach((node) => {
-        if (node.dataset.sourceLocationTarget !== highlightId) {
-          node.classList.remove("source-location-target");
-          delete node.dataset.sourceLocationTarget;
-        }
-      });
-      const textMatch = findTextNodeMatch(matched, sourceSelectionCandidates(line.text, target.text));
-      if (textMatch) {
-        const range = document.createRange();
-        range.setStart(textMatch.node, textMatch.start);
-        range.setEnd(textMatch.node, textMatch.end);
-        const selection = window.getSelection();
-        selection?.removeAllRanges();
-        selection?.addRange(range);
-      } else {
-        matched.classList.add("source-location-target");
-        matched.dataset.sourceLocationTarget = highlightId;
-        window.setTimeout(() => {
-          if (matched.dataset.sourceLocationTarget !== highlightId) return;
-          matched.classList.remove("source-location-target");
-          delete matched.dataset.sourceLocationTarget;
-        }, 4000);
-      }
-      if (scroll) matched.scrollIntoView({ behavior: "smooth", block: "center" });
-      return true;
-    };
-
-    if (!markMatchedBlock(true)) return false;
-    [120, 360, 800].forEach((delay) => {
-      window.setTimeout(() => {
-        markMatchedBlock(false);
-      }, delay);
-    });
-    proseMirror.focus();
+    runEditorCommand("revealSourceRange", String(selectionStart), String(selectionEnd));
     return true;
-  }, [activeNote.markdown, editorMode, runEditorCommand, textBufferEditorEnabled]);
+  }, [activeNote.markdown, runEditorCommand]);
 
   useEffect(() => {
     const heading = pendingHeadingRef.current;
@@ -4656,18 +4227,13 @@ export default function App() {
           activeNote={activeNote}
           hasActiveDocument={hasActiveDocument}
           editorMode={editorMode}
-          useTextBufferEditor={textBufferEditorEnabled}
-          richCommand={richCommand}
-          onRichCommandResult={handleRichCommandResult}
+          command={editorCommand}
           editorSurfaceRef={editorSurfaceRef}
-          plainEditorRef={plainEditorRef}
           onMarkdownChange={handleMarkdownChange}
-          onRichMarkdownBaseline={handleRichMarkdownBaseline}
           onOpenLink={handleEditorLinkOpen}
           wikiLinkSuggestions={wikiLinkSuggestions}
           onCreateWikiLink={handleCreateWikiLinkTarget}
           onImportImages={importImagesForEditor}
-          onPlainImageFiles={handlePlainEditorImageFiles}
           imagePreviewMap={imagePreviewMap}
           showImageSourceOnFocus={showImageSourceOnFocus}
           normalizeWindowsImagePaths={normalizeWindowsImagePaths}
@@ -4799,7 +4365,6 @@ export default function App() {
         uiScale={uiScale}
         zoomWithWheel={zoomWithWheel}
         showEditorStatusOverlay={showEditorStatusOverlay}
-        textBufferEditorEnabled={textBufferEditorEnabled}
         tagFeaturesEnabled={tagFeaturesEnabled}
         showFrontmatterTagRow={showFrontmatterTagRow}
         editorLeftGap={editorLeftGap}
@@ -4836,7 +4401,6 @@ export default function App() {
         onUiScaleChange={(value) => setUiScale(clampUiScale(value))}
         onZoomWithWheelChange={setZoomWithWheel}
         onShowEditorStatusOverlayChange={setShowEditorStatusOverlay}
-        onTextBufferEditorEnabledChange={setExperimentalTextBufferEditor}
         onTagFeaturesEnabledChange={setTagFeaturesEnabled}
         onShowFrontmatterTagRowChange={setShowFrontmatterTagRow}
         onEditorLeftGapChange={(value) => setEditorLeftGap(clampEditorLeftGap(value))}

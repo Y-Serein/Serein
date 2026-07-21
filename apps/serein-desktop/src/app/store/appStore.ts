@@ -53,7 +53,7 @@ type AppStoreState = {
   saveError: string | null;
   saveStatus: SaveStatus;
   editorMode: EditorMode;
-  richCommand: EditorCommandSignal | null;
+  editorCommand: EditorCommandSignal | null;
 
   language: AppSettings["language"];
   theme: ThemeStyle;
@@ -119,7 +119,7 @@ type AppStoreActions = {
   setSaveError: (value: string | null) => void;
   setSaveStatus: (value: SaveStatus) => void;
   setEditorMode: (value: EditorMode) => void;
-  setRichCommand: (value: EditorCommandSignal | null) => void;
+  setEditorCommand: (value: EditorCommandSignal | null) => void;
   setLanguage: (value: AppSettings["language"]) => void;
   setTheme: (value: ThemeStyle) => void;
   setUiDensity: (value: UIDensity) => void;
@@ -191,7 +191,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   saveError: null,
   saveStatus: "idle",
   editorMode: initialSettings.defaultEditorMode,
-  richCommand: null,
+  editorCommand: null,
   language: initialSettings.language,
   theme: initialSettings.theme,
   uiDensity: initialSettings.uiDensity,
@@ -258,7 +258,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   setSaveError: (value) => set({ saveError: value }),
   setSaveStatus: (value) => set({ saveStatus: value }),
   setEditorMode: (value) => set({ editorMode: value }),
-  setRichCommand: (value) => set({ richCommand: value }),
+  setEditorCommand: (value) => set({ editorCommand: value }),
   setLanguage: (value) => set({ language: value }),
   setTheme: (value) => set({ theme: value }),
   setUiDensity: (value) => set({ uiDensity: value }),

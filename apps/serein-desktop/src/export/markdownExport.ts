@@ -1,3 +1,7 @@
+import { katexExportCss } from "./katexCss.js";
+import { renderMathToHtml } from "../shared/math.js";
+import { isMarkdownTableDelimiterCell } from "../shared/markdown.js";
+
 export type ExportImageMap = Record<string, string>;
 
 export type HtmlExportOptions = {
@@ -24,7 +28,7 @@ export function htmlDocument(markdown: string, options: HtmlExportOptions) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title}</title>
-  <style>${exportCss()}</style>
+  <style>${katexExportCss}\n${exportCss()}</style>
 </head>
 <body>
   <main class="document">${body}</main>
@@ -67,7 +71,14 @@ export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = 
         index += 1;
       }
       if (index < lines.length) index += 1;
-      html.push(`<div class="math-block">${escapeHtml(math.join("\n"))}</div>`);
+      html.push(`<div class="math-block">${renderMathToHtml(math.join("\n"), true)}</div>`);
+      continue;
+    }
+
+    const singleLineMath = line.match(/^\s{0,3}\$\$(.+?)\$\$\s*$/);
+    if (singleLineMath?.[1]?.trim()) {
+      html.push(`<div class="math-block">${renderMathToHtml(singleLineMath[1], true)}</div>`);
+      index += 1;
       continue;
     }
 
@@ -196,7 +207,7 @@ function renderInline(text: string, imageMap: ExportImageMap) {
     } else if (match[8] !== undefined) {
       tokens.push(`<del>${escapeHtml(match[8])}</del>`);
     } else if (match[9] !== undefined) {
-      tokens.push(`<span class="math-inline">${escapeHtml(match[9])}</span>`);
+      tokens.push(`<span class="math-inline">${renderMathToHtml(match[9], false)}</span>`);
     } else if (match[10] !== undefined) {
       const id = escapeAttr(match[10]);
       tokens.push(`<sup><a href="#fn-${id}">${escapeHtml(match[10])}</a></sup>`);
@@ -213,7 +224,15 @@ function isRemoteOrDataSource(source: string) {
 }
 
 function isTableStart(lines: string[], index: number) {
-  return isTableRow(lines[index] ?? "") && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1] ?? "");
+  const delimiter = lines[index + 1] ?? "";
+  const cells = delimiter
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|");
+  return isTableRow(lines[index] ?? "")
+    && cells.length >= 2
+    && cells.every(isMarkdownTableDelimiterCell);
 }
 
 function isTableRow(line: string) {

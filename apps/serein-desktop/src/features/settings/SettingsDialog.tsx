@@ -44,7 +44,6 @@ type SettingsDialogProps = {
   uiScale: number;
   zoomWithWheel: boolean;
   showEditorStatusOverlay: boolean;
-  textBufferEditorEnabled: boolean;
   tagFeaturesEnabled: boolean;
   showFrontmatterTagRow: boolean;
   editorLeftGap: number;
@@ -81,7 +80,6 @@ type SettingsDialogProps = {
   onUiScaleChange: (value: number) => void;
   onZoomWithWheelChange: (value: boolean) => void;
   onShowEditorStatusOverlayChange: (value: boolean) => void;
-  onTextBufferEditorEnabledChange: (value: boolean) => void;
   onTagFeaturesEnabledChange: (value: boolean) => void;
   onShowFrontmatterTagRowChange: (value: boolean) => void;
   onEditorLeftGapChange: (value: number) => void;
@@ -125,7 +123,6 @@ export function SettingsDialog({
   uiScale,
   zoomWithWheel,
   showEditorStatusOverlay,
-  textBufferEditorEnabled,
   tagFeaturesEnabled,
   showFrontmatterTagRow,
   editorLeftGap,
@@ -162,7 +159,6 @@ export function SettingsDialog({
   onUiScaleChange,
   onZoomWithWheelChange,
   onShowEditorStatusOverlayChange,
-  onTextBufferEditorEnabledChange,
   onTagFeaturesEnabledChange,
   onShowFrontmatterTagRowChange,
   onEditorLeftGapChange,
@@ -322,10 +318,6 @@ export function SettingsDialog({
                 <label className="settings-check">
                   <input type="checkbox" checked={showEditorStatusOverlay} onChange={(event) => onShowEditorStatusOverlayChange(event.target.checked)} />
                   {t.settings.showEditorStatusOverlay}
-                </label>
-                <label className="settings-check">
-                  <input type="checkbox" checked={textBufferEditorEnabled} onChange={(event) => onTextBufferEditorEnabledChange(event.target.checked)} />
-                  {t.settings.textBufferEditorEnabled}
                 </label>
                 <label className="settings-field">
                   <span>{t.settings.layoutLeftGap}</span>

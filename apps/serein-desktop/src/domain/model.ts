@@ -14,7 +14,6 @@ export type Note = {
   fileSize?: number;
   lineEnding?: "lf" | "crlf";
   savedMarkdown?: string;
-  richSavedMarkdown?: string;
   dirty?: boolean;
   placeholder?: boolean;
 };

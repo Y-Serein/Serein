@@ -15,18 +15,13 @@ export function EditorWorkspace({
   activeNote,
   hasActiveDocument,
   editorMode,
-  useTextBufferEditor,
-  richCommand,
-  onRichCommandResult,
+  command,
   editorSurfaceRef,
-  plainEditorRef,
   onMarkdownChange,
-  onRichMarkdownBaseline,
   onOpenLink,
   wikiLinkSuggestions,
   onCreateWikiLink,
   onImportImages,
-  onPlainImageFiles,
   imagePreviewMap,
   showImageSourceOnFocus,
   normalizeWindowsImagePaths,
@@ -42,17 +37,12 @@ export function EditorWorkspace({
             t={t}
             activeNote={activeNote}
             editorMode={editorMode}
-            useTextBufferEditor={useTextBufferEditor}
-            richCommand={richCommand}
-            onRichCommandResult={onRichCommandResult}
-            plainEditorRef={plainEditorRef}
+            command={command}
             onMarkdownChange={onMarkdownChange}
-            onRichMarkdownBaseline={onRichMarkdownBaseline}
             onOpenLink={onOpenLink}
             wikiLinkSuggestions={wikiLinkSuggestions}
             onCreateWikiLink={onCreateWikiLink}
             onImportImages={onImportImages}
-            onPlainImageFiles={onPlainImageFiles}
             imagePreviewMap={imagePreviewMap}
             showImageSourceOnFocus={showImageSourceOnFocus}
             normalizeWindowsImagePaths={normalizeWindowsImagePaths}

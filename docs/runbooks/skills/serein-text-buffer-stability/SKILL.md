@@ -1,11 +1,11 @@
 ---
 name: serein-text-buffer-stability
-description: Use this skill whenever work touches Serein's single-editor Markdown text-buffer, Typora-like Rich/Source behavior, Ctrl+A semantic selection, CodeMirror history/selection/decoration, outline jumps or wrong scroll targets, Source gutter desynchronization, typed/pending fences, code language controls, list/quote/code nesting, compact editor/settings UI, original Markdown markers, EOF exits, stale Vite HMR results, large-document performance, or recovery against commit 93590e3. Trigger even when the user only says the editor jumps, characters disappear, headings turn into code, shortcuts take too many rows, the fix did nothing on Windows, the code feels patched/bloated, or asks to restore earlier behavior without deleting their work.
+description: Use this skill whenever work touches Serein's single-editor Markdown text-buffer, Typora-like Rich/Source behavior, Markdown table recognition/completion/column alignment/grid toolbar, Frontmatter visual/source duplication, Ctrl+A semantic selection, CodeMirror history/selection/decoration/keymap precedence, outline jumps or wrong scroll targets, Source gutter desynchronization, typed/pending fences, code language controls, empty code/list/quote deletion or exit, Rich table ghost rows or cursor offsets, hidden-fence copy/cut, system clipboard behavior, list/quote/code nesting, compact minimalist UI, original Markdown markers, EOF exits, stale Vite HMR results, large-document performance, or recovery against commit 93590e3. Trigger even when a minimal pipe row is not recognized, a table aligns in source but not visually, a table toolbar becomes heavy or duplicates controls, Frontmatter appears twice, the editor jumps, copied code gains ``` at the end, Ctrl+X stops working, characters disappear, headings turn into code, `>` keeps nesting after Enter, an empty block cannot be deleted, the menu copies but Ctrl+C does not reach the system clipboard, the fix did nothing on Windows, or the user asks to restore earlier behavior without deleting their work.
 ---
 
 # Serein Text Buffer Stability
 
-Use this skill when the task touches the experimental single-editor text-buffer engine.
+Use this skill when the task touches Serein's current single-editor Markdown text-buffer engine.
 
 The goal is not to prove the architecture is elegant. The goal is to make Serein reliably writable.
 
@@ -33,7 +33,7 @@ Key files:
 apps/serein-desktop/src/components/MarkdownTextBufferEditor.tsx
 apps/serein-desktop/src/editor/textBufferMarkdown.ts
 apps/serein-desktop/src/shared/markdown.ts
-apps/serein-desktop/src/components/MilkdownEditor.tsx
+apps/serein-desktop/src/features/editor-workspace/EditorHost.tsx
 apps/serein-desktop/src/App.tsx
 apps/serein-desktop/src/styles.css
 apps/serein-desktop/tests/text-buffer-markdown.test.mjs
@@ -42,7 +42,7 @@ tests/fixtures/rich-edit/00_raw.txt
 tests/fixtures/rich-edit/nested_list_quote_code.md
 ```
 
-Do not delete or replace the default Milkdown path while the text-buffer engine is experimental.
+The current architecture uses the text-buffer editor as the editor path. Do not restore the deleted Milkdown/textarea implementation or create a parallel content, selection, history, or save path. Historical commits remain available for comparison and rollback, but rollback means a reviewed commit-level decision, not source duplication.
 
 ## Control Loop
 
@@ -96,7 +96,7 @@ When the worktree is dirty:
 3. For risky recovery, create an isolated worktree from the current code baseline.
 4. Validate the candidate in isolation.
 5. Re-check the real user worktree. A passing candidate is not delivered until the fix is merged back and revalidated there.
-6. Replace whole files only when they belong exclusively to the experimental engine. Merge shared App/CSS/tests by reviewed hunk.
+6. Replace whole files only when they belong exclusively to the current editor path. Merge shared App/CSS/tests by reviewed hunk; do not reintroduce deleted legacy editor files as a safety blanket.
 7. Never use reset/checkout/restore to erase user work.
 
 ## One Source Of Truth
@@ -213,6 +213,91 @@ page errors: []
 
 Do not accept a fix solely because typecheck passes or a parser returns one code block.
 
+## Real Typing, Structure Exit, And Desktop Clipboard
+
+Reproduce editing-state bugs with real key events and character-by-character typing. Filling or pasting the final Markdown skips input rules, keymap precedence, pending structures and intermediate selections.
+
+For empty structure blocks:
+
+1. Record Markdown and selection after every relevant Enter/Backspace.
+2. Distinguish parser-empty from user-blank. A generated ```` ```bash\n\n``` ```` has an editable blank content line and is not structurally empty.
+3. Inspect keymap precedence before adding another Enter branch. Markdown language keymaps may run before the project handler; product exit semantics need the appropriate high precedence.
+4. Convert an empty protected code block with one explicit structural transaction. Do not weaken hidden-fence protection for ordinary edits.
+5. Cover root quote/list, ordered and unordered markers, nested list+quote, code fence and EOF.
+
+For clipboard regressions:
+
+1. Compare keyboard, DOM `copy/cut`, top-menu command and code-block copy paths.
+2. Keep `event.clipboardData` as the event/browser fallback, but use the Tauri clipboard command for the desktop system clipboard.
+3. Make native writes awaitable and return success/failure. For cut, delete only after a successful write and only if the selection/text still matches.
+4. In browser automation, inject a Tauri invoke mock and assert command name and payload. A successful `navigator.clipboard` call is not proof of Windows WebView2 behavior.
+5. Finish with a Windows release paste into an external program when the user can test it; otherwise state that this platform proof remains open.
+
+If the automation cannot find Playwright, a menu, or the expected editor, treat that as a harness failure first. Fix module paths or inspect the rendered page on a clean port before changing product code.
+
+## Single-Editor And Markdown Table Protocol
+
+Use this protocol for table, Frontmatter, formula widget, or editor-architecture work.
+
+### Diagnose Before Editing
+
+When the user asks to confirm a cause or says not to change code:
+
+1. Read the actual project path and current worktree first. Do not infer the runtime path from a parser or an old component name.
+2. Reproduce with a fictional document and real keyboard/mouse events. Record Markdown source, CodeMirror selection, rendered DOM, widget count, computed geometry, and page errors.
+3. Distinguish the two facts that are often confused:
+   - CodeMirror/Lezer syntax-tree recognition.
+   - The Rich editor's runtime scanner/completion/widget path.
+4. Report the root cause, smallest control variable, alternatives and tradeoffs before editing if the user requested confirmation.
+
+Do not call a visual duplicate two editors until the DOM proves it. A single CodeMirror buffer may intentionally have both a Frontmatter property bar and raw YAML; inspect active/hidden state and source selection before changing architecture.
+
+### Table Semantics
+
+Use standard Markdown semantics as the source of truth:
+
+- Parse and complete a minimal pipe row such as `|1|12|12|` through the actual Rich input path. Do not validate only by injecting final Markdown or inspecting Lezer.
+- On the relevant Enter, complete the table structure with a header row, delimiter row and editable blank data row; preserve a trailing blank line when the product contract requires it.
+- Store alignment per column in the delimiter row: `:---` for left, `:---:` for center and `---:` for right. Do not create a multi-cell selection model merely to implement alignment.
+- Scope alignment actions to the current table and current cursor column. Serialize the Markdown immediately, then apply the same alignment to rendered `th`, `td` and cell inputs.
+- Keep table size controls separate from cell selection. The grid is a compact row/column resize picker: hover previews, click confirms, numeric row/column inputs provide direct entry.
+- Keep the toolbar visually linear and quiet: grid, left/center/right, `⋯`, delete. Do not duplicate a long “more operations” label beside `⋯`, reintroduce `+↕/−↕/+↔/−↔`, or add multi-cell selection unless the user explicitly changes the requirement.
+- Preserve existing Frontmatter CSS and `tags/aliases/status` semantics during architecture cleanup. Do not remove stable visual behavior as an incidental “cleanup”.
+
+### Table Widget Safety
+
+- Replace the complete multi-line table source range with one atomic block widget; never leave hidden source lines as independently measurable/clickable rows.
+- Do not use external margin or fake padding on a cross-line editable widget to create spacing. Use real Markdown blank lines so CodeMirror measurement and browser hit-testing agree.
+- Commit every structural, content and alignment mutation back to the one Markdown buffer before allowing focus/blur or widget rebuild.
+- After each table change, check source roundtrip, row/column count, current-cell focus, table-bottom hit testing, outside-table input, and Rich/Source consistency.
+
+### Visual And Runtime Acceptance
+
+Use a clean Vite port after changing StateField, parser, widget or CSS. Acceptance must include:
+
+```text
+CodeMirror instances: 1
+Frontmatter property bars: expected count
+raw Frontmatter source: visible/hidden according to active state
+table toolbar order: grid -> left -> center -> right -> ⋯ -> delete
+alignment: delimiter + DOM cells + input all agree
+minimal pipe input: completed table + editable blank row
+table outside click: does not expose or split hidden source rows
+page errors: []
+```
+
+Do not accept a fix because only typecheck/build passes. If Vite returns `504 Outdated Optimize Dep`, `ERR_NETWORK_CHANGED`, or a lazy module fails, treat it as a stale/harness failure: stop the old server, clear only generated Vite cache, use a fresh port, and rerun the same smoke.
+
+## Session Closure And Handoff
+
+When the user asks to preserve the session:
+
+1. Update `HANDOFF.md` with current branch/HEAD, worktree status, current user-visible state, root causes, passed/blocked verification, exact next actions, key paths and unresolved risks.
+2. Update `docs/runbooks/PROJECT_MEMORY.md` with stable user preferences, mistakes converted into rules, project constraints, known tooling traps and a reusable prompt. Keep immediate WIP in HANDOFF; keep generalizable rules in memory.
+3. Extend the nearest existing skill instead of creating a duplicate skill. Add only reusable triggers, protocols, acceptance criteria and failure boundaries.
+4. Do not modify source while doing documentation closure unless the user explicitly asks for it. Do not stage, commit, tag or push automatically.
+5. Validate the documentation with `git diff --check`, inspect the final headings/content, and report source verification separately from documentation verification.
+
 ## Common Failure Modes
 
 ### Parser owns too much behavior
@@ -327,6 +412,7 @@ Symptom:
 - Switching files hangs.
 - Long documents freeze on cursor movement.
 - Every selection change feels expensive.
+- Large native text paste freezes for tens of seconds or minutes while ordinary file switching remains fast.
 
 Check for:
 
@@ -336,12 +422,50 @@ analyzeTextBufferMarkdown(...)
 scanTextBufferInlineLinksFromSyntaxTree(...)
 scanTextBufferTablesFromSyntaxTree(...)
 full lines.forEach decoration build
+paste handler only intercepts files and returns false for text/plain
+CodeMirror readChange/findChild DOM mutation work
 ```
 
 Rule:
 
 - Do not claim stability until large documents and file switching are tested.
-- Prefer cached analysis, changed-range invalidation, viewport decorations, or separate cheap selection-only decoration paths.
+- Measure parser, direct transaction, DOM paste, React feedback, selection movement and file switching separately. Do not label the whole editor slow from one path.
+- Native `text/plain` paste should prevent the browser default and dispatch one CodeMirror transaction; image paste remains on the attachment import path.
+- Keep cross-line structure, block widgets and hidden fences in StateField. Use `ViewPlugin + visibleRanges` only for same-line links, wiki links, emphasis and image presentation.
+- Separate selection-only active code/frontmatter decorations from the full structural field so cursor movement does not rebuild every line.
+- Prefer cached analysis or changed-range invalidation only after direct paste and viewport decoration are measured; parser rewrite is not the first response when parser time is already milliseconds.
+- Add stable performance marks for paste, note open and external markdown sync. For keyboard micro-benchmarks, dispatch inside the page instead of counting Playwright protocol round trips.
+- Table widgets may remember ephemeral focus/scroll restoration, but every content/structure/alignment change must serialize immediately to the Markdown buffer.
+- Suppress old widget blur commits before a structure-changing dispatch; otherwise DOM teardown can trigger a duplicate update.
+
+### Table source lines remain clickable outside the table
+
+Symptom:
+
+- Rich table leaves a blank region below the visible widget.
+- Clicking that region places the apparent caret outside the table, but Enter or typing splits the table and exposes trailing rows as raw Markdown.
+
+Rule:
+
+- A multi-line Rich table must replace its complete Markdown source range with one atomic block decoration from the document StateField.
+- Do not mount the widget on the header line and separately hide each source line; hidden text can still leave line breaks, height and selection coordinates.
+- Do not add vertical margin to the atomic table widget; CodeMirror height measurement and browser layout will disagree. Do not replace that margin with fake vertical padding, because the padding remains non-editable widget space.
+- Let real Markdown blank lines provide editable spacing before and after the table.
+- Validate DOM line count/height and click immediately below the widget. The table row count and Source Markdown must remain unchanged after ordinary outside input.
+
+### Partial code selection copies a hidden fence and cut stops working
+
+Symptom:
+
+- Copying the last visible code lines appends a hidden closing fence.
+- Ctrl+X writes clipboard data but does not delete the selection; subsequent typing leaves stale text or lands at the fence boundary.
+
+Rule:
+
+- Map Rich selections to visible source ranges before copy or cut. Remove unmatched hidden opener/closer lines, but keep paired fences for a complete block or whole-document copy.
+- Cut must delete exactly the mapped visible ranges. Do not weaken ordinary fence protection.
+- When a partial cut reaches the closing fence, preserve one structural newline so the cursor remains on a valid empty code line for immediate continued typing.
+- Verify DOM copy/cut, top-menu commands and Tauri clipboard payload with endpoints on the last line, language control, blank line after the block and following text.
 
 ## Minimum Regression Scenarios
 
@@ -356,10 +480,7 @@ out/outline-repro/fence-heavy.md
 out/outline-repro/rapid-outline.md
 docs/images/v7.png
 docs/images/v8.png
-docs/images/v9.png
-docs/images/v13.png
-docs/images/v14.png
-docs/images/v15.mp4
+Use screenshots/videos only as structural references; reproduce with fictional Markdown before editing.
 ```
 
 Do not use user-owned documents unless the user explicitly authorizes that exact file and test. When authorization is absent, generate a fictional fixture with the same structural properties instead of copying their content.
@@ -383,6 +504,13 @@ Must cover:
 - Typing 1/2/3 backticks at EOF keeps all characters visible; a typed opener above a heading stays pending even when a later code block exists.
 - Moving the cursor away from a pending opener does not let it swallow the next heading; Enter creates a local closing fence.
 - At approximately 1100px viewport width, shortcut settings remain one row and all controls remain usable.
+- A fictional 5000-line native paste is prevented, copied back intact, produces a performance entry, and completes without minute-scale freezing.
+- On the same long document, repeated ArrowUp/ArrowDown remains responsive after inline decorations move to `visibleRanges`.
+- Table keyboard flow covers Tab/Shift+Tab, Enter append row, ArrowDown/Escape exit, add/delete/move row and column, alignment serialization, uncommitted cell preservation, focus restoration and horizontal scroll restoration.
+- A blank fenced block is removed by the first Backspace from its blank content line without exposing or corrupting fences.
+- Quote/list/nested list+quote continue once on the first Enter and exit on the next empty Enter without producing a `>` indentation staircase.
+- Rich and Source modes in the single Text Buffer editor invoke `desktop_write_clipboard_text`; cut preserves content until native write success and does not delete after selection drift.
+- A Rich selection ending after the hidden closing fence copies no unmatched fence; Ctrl+X preserves the block structure and immediate continued typing stays inside the code block.
 
 ## Verification Commands
 
@@ -403,11 +531,7 @@ git -c safe.directory=/home/slam/Project/Serein status --short
 
 For UI behavior, use a clean Vite server and Playwright. Stop the previous server and start a new port after changing CodeMirror state fields, parser modules, or decorations. Avoid relying on a long-running HMR server because old modules can remain loaded and produce false failures.
 
-Example smoke categories:
-
-- P0 text-buffer smoke: Rich active line, inner fence, Source roundtrip, language control visibility.
-- Undo scroll smoke: long document, forced top scroll, bottom cursor, `Ctrl+Z`.
-- Performance smoke: open/switch large Markdown files and record visible response time.
+Smoke categories: P0 Rich/Source/fence/language behavior; long-document undo scroll; large-file open/switch/paste performance.
 
 If Windows release `.exe` was not tested, say so explicitly.
 
@@ -415,16 +539,9 @@ The test compiler emits ESM into `.test-dist`. Runtime relative imports used by 
 
 ## Completion Report
 
-Report in this order:
+Report in this order: user-visible result; root cause/duplicate truth removed; files changed; commands and Playwright evidence; Windows/release/performance gaps; commit/tag/push status.
 
-1. User-visible behavior restored.
-2. Root cause and which duplicate truth was removed.
-3. Files changed.
-4. Commands and Playwright evidence actually run.
-5. Windows/release/performance items still unverified.
-6. Git state: commit/tag/push status.
-
-Do not say the single editor is complete while it remains behind an experimental flag or while Windows release and large-document performance are unverified.
+Do not call the single editor release-ready merely because the architecture is unified. Windows release behavior, large-document performance, real system clipboard, IME, save and user-visible Rich/Source regressions must still be verified.
 
 ## Commit Boundary
 

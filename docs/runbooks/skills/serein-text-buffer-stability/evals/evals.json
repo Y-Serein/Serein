@@ -59,6 +59,40 @@
         "apps/serein-desktop/src/styles.css",
         "apps/serein-desktop/tests/text-buffer-markdown.test.mjs"
       ]
+    },
+    {
+      "id": 6,
+      "prompt": "Serein 里空代码块内容删完后 Backspace 还是删不掉；输入 > first 后连续回车会变成越来越深的 >；顶部菜单复制能粘到记事本，但 Ctrl+C 不行。请不要直接粘贴测试文本，要实际逐字输入复现后一次修好，先不要动我的 Windows 进程。",
+      "expected_output": "使用完全虚构文档和干净 Vite 端口逐字符复现；区分 blank code content 与 parser-empty；检查 Markdown/CodeMirror keymap precedence，让项目结构退出语义先执行；用显式事务删除受保护的空代码块；比较单一 Text Buffer 的 Rich/Source、DOM 事件、菜单和快捷键 clipboard 路径；用 Tauri invoke mock 断言 desktop_write_clipboard_text 及 payload，Ctrl+X 在异步写入成功前不删除且 selection 漂移时不误删；运行 test/build/diff check 和既有回归，明确 Windows release 未验证，不操作用户 Windows 进程。",
+      "files": [
+        "apps/serein-desktop/src/components/MarkdownTextBufferEditor.tsx",
+        "apps/serein-desktop/src/components/MilkdownEditor.tsx",
+        "apps/serein-desktop/src/editor/textBufferMarkdown.ts",
+        "apps/serein-desktop/src/services/clipboard.ts",
+        "apps/serein-desktop/tests/text-buffer-markdown.test.mjs"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Serein 的 Markdown 表格有时 CodeMirror 能识别，Rich 编辑器却不能；输入 |1|12|12| 回车不能补齐表头、分隔行和空白行。现有表格工具栏太重，我要网格行列、左/中/右对齐、⋯、删除；对齐必须按标准 Markdown 按列，不要多单元格选区。请先确认原因，不要先改代码。",
+      "expected_output": "区分 Lezer 语法树和 Rich 自定义扫描器；用虚构文档和真实逐字符输入复现；先报告根因与方案。修改获准后保留单一 CodeMirror buffer，网格只负责行列尺寸，当前表格当前列对齐同步 delimiter/th/td/input，保留 Frontmatter CSS 与 tags/aliases/status 语义；用干净 Vite 端口验证工具栏顺序、表格底部坐标、Source roundtrip、page errors，并明确 Windows 未验证。",
+      "files": [
+        "apps/serein-desktop/src/components/MarkdownTextBufferEditor.tsx",
+        "apps/serein-desktop/src/editor/textBufferMarkdown.ts",
+        "apps/serein-desktop/src/styles.css",
+        "apps/serein-desktop/tests/text-buffer-markdown.test.mjs"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "长任务结束，请把 Serein 当前 session 交接给 3 天后的另一个 agent：写 HANDOFF、更新 PROJECT_MEMORY，并把本轮反复确认的用户偏好、错误经验、约束和可验证流程沉淀到现有 skill。不要修改源码、不要自动 commit。",
+      "expected_output": "先读取现有 HANDOFF/memory/skill，保留历史事实；HANDOFF 写当前 HEAD、dirty worktree、用户可见状态、验证通过/阻塞、3-5 个下一步和关键路径；memory 写稳定偏好、可推广最佳实践、项目坑点和一次性提示词；扩展最近的现有 skill 而不是创建重复 skill；只验证文档 diff check 和结构，明确源码/Windows 未验证项。",
+      "files": [
+        "HANDOFF.md",
+        "docs/runbooks/PROJECT_MEMORY.md",
+        "docs/runbooks/skills/serein-text-buffer-stability/SKILL.md",
+        "docs/runbooks/skills/serein-text-buffer-stability/evals/evals.json"
+      ]
     }
   ]
 }

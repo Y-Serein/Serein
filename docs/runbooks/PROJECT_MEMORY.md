@@ -1,6 +1,6 @@
 # Serein Project Memory
 
-最后更新：2026-07-10 19:00
+最后更新：2026-07-21 09:18
 
 ## 用户偏好
 
@@ -984,3 +984,219 @@ UI 必须用干净 production preview/Playwright 验证：
 - 新增触发范围：v13-v15、大纲看似跳动但停在旧标题、Source gutter 点击后才恢复、第三个反引号消失、pending fence 吞标题、快捷键四行、长期 HMR 假失败。
 - 新增核心流程：真实 scroll owner 诊断、虚构文件优先、pending fence 编辑状态机、冷启动反证、删除无效补偿。
 - 新增 eval：大纲外层滚动所有权；pending fence + 紧凑快捷键联合回归。
+
+## 2026-07-15 大文本 paste、可视区 decoration 与表格闭环沉淀
+
+### 本轮结果
+
+- 原生纯文本 paste 不再交给 `contenteditable` DOM mutation/readChange 路径，改为单个 CodeMirror transaction；图片 paste 仍走附件导入。
+- 约 541 KB、5000 行虚构 Markdown 多次冷启动实测：paste dispatch 约 295-306 ms，完整 UI 反馈约 1.6-1.85 秒；旧基线约 124.8 秒。
+- 50 次页面内 ArrowUp 约 184-254 ms；纯 parser 不是主要瓶颈，不应先重写 Markdown 分析器。
+- decoration 分成三层：全文跨行结构、当前代码块/语言控件、`visibleRanges` 行内链接/Wiki/强调/图片。
+- Rich 表格补齐增删/移动行列、列对齐、Tab/Shift+Tab、Enter 新增行、ArrowDown/Escape 退出、焦点与横向滚动恢复。
+- `npm run test`、`npm run typecheck`、`npm run build`、`git diff --check` 和两组干净端口 Playwright 回归通过；Windows release 未验证。
+
+### 可复用判断
+
+- 大粘贴慢时必须先区分 DOM 输入路径、CodeMirror transaction、parser 和 React 状态同步；不要看到全文分析就直接归因 parser。
+- 用户真实 paste 事件中的 `event.clipboardData` 是允许的桌面事件数据。优先拦截 `text/plain` 并直接 dispatch；菜单 paste 和原生 paste 应落到同一类 transaction 语义。
+- 行内 decoration 适合 `ViewPlugin + visibleRanges`；跨行 replace、block widget、表格和代码块结构继续留在 StateField。不要把 block widget 强塞进 ViewPlugin。
+- selection 相关 UI 不应迫使全文基础装饰重建。当前代码块 active decoration 单独构建，行内 selection 展开只重建可视区。
+- 表格 widget 可以保存“待恢复焦点/scrollLeft”这种短生命周期 UI 状态，但表格内容、对齐和结构必须立即序列化回 Markdown buffer，不能成为第二份真相。
+- widget dispatch 前要抑制旧 DOM 的 blur 二次提交；否则未提交单元格内容加结构按钮可能触发重复 transaction 或 update-in-progress 错误。
+- 性能自动化不能把 Playwright 逐次协议往返计入编辑器耗时。高频键盘基准应在页面内连续派发，再单独保留真实用户键盘功能回归。
+
+## 2026-07-16 结构块退出、空块删除与系统剪贴板合作沉淀
+
+### 用户偏好（本轮再次确认）
+
+- 用户要求编辑器问题必须实际逐字符输入复现，不能把整段 Markdown 复制进去后只看最终 DOM；输入过程中的 keymap、自动续行、selection 和 decoration 才是问题本体。
+- 用户不接受“只修代码块”。发现结构块退出异常后，应同步覆盖引用、无序列表、有序列表和嵌套 list/quote 等同类路径。
+- 用户把 Serein 定义为桌面写作工具：`Ctrl+C/Ctrl+X` 必须进入系统剪贴板，不能只在 WebView/浏览器内部看起来成功。
+- 用户会区分菜单与快捷键路径，并用“顶部菜单正常、Ctrl+C 失败”帮助缩小根因；后续应主动比较同一命令的所有入口。
+- 用户愿意配合 Windows release 实测，但 AI 必须先用虚构文档和可控 mock 把同构逻辑验证到位，不能把所有验证工作推给用户。
+- 用户偏好一次性收敛：修复后主动走普通文本、代码块、引用、列表、嵌套结构、菜单和快捷键相邻路径，避免下一张截图才发现同类问题。
+
+### 从错误里学到的最佳实践
+
+- “结构为空”与“parser 认为没有内容行”不是一回事。自动生成的 fenced block 通常是 ```` ```lang\n\n``` ````，含一个空内容行；删除语义应检查实际 content range 的空白，而不是只看 opening/closing fence 是否紧邻。
+- 先确认 keymap 优先级再改 Enter 逻辑。项目 handler 即使已经存在，也可能被 `@codemirror/lang-markdown` 的高优先级 `markdownKeymap` 抢先执行；结构块退出必须放在 `Prec.highest`，否则会出现 `>` 阶梯和多按一次 Enter。
+- 空结构退出应是共享产品语义：在结构块最后一行且内容为空时，Enter 删除当前 marker/container prefix 并退出；不要为 quote、list、code 各堆一套互不一致的补丁。
+- 隐藏 fence 保护会影响删除。普通 Backspace 事务被 `protectRichCodeFenceLines()` 拦截时，应提供一个显式标注的整块转换事务，把空白代码块变为容器前缀/普通段落，而不是放开所有 hidden fence 修改。
+- 浏览器 `navigator.clipboard` 成功不能证明 Windows WebView2 系统剪贴板成功。桌面复制验证必须捕获 Tauri `desktop_write_clipboard_text` 调用及参数，并最终由 Windows release 粘贴到外部程序确认。
+- ClipboardEvent 的 `event.clipboardData` 仍应保留为浏览器/测试 fallback；Tauri 运行时再并行写原生剪贴板。不要为了桌面路径删除标准事件数据。
+- 剪切必须满足“先复制成功，再删除”。原生剪贴板是异步的；Promise 完成前保持选区内容，并在完成后复核 selection 和文本没有变化，避免用户继续操作后删错位置，也避免写入失败导致数据丢失。
+- 菜单、快捷键和 DOM `copy/cut` 应收敛到同一个 clipboard service。`writeDesktopClipboardText()` 必须返回可等待的成功状态，不能 fire-and-forget 后静默吞错却让上层误以为已完成。
+- UI 自动化失败要区分产品失败与测试失败。本轮先后遇到 Playwright 模块路径缺失和菜单定位超时；应先修测试环境/做页面侦察，再判断业务行为，不能把 harness 故障包装成应用 bug。
+- 编辑器核心模块、keymap 或 decoration 改动后使用干净 Vite 端口冷启动；真实逐键脚本应记录 Markdown、selection、active element、行 class 和 pageerror。
+
+### 项目关键约束和坑
+
+- Text Buffer 和默认 Milkdown 两条编辑路径仍同时存在。剪贴板这类桌面基础能力必须两条路径都覆盖；不能因为实验路径通过就删除 fallback。
+- 主动系统剪贴板入口是 `apps/serein-desktop/src/services/clipboard.ts` 和 Rust `desktop_write_clipboard_text`；不要重新引入 `navigator.clipboard.writeText()` 作为桌面主路径。
+- 顶部菜单能工作但快捷键失败，通常说明 Rust command/权限不是主因，应优先检查 DOM ClipboardEvent、CodeMirror/ProseMirror handler 和快捷键分发差异。
+- 结构键回归必须覆盖逐键过程：`> first` 后两次 Enter、`- first` 后空 item Enter、`- > first` 嵌套退出、```` ```bash ```` 自动空内容行 Backspace。
+- 只使用完全虚构的测试文本；不读取、复制或修改用户真实文档/Vault，也不操作 Windows 进程，除非用户另行明确授权。
+- preflight 仍错误映射到 `/home/rv_nano/...`。它能提示流程，但不能据此判断 `/home/slam/Project/Serein` 不存在。
+- Windows release 是系统剪贴板、IME、WebView2 键盘事件和真实文件保存的最终验证面；Linux Chromium + Tauri mock 只能证明同构逻辑。
+- 当前 HEAD `4b07999`，main 相对 origin/main ahead 5，工作区同时包含性能、decoration、表格和本轮编辑器修复；提交前必须逐文件/逐 hunk 审查，禁止 `git add .`。
+
+### 下次一次性达到这次效果的推荐提示词
+
+```text
+请接手 /home/slam/Project/Serein 的 Serein Markdown 编辑器交互回归。先读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md、docs/runbooks/KNOWN_FAILURES.md，并使用 docs/runbooks/skills/serein-text-buffer-stability/SKILL.md；运行 typora preflight，但知道它的 /home/rv_nano 旧路径会误报。
+
+目标：一次性复现、定位并修复代码块/引用/列表的空结构删除与退出，以及 Ctrl+C/Ctrl+X 系统剪贴板一致性。请按“目标→状态→误差→控制动作→反馈→修正→验证→沉淀”闭环推进，不要停在静态分析。
+
+硬约束：
+1. 只创建完全虚构文档；不要读取/复制我的真实文档或 Vault，不操作 Windows 进程。
+2. 必须用 Playwright 逐字符输入和真实按键，不能用 fill/paste 最终 Markdown 代替输入过程。
+3. 同时覆盖 Text Buffer 与默认 Milkdown；不删除 fallback，不做无关重构。
+4. 工作区可能有大量 WIP，禁止 reset/checkout/restore，禁止 git add .。
+
+复现矩阵：
+- 输入 ```bash + Enter，删除代码内容后 Backspace，空代码块应一次删除为普通空段落。
+- 输入 > first，第一次 Enter 续引用，第二次 Enter 退出；不得出现 >、>   > 的阶梯。
+- 对 -、*、+、1. 和 - > 嵌套结构重复同类测试。
+- 分别测试快捷键 Ctrl+C/Ctrl+X、顶部菜单复制/剪切、浏览器 fallback 和 Tauri 原生 clipboard command。
+- Ctrl+X 必须验证原生写入 Promise 完成前原文不删除，成功后才删除；selection 变化时不得删错。
+
+根因判断优先级：
+- 先查 CodeMirror/Markdown keymap precedence，再判断 Enter handler 是否根本没执行。
+- 区分 code block empty 与 blank content line；不要只用 fence 是否紧邻判断。
+- 菜单正常、快捷键失败时先比较事件/命令入口，不要怀疑已经工作的 Rust command。
+- Chromium navigator.clipboard 通过不等于 Windows 系统剪贴板通过；用 Tauri invoke mock 捕获 desktop_write_clipboard_text，最终明确 Windows release 未验证。
+
+完成前运行 npm run test、npm run build、git diff --check；用干净 Vite 端口重跑逐键脚本和既有 decoration/editor regression。最终列出真实行为结果、根因、修改文件、验证证据、Windows 未验证项和 Git 状态。不要 commit/push，除非我明确要求。
+```
+
+### 本轮 skill 沉淀
+
+- 继续增强 `docs/runbooks/skills/serein-text-buffer-stability/SKILL.md`，不创建重复 skill。
+- 新增触发：空代码块删不掉、引用/列表 Enter 产生 `>` 阶梯、菜单复制正常但 `Ctrl+C` 不进系统剪贴板、要求真实逐字输入复现。
+- 新增流程：keymap precedence、blank-vs-empty、显式结构事务、Tauri clipboard mock、异步剪切数据安全、测试 harness 故障分流。
+- 新增评估用例：结构块逐键退出与系统剪贴板双路径回归。
+
+## 2026-07-16 Rich 表格幽灵行沉淀
+
+- 视频 `docs/images/v18.mp4` 显示：光标看似在表格外，下一次输入却把表格拆成前半表格和后半裸 Markdown。
+- 虚构表格复现确认：表格 widget 只占 header 行，隐藏的后续 Markdown 行仍各保留约 `25.6px` 行高；视觉空白实际是可点击的表格源码。
+- 修复不能只依赖 CSS 压高度，因为键盘 selection 仍可能进入隐藏换行。正确边界是在全文 StateField 中用整段原子 block replacement 覆盖完整 table source range。
+- 修复后 Rich DOM 布局行从 12 降为 5；点击表格下方并按 Enter 不再拆表。单元格编辑、增删行、对齐、焦点恢复、ArrowDown 退出和 Source 保真仍通过。
+- 本轮未验证 Windows release `.exe`；默认 Milkdown fallback 和实验开关保持不变。
+
+## 2026-07-17 Rich 局部代码复制/剪切与隐藏 fence 沉淀
+
+- `docs/images/v19.png` 对应的复制末尾多出 ```、`Ctrl+X` 失效、继续输入恢复不干净是同一个 selection 映射问题，不是三个独立快捷键 bug。
+- Rich DOM selection 会隐藏 closing fence，但 CodeMirror source range 在拖选终点落到块后空白/正文时仍包含该 fence。clipboard 必须基于“可见源码片段”，不能直接 slice 原始 selection。
+- `protectRichCodeFenceLines()` 拒绝普通 cut 修改部分 fence 是正确的数据保护；修复应剔除未配对 fence 并让 cut 删除同一批可见 ranges，不能放松保护。
+- cut 删除到 closer 前时必须保留一个结构换行，否则 selection 落在受保护 fence 边界，下一次输入仍会被拒绝。
+- 五种拖选终点、Tauri clipboard mock、顶部菜单、继续输入和首/中/末字符点击均已用虚构文档验证；Windows release 仍未验证。
+- 语言控件显示的 `plain` 是无语言代码块的 placeholder，不会自动写入 Markdown。
+
+## 2026-07-17 Rich 表格下方坐标错位补充
+
+- 整段原子 table replacement 解决了源码幽灵行，但 `.serein-buffer-table-block { margin-bottom: 22px; }` 仍让 DOM 空白行比 CodeMirror 测量位置低 22px；点击真实空白行会写到后续正文。
+- 把 margin 改成 padding 只修测量，不修交互：表格本体下方 22px 变成 widget 内不可编辑区域，点击被吞。
+- 最终边界是跨行可编辑 widget 不使用外部 margin，也不伪造上下 padding；Markdown 真实空行负责视觉间距和 selection。
+- 坐标回归必须以 HTML 表格本体底边为基准，不只测 widget 外框；逐点输入确认空白行和正文的切换边界。
+
+## 2026-07-20 本次合作总复盘
+
+### 用户偏好（反复调整后的稳定结论）
+
+- 默认中文，直接、具体、以可见结果为导向；允许技术反驳，但必须给出证据、可复现过程、备选方案和利弊。
+- 编辑器 bug 必须先真实复现，再修改；修改后用同一脚本反证，不接受只有 typecheck/build 或“理论上已修好”。
+- 不只修截图中的一个点；应主动检查相邻高频路径，例如点击、拖选、键盘、顶部菜单、剪贴板、继续输入、Rich/Source 保真和保存。
+- 用户已确认的 Typora-like 交互高于编辑器库默认行为；数据安全、Markdown 保真、selection/history 和可继续编辑性高于局部视觉补丁。
+- UI 自动化只使用完全虚构文档，不读取、复制或修改用户真实 Vault；未单独授权时不操作 Windows 进程。
+- Linux/Chromium/Tauri mock 用于前置反证，Windows release `.exe` 才是 WebView2、IME、系统剪贴板和真实 Vault 保存的最终验收面。
+
+### 从错误中得到的最佳实践
+
+- 视觉 DOM 与源码 selection 是两层事实。排查 Rich 错位/剪贴时同时记录 DOM 布局、`selection.from/to/text`、Markdown source、clipboard payload 和 page errors。
+- CodeMirror 可编辑行或跨行 widget 不能用 CSS margin 伪造间距；margin 不进入测量，padding 又会制造不可编辑假空白。间距应尽量由真实 Markdown 空行承担。
+- 多行 Rich 表格必须用覆盖完整 source range 的原子 block replacement；“首行 widget + 逐行隐藏文字”会留下幽灵行高和可点击坐标。
+- Rich copy/cut 必须先把 source selection 映射为可见源码范围；部分选择剔除未配对隐藏 fence，完整代码块/全文则保留成对 fence。cut 删除范围必须与 clipboard 一致，不能放松 fence 保护。
+- 大文本 paste 先查浏览器 `contenteditable` DOM mutation 路径，不要先重写 parser。原生纯文本 paste 应阻止默认 DOM 改动，一次 dispatch CodeMirror transaction。
+- 结构块输入要逐字符/逐按键复现，并先查 keymap precedence。`fill()` 或直接 paste 最终 Markdown 会绕过 pending fence、自动续行和中间 selection。
+- 每轮 UI 反证使用干净 Vite 端口；长期 HMR 可保留旧 StateField/模块，制造“修复无效”假结论。自动化找不到菜单/模块时先判定 harness 故障。
+- 系统剪贴板必须验证 Tauri command 名和 payload；`navigator.clipboard` 成功不等于 Windows 外部程序可粘贴。剪切必须在原生写入成功且 selection 未漂移后才删除。
+
+### 项目关键约束和坑
+
+- 正式交付物只在 `apps/serein-desktop/`；旧原型/归档默认不改。text-buffer 仍是实验开关，默认 Milkdown fallback 不能删除。
+- Markdown buffer 应是内容、selection、history、outline、widget 和保存的唯一真相；禁止用 deferred React 坐标、DOM 文本或 widget 缓存制造并行真相。
+- 隐藏 fence 保护是数据安全边界，不能为了让 cut/输入通过而削弱；明确结构改写必须使用显式 transaction annotation。
+- 工作区有大量 WIP，禁止 reset/checkout/restore 和 `git add .`；未明确要求不 commit/tag/push，`docs/images/` 不默认纳入。
+- 工作区树必须懒加载并屏蔽重目录，不能恢复整树递归扫描。
+- typora preflight 当前仍指向 `/home/slam/Sipeed/Serein/Typora`，会误报项目根缺失；实际仓库是 `/home/slam/Project/Serein`，不能根据该误报否定当前工作区。
+
+### 下次一次性达到本次效果的提示词
+
+```text
+请接手 /home/slam/Project/Serein 的 Serein Markdown 编辑器交互回归。先完整阅读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md、docs/runbooks/KNOWN_FAILURES.md 和 docs/runbooks/skills/serein-text-buffer-stability/SKILL.md，然后运行 python3 /home/slam/Sipeed/T_tools/agent_preflight.py --project typora。preflight 可能仍指向旧目录，当前真实仓库以 /home/slam/Project/Serein 为准。
+
+请按“目标→状态→误差→控制动作→反馈→修正→验证→沉淀”闭环推进。先真实复现，再改最小控制变量；修改后必须用同一脚本反证。不要用 typecheck/build 或“理论上”代替用户可见行为。
+
+测试只创建完全虚构的 Markdown 文档，不读取、复制或修改我的真实 Vault；未单独授权时不操作 Windows 进程。UI 脚本使用干净 Vite 端口，逐字符输入和真实键盘/鼠标事件，不用 fill/paste 最终 Markdown 绕过中间态。
+
+复现时同时采集：CodeMirror selection from/to/text、Rich DOM 布局/坐标、Markdown source、clipboard command/payload、保存前后内容和 page errors。表格问题要测 HTML 表格本体底边下方逐点点击；代码块要覆盖局部拖选、隐藏 opening/closing fence、Ctrl+C、Ctrl+X、顶部菜单、剪切后继续输入和 Rich/Source 保真。
+
+主动检查相邻高频路径，但不做无关重构。保护默认 Milkdown fallback、Vault IO、保存、history/selection、链接、代码块、表格和图片。工作区可能有大量 WIP，禁止 reset/checkout/restore、禁止 git add .，不 commit/tag/push，除非我明确要求。
+
+完成前运行最小相关单测、npm run typecheck、npm run test、npm run build、git -c safe.directory=/home/slam/Project/Serein diff --check，并用修改前的同一 Playwright 脚本证明失败转为通过。最终列出用户可见结果、根因、修改文件、命令/自动化证据、Git 状态和未验证风险。Windows release .exe 仍需通过 PowerShell 构建后，在记事本/真实 WebView2/IME/Vault 中做最终验收。
+```
+
+### 可复用 skill
+
+- 不创建第二套重复 skill；本次继续增强 `docs/runbooks/skills/serein-text-buffer-stability/SKILL.md`。
+- 该 skill 已覆盖：先复现/同脚本反证、虚构文档、干净 Vite、selection/DOM/source/clipboard 联合取证、表格原子 replacement、隐藏 fence copy/cut 映射、系统剪贴板、Windows release 终验和 dirty worktree 保护。
+- 下次直接在提示词中点名该 skill 即可；若未来要评估触发率或对比新旧版本，再补 eval/benchmark，本轮不为了形式扩大范围。
+
+## 2026-07-21 表格交互与单编辑器接手沉淀
+
+### 用户偏好（本轮反复确认后的结论）
+
+- 表格工具栏要线性、简约、低噪声：`[网格行列选择] [左对齐] [居中] [右对齐] [⋯] [删除]`。不要把“更多操作”和 `⋯` 做成两个入口，也不要用 `+↕ / −↕ / +↔ / −↔` 这类低级符号。
+- 网格是“调整表格行列尺寸”的轻量选择器：上方鼠标悬停预览、单击确认；下方可以输入行数和列数。它不是复杂的多单元格 selection。
+- Markdown 表格对齐必须按列，而不是按当前选中的多个单元格；对齐按钮只影响当前表格，并作用于当前光标所在列，写回标准分隔行 `:---`、`:---:`、`---:`。
+- 表格左侧负责行列和对齐，右侧只放 `⋯` 与删除；视觉上要有清晰的左右分工，不能做成厚重卡片或堆满文字的工具条。
+- 不要为了架构清理删除已经稳定的 Frontmatter CSS、`tags/aliases/status` 语义或其他已确认样式；如果误删，应恢复原有行为，再做局部优化。
+- 用户要求“先确认”时，必须停留在诊断阶段；先回答现象是什么、原因是什么、修复方案和利弊，再等待同意，不可把诊断问题顺手改成代码。
+
+### 从本轮错误中得到的最佳实践
+
+- CodeMirror 语法树能识别，不代表 Rich 编辑器能识别。必须沿实际运行路径检查：输入事件 → Rich 自定义扫描器/补全 → table widget → Markdown 写回；不能只看 Lezer AST 的结果。
+- 处理 `|·1|12|12|` 这类最小表格输入时，必须用逐字符/真实回车复现，分别记录输入前后 Markdown、selection、表格扫描结果和 DOM；不能只把最终 Markdown 直接塞进编辑器。
+- 解释“两个东西”前先数实例和 DOM：一个 CodeMirror buffer 可能同时有可视化 Frontmatter 属性条和原始 YAML。视觉重复不等于编辑器实例重复，修复入口应是 active/隐藏判定和布局，而不是恢复/删除编辑器。
+- 用户指出 UI“丑”时，先定位截图对应的实际 CSS 盒子、边框、阴影、hover/active 状态和空间测量，再决定改样式还是结构；不能通过删功能控件来制造“简约”。
+- 表格对齐要同时验证四层：Markdown delimiter、解析得到的 alignment、`th/td` 的 `text-align`、单元格输入框的 `text-align`。只验证源码变了不够，只验证视觉也不够。
+- 当前工作区包含大量未提交架构改动，文档沉淀也属于用户 WIP。更新 HANDOFF/memory/skill 时只编辑目标文档，不回滚、覆盖或顺手格式化源码；验证用 `git -c safe.directory=/home/slam/Project/Serein ...` 绕过环境的 dubious ownership 检查。
+
+### 当前项目约束补充
+
+- 单编辑器的目标模型是 `Markdown text → one CodeMirror EditorState → decorations/widgets/outline/save`。不允许为表格、公式或 Frontmatter 再引入一套内容/selection/history 真相。
+- 表格 widget 的结构变更必须立即序列化回 Markdown；临时焦点、滚动和网格 hover 状态可以是 widget 局部状态，但不能延迟提交造成源码与 UI 分叉。
+- 标准表格最小闭环至少包含：普通 pipe 行识别、回车补齐 header/separator/blank row、按列对齐、行列调整、`⋯` 菜单、删除、表格外退出、Rich/Source roundtrip。
+- 数学公式当前已进入单编辑器 WIP，但公式能力的完成标准还包括行内/块渲染、非法 LaTeX 保底、光标/选择不被 widget 吞掉、保存与 Source 保真、构建产物和 Windows WebView2。
+- 当前 release 仍未通过 Windows `.exe`、真实系统剪贴板、IME、真实 Vault 保存的最终验收；Linux/Chromium 结果必须在交付报告中标注为前置证据而非平台结论。
+
+> 架构状态修订（2026-07-21）：更早历史段落中的“text-buffer 仍是实验开关、必须保留 Milkdown fallback”是当时的阶段性约束，不再代表当前决策。用户已确认单编辑器方案可以成为全架构；当前正式路径是 `EditorHost → MarkdownTextBufferEditor`，旧 Milkdown/textarea 源码只通过历史 commit 回滚，不恢复为并行源码。当前仍未完成的是 release、性能和真实平台验收，不是编辑器架构是否单一。
+
+### 本轮推荐提示词（一次性对齐）
+
+```text
+请接手 /home/slam/Project/Serein。先读 AGENTS.md、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md、docs/runbooks/KNOWN_FAILURES.md，以及 docs/runbooks/skills/serein-text-buffer-stability/SKILL.md；再运行项目 preflight，并说明它是否指向了旧目录。默认中文，按“目标→状态→误差→控制动作→反馈→修正→验证→沉淀”闭环推进。
+
+当前目标是维护单一 CodeMirror Markdown 编辑器。先不要改代码：先用完全虚构文档复现并报告根因。若问题涉及表格，必须分别检查 CodeMirror 语法树与 Rich 自定义扫描器，真实逐字符输入 `|1|12|12|` 后回车，验证 header/separator/blank row；表格工具栏固定为网格行列、左/中/右对齐、`⋯`、删除。对齐按标准 Markdown 按列写回，只作用当前表格和当前列，不引入多单元格选区。
+
+同时保护：单一 editor state、selection/history、保存、链接、代码块、Frontmatter tags/aliases/status、图片和已跑通的 Rich/Source 路径。看到截图重复或丑时先定位真实 DOM/CSS 盒子，不要先删控件或恢复第二套编辑器。任何修改都要用最小共享根因完成，并用同一个逐键脚本、源码 roundtrip、DOM/截图和 page errors 反证。
+
+完成后运行 npm run typecheck、npm run test、npm run build、git -c safe.directory=/home/slam/Project/Serein diff --check；UI 使用干净 Vite 端口。Windows release、WebView2、IME、系统剪贴板和真实 Vault 未验证时必须明确写出。只更新当前任务相关文件，不使用 git add .，不自动 commit/tag/push。
+```
+
+### 本轮 skill 决策
+
+- 不创建重复 skill。继续增强 `docs/runbooks/skills/serein-text-buffer-stability/SKILL.md`，因为它已经覆盖单编辑器、结构块、表格 widget、selection/history、Vite 回归和 Windows 终验。
+- 新增内容应保持可执行：先确认/再改、表格实际运行路径、按列对齐、Frontmatter 重复诊断、最小表格输入、视觉与源码双重验证、交接沉淀。

@@ -6,6 +6,7 @@ import {
   normalizeRichMarkdownEscapes,
   normalizeWikiLinkEscapes,
 } from "../.test-dist/shared/markdown.js";
+import { renderMathToHtml, scanMarkdownMath } from "../.test-dist/shared/math.js";
 import { renderMarkdownBody } from "../.test-dist/export/markdownExport.js";
 
 function readFixture(name) {
@@ -34,4 +35,40 @@ test("exports complex code fixtures without dropping EOF heredoc lines", () => {
   const html = renderMarkdownBody(readFixture("00_raw.txt"));
   assert.match(html, /EOF/);
   assert.match(html, /127\.0\.0\.1:7897/);
+});
+
+test("scans inline and block math without entering code", () => {
+  const markdown = [
+    "Inline $x^2 + y^2 = z^2$.",
+    "`$not math$`.",
+    "```",
+    "$also not math$",
+    "```",
+    "$$",
+    "\\frac{1}{2}",
+    "$$",
+  ].join("\n");
+
+  assert.deepEqual(scanMarkdownMath(markdown).map(({ content, kind }) => ({ content, kind })), [
+    { content: "x^2 + y^2 = z^2", kind: "inline" },
+    { content: "\\frac{1}{2}", kind: "block" },
+  ]);
+  assert.deepEqual(scanMarkdownMath("$$\n\n$$"), []);
+});
+
+test("renders KaTeX math in HTML export", () => {
+  const html = renderMarkdownBody("Euler: $e^{i\\pi}+1=0$\n\n$$\\frac{1}{2}$$");
+  assert.match(html, /class="katex"/);
+  assert.match(html, /katex-display/);
+  assert.match(renderMathToHtml("\\sqrt{x}", false), /class="katex"/);
+});
+
+test("exports pipe tables with short delimiter cells", () => {
+  const html = renderMarkdownBody([
+    "| 模块 | 概念 | 总分 |",
+    "| --- | -: | -- |",
+    "| 线性代数 |  | /20 |",
+  ].join("\n"));
+  assert.match(html, /<table>/);
+  assert.match(html, /<td[^>]*>\/20<\/td>/);
 });

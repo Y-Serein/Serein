@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import "katex/dist/katex.min.css";
 import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from "@codemirror/commands";
 import { markdown as markdownSupport, markdownLanguage } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -31,7 +32,7 @@ import {
 } from "@codemirror/view";
 import type { EditorMode } from "../app/types";
 import type { AppLanguage, appText } from "../app/i18n";
-import type { EditorCommandResult, EditorCommandSignal, Note } from "../domain/model";
+import type { EditorCommandSignal, Note } from "../domain/model";
 import {
   analyzeTextBufferMarkdown,
   deleteTextBufferTableColumn,
@@ -43,7 +44,6 @@ import {
   isTextBufferCodeBlockPhysicalLastLine,
   moveTextBufferTableColumn,
   moveTextBufferTableRow,
-  nextTextBufferTableAlignment,
   normalizeTextBufferCodeBlockSelectionText,
   normalizeTextBufferTable,
   scanTextBufferInlineLinks,
@@ -52,6 +52,7 @@ import {
   setTextBufferTableAlignment,
   shouldExitTextBufferCodeBlockOnEnter,
   stripTextBufferContainerPrefix,
+  textBufferTableCompletionFromPipeRow,
   textBufferCodeBlockLineState,
   textBufferCodeBlockContentRange,
   textBufferCodeBlockReplacementText,
@@ -80,7 +81,8 @@ import {
   readDesktopClipboardText,
   writeDesktopClipboardText,
 } from "../services/clipboard";
-import type { WikiLinkSuggestion } from "./MilkdownEditor";
+import type { WikiLinkSuggestion } from "./editorTypes";
+import { renderMathToHtml, scanMarkdownMath, type MarkdownMathSpan } from "../shared/math";
 
 type TextBundle = (typeof appText)[AppLanguage];
 
@@ -89,7 +91,7 @@ type MarkdownTextBufferEditorProps = {
   activeNote: Note;
   editorMode: EditorMode;
   command: EditorCommandSignal | null;
-  onCommandResult: (result: EditorCommandResult) => void;
+  onCommandResult?: (result: { command: EditorCommandSignal; handled: boolean }) => void;
   onChange: (markdown: string) => void;
   onOpenLink: (href: string) => boolean;
   wikiLinkSuggestions: WikiLinkSuggestion[];
@@ -1136,6 +1138,29 @@ class WikiLinkWidget extends WidgetType {
   }
 }
 
+class MathWidget extends WidgetType {
+  constructor(
+    private readonly content: string,
+    private readonly kind: MarkdownMathSpan["kind"],
+  ) {
+    super();
+  }
+
+  eq(other: MathWidget) {
+    return other.content === this.content && other.kind === this.kind;
+  }
+
+  toDOM() {
+    const element = document.createElement(this.kind === "block" ? "div" : "span");
+    element.className = this.kind === "block"
+      ? "serein-buffer-math-block"
+      : "serein-buffer-math-inline";
+    element.setAttribute("role", "math");
+    element.innerHTML = renderMathToHtml(this.content, this.kind === "block");
+    return element;
+  }
+}
+
 type PendingTableFocus = {
   tableFrom: number;
   row: number;
@@ -1150,11 +1175,32 @@ function tableWidgetCacheKey(table: TextBufferTableBlock) {
   return `${table.rows.length}:${Math.max(table.alignments.length, ...table.rows.map((row) => row.length))}`;
 }
 
-function tableAlignmentSymbol(alignment: TextBufferTableBlock["alignments"][number]) {
-  if (alignment === "left") return "↤";
-  if (alignment === "center") return "↔";
-  if (alignment === "right") return "↦";
-  return "—";
+function createTableAlignmentIcon(alignment: "left" | "center" | "right") {
+  const icon = document.createElement("span");
+  icon.className = `serein-buffer-table-align-icon is-${alignment}`;
+  icon.setAttribute("aria-hidden", "true");
+  const widths = alignment === "left"
+    ? [14, 9, 12]
+    : alignment === "center"
+      ? [10, 16, 12]
+      : [12, 9, 14];
+  widths.forEach((width) => {
+    const line = document.createElement("span");
+    line.className = "serein-buffer-table-align-icon-line";
+    line.style.width = `${width}px`;
+    icon.append(line);
+  });
+  return icon;
+}
+
+function createTableGridIcon() {
+  const icon = document.createElement("span");
+  icon.className = "serein-buffer-table-grid-icon";
+  icon.setAttribute("aria-hidden", "true");
+  for (let index = 0; index < 9; index += 1) {
+    icon.append(document.createElement("span"));
+  }
+  return icon;
 }
 
 class PipeTableWidget extends WidgetType {
@@ -1181,6 +1227,16 @@ class PipeTableWidget extends WidgetType {
 
     const toolbar = document.createElement("div");
     toolbar.className = "serein-buffer-table-toolbar";
+    const toolbarStart = document.createElement("div");
+    toolbarStart.className = "serein-buffer-table-toolbar-start";
+    const rowColumnTools = document.createElement("div");
+    rowColumnTools.className = "serein-buffer-table-toolbar-group";
+    const alignmentTools = document.createElement("div");
+    alignmentTools.className = "serein-buffer-table-toolbar-group serein-buffer-table-alignment-tools";
+    const toolbarEnd = document.createElement("div");
+    toolbarEnd.className = "serein-buffer-table-toolbar-end";
+    toolbarStart.append(rowColumnTools, alignmentTools);
+    toolbar.append(toolbarStart, toolbarEnd);
 
     const tableElement = document.createElement("table");
     const tableData = normalizeTextBufferTable(this.table);
@@ -1242,6 +1298,30 @@ class PipeTableWidget extends WidgetType {
         : normalizeTextBufferTable(tableData);
     };
 
+    const resizeTable = (requestedRows: number, requestedColumns: number) => {
+      const rowCount = Math.max(2, Math.min(99, Math.round(requestedRows)));
+      const columnCount = Math.max(2, Math.min(99, Math.round(requestedColumns)));
+      let nextTable = tableWithActiveCellValue();
+
+      while (nextTable.rows.length < rowCount) {
+        nextTable = insertTextBufferTableRow(nextTable, nextTable.rows.length - 1);
+      }
+      while (nextTable.rows.length > rowCount) {
+        nextTable = deleteTextBufferTableRow(nextTable, nextTable.rows.length - 1);
+      }
+      while (nextTable.alignments.length < columnCount) {
+        nextTable = insertTextBufferTableColumn(nextTable, nextTable.alignments.length - 1);
+      }
+      while (nextTable.alignments.length > columnCount) {
+        nextTable = deleteTextBufferTableColumn(nextTable, nextTable.alignments.length - 1);
+      }
+
+      replaceTable(nextTable, {
+        row: Math.min(activeCell.row, nextTable.rows.length - 1),
+        column: Math.min(activeCell.column, nextTable.alignments.length - 1),
+      });
+    };
+
     const exitTableAfter = (nextTable: TextBufferTableData) => {
       const nextMarkdown = serializeTextBufferTable(nextTable);
       const suffix = view.state.sliceDoc(this.table.to, Math.min(view.state.doc.length, this.table.to + 2));
@@ -1280,10 +1360,30 @@ class PipeTableWidget extends WidgetType {
       view.focus();
     };
 
-    const addToolbarButton = (label: string, title: string, action: () => void) => {
+    const deleteTable = () => {
+      const suffix = view.state.sliceDoc(this.table.to, Math.min(view.state.doc.length, this.table.to + 2));
+      const to = this.table.to + (suffix.startsWith("\n\n") ? 2 : suffix.startsWith("\n") ? 1 : 0);
+      suppressBlurCommit = true;
+      view.dispatch({
+        changes: { from: this.table.from, to, insert: "" },
+        selection: { anchor: this.table.from },
+        annotations: Transaction.userEvent.of("input.table.delete"),
+      });
+      view.focus();
+    };
+
+    const addToolbarButton = (
+      parent: HTMLElement,
+      content: string | Node,
+      title: string,
+      action: () => void,
+      className = "",
+    ) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = label;
+      if (typeof content === "string") button.textContent = content;
+      else button.append(content);
+      if (className) button.className = className;
       button.title = title;
       button.setAttribute("aria-label", title);
       button.addEventListener("mousedown", (event) => {
@@ -1294,48 +1394,230 @@ class PipeTableWidget extends WidgetType {
         event.stopPropagation();
         action();
       });
-      toolbar.append(button);
+      parent.append(button);
       return button;
     };
 
-    addToolbarButton("+ Row", "Insert row after the active row", () => {
+    const addMenuButton = (menu: HTMLElement, label: string, title: string, action: () => void) => {
+      const button = addToolbarButton(menu, label, title, () => {
+        action();
+        moreDetails.removeAttribute("open");
+      }, "serein-buffer-table-menu-item");
+      return button;
+    };
+
+    const gridDetails = document.createElement("details");
+    gridDetails.className = "serein-buffer-table-grid-picker";
+    const gridSummary = document.createElement("summary");
+    gridSummary.append(createTableGridIcon());
+    gridSummary.title = "Select table rows and columns";
+    gridSummary.setAttribute("aria-label", "Select table rows and columns");
+    gridSummary.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    gridSummary.addEventListener("click", (event) => event.stopPropagation());
+
+    const gridMenu = document.createElement("div");
+    gridMenu.className = "serein-buffer-table-grid-menu";
+    const gridCells = document.createElement("div");
+    gridCells.className = "serein-buffer-table-grid-cells";
+    const gridSizeLabel = document.createElement("div");
+    gridSizeLabel.className = "serein-buffer-table-grid-size";
+    const gridFields = document.createElement("div");
+    gridFields.className = "serein-buffer-table-grid-fields";
+    const gridRowsInput = document.createElement("input");
+    gridRowsInput.type = "number";
+    gridRowsInput.min = "2";
+    gridRowsInput.max = "99";
+    gridRowsInput.setAttribute("aria-label", "Table rows");
+    const gridColumnsInput = document.createElement("input");
+    gridColumnsInput.type = "number";
+    gridColumnsInput.min = "2";
+    gridColumnsInput.max = "99";
+    gridColumnsInput.setAttribute("aria-label", "Table columns");
+    const gridApplyButton = document.createElement("button");
+    gridApplyButton.type = "button";
+    gridApplyButton.className = "serein-buffer-table-grid-apply";
+    gridApplyButton.textContent = "✓";
+    gridApplyButton.title = "Apply table size";
+    gridApplyButton.setAttribute("aria-label", "Apply table size");
+    gridFields.append(
+      Object.assign(document.createElement("span"), { textContent: "行" }),
+      gridRowsInput,
+      Object.assign(document.createElement("span"), { textContent: "列" }),
+      gridColumnsInput,
+      gridApplyButton,
+    );
+
+    let gridRows = tableData.rows.length;
+    let gridColumns = tableData.alignments.length;
+    const updateGridPreview = (rows: number, columns: number, syncInputs = true) => {
+      gridRows = Math.max(2, Math.min(99, Math.round(rows)));
+      gridColumns = Math.max(2, Math.min(99, Math.round(columns)));
+      if (syncInputs) {
+        gridRowsInput.value = String(gridRows);
+        gridColumnsInput.value = String(gridColumns);
+      }
+      gridSizeLabel.textContent = `${gridRows} × ${gridColumns}`;
+      gridCells.querySelectorAll<HTMLButtonElement>("button").forEach((cell) => {
+        const row = Number(cell.dataset.row);
+        const column = Number(cell.dataset.column);
+        cell.dataset.selected = row <= gridRows && column <= gridColumns ? "true" : "false";
+      });
+    };
+    const applyGridSize = () => {
+      resizeTable(gridRows, gridColumns);
+      gridDetails.removeAttribute("open");
+    };
+
+    for (let row = 2; row <= 9; row += 1) {
+      for (let column = 2; column <= 11; column += 1) {
+        const cell = document.createElement("button");
+        cell.type = "button";
+        cell.className = "serein-buffer-table-grid-cell";
+        cell.dataset.row = String(row);
+        cell.dataset.column = String(column);
+        cell.setAttribute("aria-label", `${row} rows by ${column} columns`);
+        cell.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        cell.addEventListener("mouseenter", () => updateGridPreview(Number(cell.dataset.row), Number(cell.dataset.column)));
+        cell.addEventListener("focus", () => updateGridPreview(Number(cell.dataset.row), Number(cell.dataset.column)));
+        cell.addEventListener("click", (event) => {
+          event.stopPropagation();
+          applyGridSize();
+        });
+        gridCells.append(cell);
+      }
+    }
+    updateGridPreview(gridRows, gridColumns);
+    gridRowsInput.addEventListener("input", () => updateGridPreview(Number(gridRowsInput.value) || 2, Number(gridColumnsInput.value) || 2, false));
+    gridColumnsInput.addEventListener("input", () => updateGridPreview(Number(gridRowsInput.value) || 2, Number(gridColumnsInput.value) || 2, false));
+    gridRowsInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      applyGridSize();
+    });
+    gridColumnsInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      applyGridSize();
+    });
+    gridApplyButton.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    gridApplyButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      applyGridSize();
+    });
+    gridDetails.addEventListener("mouseleave", () => updateGridPreview(tableData.rows.length, tableData.alignments.length));
+    gridMenu.append(gridCells, gridSizeLabel, gridFields);
+    gridDetails.append(gridSummary, gridMenu);
+    rowColumnTools.append(gridDetails);
+
+    const alignmentButtons = new Map<"left" | "center" | "right", HTMLButtonElement>();
+    const updateAlignmentToolbar = () => {
+      const current = tableData.alignments[activeCell.column] ?? "default";
+      const effective = current === "default" ? "left" : current;
+      alignmentButtons.forEach((button, alignment) => {
+        button.dataset.active = alignment === effective ? "true" : "false";
+        button.setAttribute("aria-pressed", alignment === effective ? "true" : "false");
+      });
+    };
+    (["left", "center", "right"] as const).forEach((alignment) => {
+      const button = addToolbarButton(
+        alignmentTools,
+        createTableAlignmentIcon(alignment),
+        `Set current column alignment to ${alignment}`,
+        () => {
+          const nextTable = setTextBufferTableAlignment(
+            tableWithActiveCellValue(),
+            activeCell.column,
+            alignment,
+          );
+          replaceTable(nextTable, { row: activeCell.row, column: activeCell.column });
+        },
+        "serein-buffer-table-align-tool",
+      );
+      alignmentButtons.set(alignment, button);
+    });
+    updateAlignmentToolbar();
+
+    const moreDetails = document.createElement("details");
+    moreDetails.className = "serein-buffer-table-more";
+    const moreSummary = document.createElement("summary");
+    moreSummary.textContent = "⋯";
+    moreSummary.title = "More table operations";
+    moreSummary.setAttribute("aria-label", "More table operations");
+    moreSummary.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    moreSummary.addEventListener("click", (event) => event.stopPropagation());
+    const moreMenu = document.createElement("div");
+    moreMenu.className = "serein-buffer-table-menu";
+    moreDetails.append(moreSummary, moreMenu);
+    toolbarEnd.append(moreDetails);
+
+    addMenuButton(moreMenu, "上方插入行", "Insert row above the active row", () => {
+      const nextTable = insertTextBufferTableRow(tableWithActiveCellValue(), activeCell.row - 1);
+      replaceTable(nextTable, { row: activeCell.row, column: activeCell.column });
+    });
+    addMenuButton(moreMenu, "下方插入行", "Insert row below the active row", () => {
       const nextTable = insertTextBufferTableRow(tableWithActiveCellValue(), activeCell.row);
-      replaceTable(nextTable, { row: Math.min(activeCell.row + 1, nextTable.rows.length - 1), column: activeCell.column });
+      replaceTable(nextTable, { row: activeCell.row + 1, column: activeCell.column });
     });
-    addToolbarButton("− Row", "Delete the active row", () => {
-      const nextTable = deleteTextBufferTableRow(tableWithActiveCellValue(), activeCell.row);
-      replaceTable(nextTable, { row: Math.min(activeCell.row, nextTable.rows.length - 1), column: activeCell.column });
+    addMenuButton(moreMenu, "左侧插入列", "Insert column to the left of the active column", () => {
+      const nextTable = insertTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column - 1);
+      replaceTable(nextTable, { row: activeCell.row, column: activeCell.column });
     });
-    addToolbarButton("↑ Row", "Move the active row up", () => {
+    addMenuButton(moreMenu, "右侧插入列", "Insert column to the right of the active column", () => {
+      const nextTable = insertTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column);
+      replaceTable(nextTable, { row: activeCell.row, column: activeCell.column + 1 });
+    });
+    addMenuButton(moreMenu, "上移该行", "Move the active row up", () => {
       const nextTable = moveTextBufferTableRow(tableWithActiveCellValue(), activeCell.row, -1);
       replaceTable(nextTable, { row: Math.max(1, activeCell.row - 1), column: activeCell.column });
     });
-    addToolbarButton("↓ Row", "Move the active row down", () => {
+    addMenuButton(moreMenu, "下移该行", "Move the active row down", () => {
       const nextTable = moveTextBufferTableRow(tableWithActiveCellValue(), activeCell.row, 1);
       replaceTable(nextTable, { row: Math.min(nextTable.rows.length - 1, activeCell.row + 1), column: activeCell.column });
     });
-    addToolbarButton("+ Column", "Insert column after the active column", () => {
-      const nextTable = insertTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column);
-      replaceTable(nextTable, { row: activeCell.row, column: Math.min(activeCell.column + 1, nextTable.alignments.length - 1) });
-    });
-    addToolbarButton("− Column", "Delete the active column", () => {
-      const nextTable = deleteTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column);
-      replaceTable(nextTable, { row: activeCell.row, column: Math.min(activeCell.column, nextTable.alignments.length - 1) });
-    });
-    addToolbarButton("← Column", "Move the active column left", () => {
+    addMenuButton(moreMenu, "左移该列", "Move the active column left", () => {
       const nextTable = moveTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column, -1);
       replaceTable(nextTable, { row: activeCell.row, column: Math.max(0, activeCell.column - 1) });
     });
-    addToolbarButton("Column →", "Move the active column right", () => {
+    addMenuButton(moreMenu, "右移该列", "Move the active column right", () => {
       const nextTable = moveTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column, 1);
       replaceTable(nextTable, { row: activeCell.row, column: Math.min(nextTable.alignments.length - 1, activeCell.column + 1) });
     });
+    addMenuButton(moreMenu, "删除该行", "Delete the active row", () => {
+      const nextTable = deleteTextBufferTableRow(tableWithActiveCellValue(), activeCell.row);
+      replaceTable(nextTable, { row: Math.min(activeCell.row, nextTable.rows.length - 1), column: activeCell.column });
+    });
+    addMenuButton(moreMenu, "删除该列", "Delete the active column", () => {
+      const nextTable = deleteTextBufferTableColumn(tableWithActiveCellValue(), activeCell.column);
+      replaceTable(nextTable, { row: activeCell.row, column: Math.min(activeCell.column, nextTable.alignments.length - 1) });
+    });
+    addMenuButton(moreMenu, "复制表格", "Copy table Markdown", () => {
+      void writeDesktopClipboardText(serializeTextBufferTable(tableWithActiveCellValue()));
+    });
+    addMenuButton(moreMenu, "格式化表格源码", "Format table Markdown source", () => {
+      replaceTable(tableWithActiveCellValue(), { row: activeCell.row, column: activeCell.column });
+    });
+
+    addToolbarButton(toolbarEnd, "×", "Delete table", deleteTable, "serein-buffer-table-delete");
 
     const createCellInput = (rowIndex: number, cellIndex: number, value: string) => {
       const input = document.createElement("input");
       input.value = value;
       input.dataset.row = String(rowIndex);
       input.dataset.column = String(cellIndex);
+      const alignment = tableData.alignments[cellIndex] ?? "default";
+      input.style.textAlign = alignment === "center" ? "center" : alignment === "right" ? "right" : "left";
       input.setAttribute("aria-label", `Table row ${rowIndex + 1}, column ${cellIndex + 1}`);
       let committedValue = value;
 
@@ -1353,6 +1635,7 @@ class PipeTableWidget extends WidgetType {
 
       input.addEventListener("focus", () => {
         activeCell = { row: rowIndex, column: cellIndex };
+        updateAlignmentToolbar();
       });
       input.addEventListener("mousedown", stopEditorEvent);
       input.addEventListener("click", stopEditorEvent);
@@ -1421,30 +1704,9 @@ class PipeTableWidget extends WidgetType {
     const headerRow = document.createElement("tr");
     header.forEach((cell, cellIndex) => {
       const th = document.createElement("th");
-      const headerCell = document.createElement("div");
-      headerCell.className = "serein-buffer-table-header-cell";
-      const alignButton = document.createElement("button");
-      const alignment = tableData.alignments[cellIndex];
-      alignButton.type = "button";
-      alignButton.className = "serein-buffer-table-align";
-      alignButton.textContent = tableAlignmentSymbol(alignment);
-      alignButton.title = `Alignment: ${alignment}. Click to cycle.`;
-      alignButton.setAttribute("aria-label", alignButton.title);
-      alignButton.addEventListener("mousedown", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      });
-      alignButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        const nextTable = setTextBufferTableAlignment(
-          tableWithActiveCellValue(),
-          cellIndex,
-          nextTextBufferTableAlignment(alignment),
-        );
-        replaceTable(nextTable, { row: activeCell.row, column: cellIndex });
-      });
-      headerCell.append(createCellInput(0, cellIndex, cell), alignButton);
-      th.append(headerCell);
+      const alignment = tableData.alignments[cellIndex] ?? "default";
+      th.style.textAlign = alignment === "center" ? "center" : alignment === "right" ? "right" : "left";
+      th.append(createCellInput(0, cellIndex, cell));
       headerRow.append(th);
     });
     thead.append(headerRow);
@@ -1455,6 +1717,8 @@ class PipeTableWidget extends WidgetType {
       const rowElement = document.createElement("tr");
       header.forEach((_, cellIndex) => {
         const td = document.createElement("td");
+        const alignment = tableData.alignments[cellIndex] ?? "default";
+        td.style.textAlign = alignment === "center" ? "center" : alignment === "right" ? "right" : "left";
         td.append(createCellInput(bodyIndex + 1, cellIndex, row[cellIndex] ?? ""));
         rowElement.append(td);
       });
@@ -1556,12 +1820,16 @@ function analyzeTyporaDocument(state: EditorState, options: TextBufferDecoration
   const tableBlocks = options.mode === "rich" ? scanTextBufferTables(markdown, analysis) : [];
   const tableStarts = new Map(tableBlocks.map((table) => [table.from, table]));
   const tableRanges = tableBlocks.map((table) => ({ from: table.from, to: table.to }));
+  const mathSpans = scanMarkdownMath(markdown).filter((span) => (
+    !tableRanges.some((range) => range.from < span.to && range.to > span.from)
+  ));
   return {
     markdown,
     analysis,
     frontmatterEnd,
     tableStarts,
     tableRanges,
+    mathSpans,
   };
 }
 
@@ -1699,7 +1967,24 @@ function buildTyporaActiveDecorations(state: EditorState): TyporaActiveDecoratio
   const builder = new SortedDecorationBuilder();
   const options = state.facet(textBufferDecorationOptions);
   const document = state.field(typoraDocumentDecorations).document;
-  const { analysis, frontmatterEnd } = document;
+  const { analysis, frontmatterEnd, mathSpans } = document;
+
+  const sourceFrontmatter = splitYamlFrontmatter(document.markdown);
+  const sourceFrontmatterEnd = sourceFrontmatter
+    ? document.markdown.length - sourceFrontmatter.body.length
+    : 0;
+
+  mathSpans.forEach((span) => {
+    if (span.from < sourceFrontmatterEnd) return;
+    if (options.mode === "rich" && !selectionTouchesRange(state, span.from, span.to)) {
+      builder.addAtomic(span.from, span.to, Decoration.replace({
+        widget: new MathWidget(span.content, span.kind),
+        block: span.kind === "block",
+      }));
+    } else {
+      addMark(builder, span.from, span.to, "serein-buffer-math-source");
+    }
+  });
 
   if (frontmatterEnd > 0) {
     const frontmatterActive = selectionTouchesRange(state, 0, frontmatterEnd);
@@ -2091,6 +2376,33 @@ function handleTextBufferEnter(view: EditorView) {
     && shouldExitTextBufferCodeBlockOnEnter(context.analysis, context.block, context.line.number)
   ) {
     return exitCodeBlockAfter(view, context.block);
+  }
+
+  if (
+    view.dom.classList.contains("serein-buffer-rich")
+    && !context
+    && pos === line.to
+  ) {
+    const markdown = view.state.doc.toString();
+    const frontmatter = splitYamlFrontmatter(markdown);
+    const frontmatterEnd = frontmatter ? markdown.length - frontmatter.body.length : 0;
+    const tableMarkdown = line.from >= frontmatterEnd
+      ? textBufferTableCompletionFromPipeRow(line.text)
+      : null;
+    if (tableMarkdown) {
+      pendingTableFocus.set(view, {
+        tableFrom: line.from,
+        row: 1,
+        column: 0,
+        scrollLeft: 0,
+      });
+      view.dispatch({
+        changes: { from: line.from, to: line.to, insert: tableMarkdown },
+        selection: { anchor: line.from + tableMarkdown.length },
+        annotations: Transaction.userEvent.of("input.table.create"),
+      });
+      return true;
+    }
   }
 
   const analysis = context?.analysis ?? analyzeTextBufferState(view.state);
@@ -2536,7 +2848,7 @@ export function MarkdownTextBufferEditor({
     if (!view || !command || lastCommandIdRef.current === command.id) return;
     lastCommandIdRef.current = command.id;
     void runTextBufferCommand(view, command).then((handled) => {
-      onCommandResult({ command, handled });
+      onCommandResult?.({ command, handled });
     });
   }, [command, onCommandResult]);
 
