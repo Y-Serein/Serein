@@ -1,4 +1,5 @@
 import { normalizeImageSource } from "./markdownExport.js";
+import { scanMarkdownMath } from "../shared/math.js";
 
 export type PdfExportOptions = {
   title: string;
@@ -49,7 +50,19 @@ export async function markdownToPdfBytes(markdown: string, options: PdfExportOpt
 }
 
 function markdownToPdfBlocks(markdown: string, options: PdfExportOptions, imagesBySource: Map<string, PdfImage>) {
-  const sourceLines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const normalizedMarkdown = markdown.replace(/\r\n?/g, "\n");
+  const sourceLines = normalizedMarkdown.split("\n");
+  const lineOffsets: number[] = [];
+  let lineOffset = 0;
+  sourceLines.forEach((line, lineIndex) => {
+    lineOffsets.push(lineOffset);
+    lineOffset += line.length + (lineIndex < sourceLines.length - 1 ? 1 : 0);
+  });
+  const blockMathByFrom = new Map(
+    scanMarkdownMath(normalizedMarkdown)
+      .filter((span) => span.kind === "block")
+      .map((span) => [span.from, span]),
+  );
   const blocks: PdfBlock[] = [];
   let inFence = false;
   let fenceMarker = "";
@@ -80,6 +93,17 @@ function markdownToPdfBlocks(markdown: string, options: PdfExportOptions, images
 
     if (inFence) {
       pushWrapped(blocks, rawLine || " ", 10, 16, 0);
+      continue;
+    }
+
+    const blockMath = blockMathByFrom.get(lineOffsets[index] ?? -1);
+    if (blockMath) {
+      pushWrapped(blocks, blockMath.content.trim(), 11, 0, 8);
+      index += 1;
+      while (index < sourceLines.length && (lineOffsets[index] ?? normalizedMarkdown.length) < blockMath.to) {
+        index += 1;
+      }
+      index -= 1;
       continue;
     }
 
@@ -158,7 +182,18 @@ function parseStandaloneImage(text: string, imagesBySource: Map<string, PdfImage
 }
 
 function cleanInlineText(value: string) {
-  return value
+  const mathTokens: Array<{ token: string; content: string }> = [];
+  let protectedValue = value;
+  const inlineMath = scanMarkdownMath(value).filter((span) => span.kind === "inline");
+  for (let index = inlineMath.length - 1; index >= 0; index -= 1) {
+    const span = inlineMath[index];
+    if (!span) continue;
+    const token = `\u0000SEREIN_MATH_${mathTokens.length}\u0000`;
+    mathTokens.push({ token, content: span.content });
+    protectedValue = `${protectedValue.slice(0, span.from)}${token}${protectedValue.slice(span.to)}`;
+  }
+
+  let cleaned = protectedValue
     .replace(/!\[([^\]\n]*)]\(([^)\n]+)\)/g, (_match, alt: string, target: string) => {
       const source = normalizeImageSource(target);
       return `[Image: ${alt.trim() || source}]`;
@@ -169,11 +204,15 @@ function cleanInlineText(value: string) {
     .replace(/\*\*([^*\n]+)\*\*/g, "$1")
     .replace(/\*([^*\n]+)\*/g, "$1")
     .replace(/~~([^~\n]+)~~/g, "$1")
-    .replace(/\$\$?([^$\n]+)\$\$?/g, "$1")
     .replace(/\[\^([^\]\n]+)]/g, "[$1]")
     .replace(/<br\s*\/?>/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+  mathTokens.forEach(({ token, content }) => {
+    cleaned = cleaned.split(token).join(content);
+  });
+  return cleaned;
 }
 
 function pushGap(blocks: PdfBlock[], gap: number) {

@@ -56,11 +56,31 @@ test("scans inline and block math without entering code", () => {
   assert.deepEqual(scanMarkdownMath("$$\n\n$$"), []);
 });
 
+test("keeps currency, whitespace delimiters, and code spans out of inline math", () => {
+  const markdown = [
+    "Price $5 and $10 stays currency.",
+    "Whitespace $ x $ stays text.",
+    "Escaped \\$value stays text.",
+    "`$single code$` and ``$double code$`` stay code.",
+    "Valid $x + 1$ remains math.",
+  ].join("\n");
+
+  assert.deepEqual(scanMarkdownMath(markdown).map(({ content, kind }) => ({ content, kind })), [
+    { content: "x + 1", kind: "inline" },
+  ]);
+});
+
 test("renders KaTeX math in HTML export", () => {
   const html = renderMarkdownBody("Euler: $e^{i\\pi}+1=0$\n\n$$\\frac{1}{2}$$");
   assert.match(html, /class="katex"/);
   assert.match(html, /katex-display/);
   assert.match(renderMathToHtml("\\sqrt{x}", false), /class="katex"/);
+});
+
+test("falls back to visible escaped source for invalid LaTeX", () => {
+  const html = renderMathToHtml("\\frac{", false);
+  assert.match(html, /class="serein-math-error"/);
+  assert.match(html, /\\frac\{/);
 });
 
 test("exports pipe tables with short delimiter cells", () => {

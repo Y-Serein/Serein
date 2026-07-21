@@ -40,10 +40,40 @@ function isEscaped(text: string, index: number) {
 }
 
 function inlineCodeRanges(text: string) {
-  return Array.from(text.matchAll(/`[^`\n]+`/g), (match) => ({
-    from: match.index ?? 0,
-    to: (match.index ?? 0) + match[0].length,
-  }));
+  const ranges: Array<{ from: number; to: number }> = [];
+  let index = 0;
+
+  while (index < text.length) {
+    if (text[index] !== "`") {
+      index += 1;
+      continue;
+    }
+
+    const openerFrom = index;
+    while (text[index] === "`") index += 1;
+    const markerLength = index - openerFrom;
+    let cursor = index;
+    let closingTo = -1;
+
+    while (cursor < text.length) {
+      const candidateFrom = text.indexOf("`", cursor);
+      if (candidateFrom < 0) break;
+      let candidateTo = candidateFrom;
+      while (text[candidateTo] === "`") candidateTo += 1;
+      if (candidateTo - candidateFrom === markerLength) {
+        closingTo = candidateTo;
+        break;
+      }
+      cursor = candidateTo;
+    }
+
+    if (closingTo >= 0) {
+      ranges.push({ from: openerFrom, to: closingTo });
+      index = closingTo;
+    }
+  }
+
+  return ranges;
 }
 
 function rangeOverlaps(
@@ -52,6 +82,20 @@ function rangeOverlaps(
   to: number,
 ) {
   return ranges.some((range) => range.from < to && range.to > from);
+}
+
+function canOpenInlineDollar(text: string, index: number) {
+  const next = text[index + 1];
+  return Boolean(next) && next !== "$" && !/\s/.test(next);
+}
+
+function canCloseInlineDollar(text: string, index: number) {
+  const previous = text[index - 1];
+  const next = text[index + 1];
+  return Boolean(previous)
+    && previous !== "$"
+    && !/\s/.test(previous)
+    && !/\d/.test(next ?? "");
 }
 
 function scanInlineMath(text: string, lineFrom: number): MarkdownMathSpan[] {
@@ -65,6 +109,7 @@ function scanInlineMath(text: string, lineFrom: number): MarkdownMathSpan[] {
       || isEscaped(text, index)
       || text[index - 1] === "$"
       || text[index + 1] === "$"
+      || !canOpenInlineDollar(text, index)
     ) {
       index += 1;
       continue;
@@ -77,6 +122,7 @@ function scanInlineMath(text: string, lineFrom: number): MarkdownMathSpan[] {
         && !isEscaped(text, close)
         && text[close - 1] !== "$"
         && text[close + 1] !== "$"
+        && canCloseInlineDollar(text, close)
       ) {
         const rawContent = text.slice(index + 1, close);
         const content = rawContent.trim();
@@ -174,7 +220,7 @@ export function renderMathToHtml(content: string, displayMode: boolean) {
     return katex.renderToString(source, {
       displayMode,
       output: "htmlAndMathml",
-      throwOnError: false,
+      throwOnError: true,
       strict: "ignore",
       trust: false,
       maxExpand: 1000,

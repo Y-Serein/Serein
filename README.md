@@ -1,6 +1,6 @@
 # Serein
 
-Serein is a local Markdown desktop writing tool built with Tauri 2, React, TypeScript, and Milkdown.
+Serein is a local Markdown desktop writing tool built with Tauri 2, React, TypeScript, and CodeMirror 6.
 
 The current release target is the desktop application in:
 
@@ -12,7 +12,9 @@ apps/serein-desktop/
 
 - Local Markdown and text file editing.
 - Vault-style folder browsing with lazy directory loading.
-- Plain Edit and Rich Edit modes.
+- Source Edit and Rich Edit views backed by one Markdown buffer.
+- Standard Markdown tables with row, column, and alignment controls.
+- Inline and block KaTeX formulas with source-preserving click-to-edit behavior.
 - Outline, backlinks, and local graph panels.
 - Bilingual UI: Simplified Chinese and English.
 - Configurable editor fonts, font size, layout, theme, and shortcuts.
@@ -26,6 +28,8 @@ Release downloads will be published here after Windows packaging is verified.
 ```bash
 cd apps/serein-desktop
 npm ci
+npm run test
+npm run typecheck
 npm run build
 ```
 

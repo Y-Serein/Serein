@@ -1,5 +1,5 @@
 import { katexExportCss } from "./katexCss.js";
-import { renderMathToHtml } from "../shared/math.js";
+import { renderMathToHtml, scanMarkdownMath } from "../shared/math.js";
 import { isMarkdownTableDelimiterCell } from "../shared/markdown.js";
 
 export type ExportImageMap = Record<string, string>;
@@ -37,7 +37,19 @@ export function htmlDocument(markdown: string, options: HtmlExportOptions) {
 }
 
 export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = {}) {
-  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const normalizedMarkdown = markdown.replace(/\r\n?/g, "\n");
+  const lines = normalizedMarkdown.split("\n");
+  const lineOffsets: number[] = [];
+  let lineOffset = 0;
+  lines.forEach((line, lineIndex) => {
+    lineOffsets.push(lineOffset);
+    lineOffset += line.length + (lineIndex < lines.length - 1 ? 1 : 0);
+  });
+  const blockMathByFrom = new Map(
+    scanMarkdownMath(normalizedMarkdown)
+      .filter((span) => span.kind === "block")
+      .map((span) => [span.from, span]),
+  );
   const html: string[] = [];
   let index = 0;
 
@@ -63,22 +75,13 @@ export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = 
       continue;
     }
 
-    if (/^\s{0,3}\$\$\s*$/.test(line)) {
-      const math: string[] = [];
+    const blockMath = blockMathByFrom.get(lineOffsets[index] ?? -1);
+    if (blockMath) {
+      html.push(`<div class="math-block">${renderMathToHtml(blockMath.content, true)}</div>`);
       index += 1;
-      while (index < lines.length && !/^\s{0,3}\$\$\s*$/.test(lines[index] ?? "")) {
-        math.push(lines[index] ?? "");
+      while (index < lines.length && (lineOffsets[index] ?? normalizedMarkdown.length) < blockMath.to) {
         index += 1;
       }
-      if (index < lines.length) index += 1;
-      html.push(`<div class="math-block">${renderMathToHtml(math.join("\n"), true)}</div>`);
-      continue;
-    }
-
-    const singleLineMath = line.match(/^\s{0,3}\$\$(.+?)\$\$\s*$/);
-    if (singleLineMath?.[1]?.trim()) {
-      html.push(`<div class="math-block">${renderMathToHtml(singleLineMath[1], true)}</div>`);
-      index += 1;
       continue;
     }
 
@@ -185,38 +188,64 @@ export function utf8Bytes(text: string) {
 }
 
 function renderInline(text: string, imageMap: ExportImageMap) {
-  const tokens: string[] = [];
-  const pattern = /!\[([^\]\n]*)]\(([^)\n]+)\)|\[([^\]\n]+)]\(([^)\n]+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|~~([^~\n]+)~~|\$\$?([^$\n]+)\$\$?|\[\^([^\]\n]+)]/g;
-  let lastIndex = 0;
+  const rendered: string[] = [];
+  const inlineTokens: Array<{ from: number; to: number; priority: number; html: string }> = [];
+  const pattern = /!\[([^\]\n]*)]\(([^)\n]+)\)|\[([^\]\n]+)]\(([^)\n]+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|~~([^~\n]+)~~|\[\^([^\]\n]+)]/g;
   let match: RegExpExecArray | null;
 
   while ((match = pattern.exec(text)) !== null) {
-    tokens.push(escapeHtml(text.slice(lastIndex, match.index)));
+    let html = "";
     if (match[1] !== undefined && match[2] !== undefined) {
       const source = normalizeImageSource(match[2]);
       const mapped = imageMap[source] ?? source;
-      tokens.push(`<img src="${escapeAttr(mapped)}" alt="${escapeAttr(match[1])}" />`);
+      html = `<img src="${escapeAttr(mapped)}" alt="${escapeAttr(match[1])}" />`;
     } else if (match[3] !== undefined && match[4] !== undefined) {
-      tokens.push(`<a href="${escapeAttr(match[4])}">${escapeHtml(match[3])}</a>`);
+      html = `<a href="${escapeAttr(match[4])}">${escapeHtml(match[3])}</a>`;
     } else if (match[5] !== undefined) {
-      tokens.push(`<code>${escapeHtml(match[5])}</code>`);
+      html = `<code>${escapeHtml(match[5])}</code>`;
     } else if (match[6] !== undefined) {
-      tokens.push(`<strong>${escapeHtml(match[6])}</strong>`);
+      html = `<strong>${escapeHtml(match[6])}</strong>`;
     } else if (match[7] !== undefined) {
-      tokens.push(`<em>${escapeHtml(match[7])}</em>`);
+      html = `<em>${escapeHtml(match[7])}</em>`;
     } else if (match[8] !== undefined) {
-      tokens.push(`<del>${escapeHtml(match[8])}</del>`);
+      html = `<del>${escapeHtml(match[8])}</del>`;
     } else if (match[9] !== undefined) {
-      tokens.push(`<span class="math-inline">${renderMathToHtml(match[9], false)}</span>`);
-    } else if (match[10] !== undefined) {
-      const id = escapeAttr(match[10]);
-      tokens.push(`<sup><a href="#fn-${id}">${escapeHtml(match[10])}</a></sup>`);
+      const id = escapeAttr(match[9]);
+      html = `<sup><a href="#fn-${id}">${escapeHtml(match[9])}</a></sup>`;
     }
-    lastIndex = pattern.lastIndex;
+    inlineTokens.push({
+      from: match.index,
+      to: pattern.lastIndex,
+      priority: 0,
+      html,
+    });
   }
 
-  tokens.push(escapeHtml(text.slice(lastIndex)));
-  return tokens.join("");
+  scanMarkdownMath(text)
+    .filter((span) => span.kind === "inline")
+    .forEach((span) => {
+      inlineTokens.push({
+        from: span.from,
+        to: span.to,
+        priority: 1,
+        html: `<span class="math-inline">${renderMathToHtml(span.content, false)}</span>`,
+      });
+    });
+
+  inlineTokens.sort((left, right) => (
+    left.from - right.from
+    || left.priority - right.priority
+    || right.to - left.to
+  ));
+
+  let lastIndex = 0;
+  inlineTokens.forEach((token) => {
+    if (token.from < lastIndex) return;
+    rendered.push(escapeHtml(text.slice(lastIndex, token.from)), token.html);
+    lastIndex = token.to;
+  });
+  rendered.push(escapeHtml(text.slice(lastIndex)));
+  return rendered.join("");
 }
 
 function isRemoteOrDataSource(source: string) {

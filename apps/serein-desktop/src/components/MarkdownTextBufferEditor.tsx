@@ -1142,22 +1142,45 @@ class MathWidget extends WidgetType {
   constructor(
     private readonly content: string,
     private readonly kind: MarkdownMathSpan["kind"],
+    private readonly from: number,
+    private readonly to: number,
   ) {
     super();
   }
 
   eq(other: MathWidget) {
-    return other.content === this.content && other.kind === this.kind;
+    return other.content === this.content
+      && other.kind === this.kind
+      && other.from === this.from
+      && other.to === this.to;
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     const element = document.createElement(this.kind === "block" ? "div" : "span");
     element.className = this.kind === "block"
       ? "serein-buffer-math-block"
       : "serein-buffer-math-inline";
     element.setAttribute("role", "math");
+    element.dataset.mathSource = this.content;
+    element.title = "Click to edit formula";
     element.innerHTML = renderMathToHtml(this.content, this.kind === "block");
+    element.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    element.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const from = Math.min(this.from, view.state.doc.length);
+      const to = Math.min(this.to, view.state.doc.length);
+      const anchor = Math.min(to, from + (this.kind === "block" ? 2 : 1));
+      view.dispatch({ selection: { anchor }, scrollIntoView: true });
+      view.focus();
+    });
     return element;
+  }
+
+  ignoreEvent() {
+    return true;
   }
 }
 
@@ -1978,7 +2001,7 @@ function buildTyporaActiveDecorations(state: EditorState): TyporaActiveDecoratio
     if (span.from < sourceFrontmatterEnd) return;
     if (options.mode === "rich" && !selectionTouchesRange(state, span.from, span.to)) {
       builder.addAtomic(span.from, span.to, Decoration.replace({
-        widget: new MathWidget(span.content, span.kind),
+        widget: new MathWidget(span.content, span.kind, span.from, span.to),
         block: span.kind === "block",
       }));
     } else {
