@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import "katex/dist/katex.min.css";
 import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from "@codemirror/commands";
 import { markdown as markdownSupport, markdownLanguage } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -82,7 +81,12 @@ import {
   writeDesktopClipboardText,
 } from "../services/clipboard";
 import type { WikiLinkSuggestion } from "./editorTypes";
-import { renderMathToHtml, scanMarkdownMath, type MarkdownMathSpan } from "../shared/math";
+import {
+  extractLatexMathMacroDefinitions,
+  renderMathSpans,
+  scanMarkdownMath,
+  type MarkdownMathSpan,
+} from "../shared/math";
 
 type TextBundle = (typeof appText)[AppLanguage];
 
@@ -1141,18 +1145,22 @@ class WikiLinkWidget extends WidgetType {
 class MathWidget extends WidgetType {
   constructor(
     private readonly content: string,
+    private readonly html: string,
     private readonly kind: MarkdownMathSpan["kind"],
     private readonly from: number,
     private readonly to: number,
+    private readonly contentFrom: number,
   ) {
     super();
   }
 
   eq(other: MathWidget) {
     return other.content === this.content
+      && other.html === this.html
       && other.kind === this.kind
       && other.from === this.from
-      && other.to === this.to;
+      && other.to === this.to
+      && other.contentFrom === this.contentFrom;
   }
 
   toDOM(view: EditorView) {
@@ -1163,16 +1171,14 @@ class MathWidget extends WidgetType {
     element.setAttribute("role", "math");
     element.dataset.mathSource = this.content;
     element.title = "Click to edit formula";
-    element.innerHTML = renderMathToHtml(this.content, this.kind === "block");
+    element.innerHTML = this.html;
     element.addEventListener("mousedown", (event) => {
       event.preventDefault();
       event.stopPropagation();
     });
     element.addEventListener("click", (event) => {
       event.stopPropagation();
-      const from = Math.min(this.from, view.state.doc.length);
-      const to = Math.min(this.to, view.state.doc.length);
-      const anchor = Math.min(to, from + (this.kind === "block" ? 2 : 1));
+      const anchor = Math.min(this.contentFrom, view.state.doc.length);
       view.dispatch({ selection: { anchor }, scrollIntoView: true });
       view.focus();
     });
@@ -1843,7 +1849,9 @@ function analyzeTyporaDocument(state: EditorState, options: TextBufferDecoration
   const tableBlocks = options.mode === "rich" ? scanTextBufferTables(markdown, analysis) : [];
   const tableStarts = new Map(tableBlocks.map((table) => [table.from, table]));
   const tableRanges = tableBlocks.map((table) => ({ from: table.from, to: table.to }));
-  const mathSpans = scanMarkdownMath(markdown).filter((span) => (
+  const mathSpans = renderMathSpans(scanMarkdownMath(markdown), {
+    macroDefinitions: extractLatexMathMacroDefinitions(markdown),
+  }).filter((span) => (
     !tableRanges.some((range) => range.from < span.to && range.to > span.from)
   ));
   return {
@@ -1865,11 +1873,14 @@ function buildTyporaDocumentDecorations(
   const {
     analysis,
     frontmatterEnd,
+    mathSpans,
     tableStarts,
     tableRanges,
   } = document;
   const codeBlocksById = new Map(analysis.codeBlocks.map((block) => [block.id, block]));
   const codeBlocksByOpener = new Map(analysis.codeBlocks.map((block) => [block.openerFrom, block]));
+  const blockMathRanges = mathSpans.filter((span) => span.kind === "block");
+  let blockMathRangeIndex = 0;
 
   if (options.mode === "rich") {
     tableStarts.forEach((table) => {
@@ -1885,6 +1896,18 @@ function buildTyporaDocumentDecorations(
 
     const tableRange = tableRanges.find((item) => line.from >= item.from && line.to <= item.to);
     if (options.mode === "rich" && tableRange) return;
+
+    while (
+      blockMathRanges[blockMathRangeIndex]
+      && line.from > (blockMathRanges[blockMathRangeIndex]?.to ?? line.from)
+    ) {
+      blockMathRangeIndex += 1;
+    }
+    const blockMathRange = blockMathRanges[blockMathRangeIndex];
+    const lineInsideBlockMath = blockMathRange
+      && line.from >= blockMathRange.from
+      && line.to <= blockMathRange.to;
+    if (lineInsideBlockMath) return;
 
     if (options.mode === "rich" && line.hiddenInRich) {
       builder.add(line.from, line.from, Decoration.line({
@@ -2001,7 +2024,7 @@ function buildTyporaActiveDecorations(state: EditorState): TyporaActiveDecoratio
     if (span.from < sourceFrontmatterEnd) return;
     if (options.mode === "rich" && !selectionTouchesRange(state, span.from, span.to)) {
       builder.addAtomic(span.from, span.to, Decoration.replace({
-        widget: new MathWidget(span.content, span.kind, span.from, span.to),
+        widget: new MathWidget(span.content, span.html, span.kind, span.from, span.to, span.contentFrom),
         block: span.kind === "block",
       }));
     } else {

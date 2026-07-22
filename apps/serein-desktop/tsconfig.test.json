@@ -11,6 +11,8 @@
   },
   "include": [
     "src/export/markdownExport.ts",
+    "src/export/latexDocument.ts",
+    "src/export/docxExport.ts",
     "src/export/pdfExport.ts",
     "src/app/defaults.ts",
     "src/command/globalShortcuts.ts",

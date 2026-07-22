@@ -79,7 +79,7 @@ export function writeMarkdownFile(
   }));
 }
 
-export function writeExportFile(path: string, format: "html" | "pdf", bytes: number[]) {
+export function writeExportFile(path: string, format: "html" | "pdf" | "docx", bytes: number[]) {
   return invoke<void>("write_export_file", { path, format, bytes });
 }
 

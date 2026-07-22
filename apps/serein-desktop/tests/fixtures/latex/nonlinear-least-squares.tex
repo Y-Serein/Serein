@@ -1,0 +1,109 @@
+\documentclass[UTF8]{ctexart}
+\usepackage{amsmath,amssymb,bm}
+\title{非线性最小二乘方法}
+\author{Serein 回归测试}
+\date{2026-07-21}
+
+\begin{document}
+\maketitle
+
+\section{模型与残差}
+
+给定观测数据 $\{(\bm x_i,y_i)\}_{i=1}^{n}$，考虑非线性模型
+
+\begin{equation}
+y_i=f(\bm x_i;\bm\theta)+\varepsilon_i,
+\label{eq:nls-model}
+\end{equation}
+
+其中，$\bm\theta\in\mathbb{R}^{p}$ 为待估计参数。残差向量定义为
+
+\begin{equation}
+\bm r(\bm\theta)
+=
+\begin{bmatrix}
+r_1(\bm\theta)\\
+r_2(\bm\theta)\\
+\vdots\\
+r_n(\bm\theta)
+\end{bmatrix}.
+\label{eq:nls-residual}
+\end{equation}
+
+\section{目标函数}
+
+非线性最小二乘估计为
+
+\begin{equation}
+\hat{\bm\theta}
+=
+\underset{\bm\theta}{\operatorname{arg\,min}}\,
+F(\bm\theta),
+\qquad
+F(\bm\theta)
+=
+\frac{1}{2}\bm r^{\mathsf T}(\bm\theta)\bm r(\bm\theta).
+\label{eq:nls-objective}
+\end{equation}
+
+\subsection{梯度与 Hessian}
+
+\begin{align}
+\nabla F(\bm\theta)
+&=
+\bm J^{\mathsf T}(\bm\theta)\bm r(\bm\theta),
+\label{eq:nls-gradient}\\
+\nabla^2F(\bm\theta)
+&=
+\bm J^{\mathsf T}\bm J
++
+\sum_{i=1}^{n}r_i(\bm\theta)\nabla^2r_i(\bm\theta).
+\label{eq:nls-hessian}
+\end{align}
+
+\section{迭代方法}
+
+\subsection{Gauss--Newton 方法}
+
+\begin{equation}
+\left(\bm J_k^{\mathsf T}\bm J_k\right)
+\Delta\bm\theta_k
+=
+-\bm J_k^{\mathsf T}\bm r_k.
+\label{eq:nls-gn}
+\end{equation}
+
+\subsection{Levenberg--Marquardt 方法}
+
+\begin{subequations}
+\label{eq:nls-lm-system}
+\begin{align}
+\left(\bm J_k^{\mathsf T}\bm J_k+\lambda_k\bm I\right)
+\Delta\bm\theta_k
+&=
+-\bm J_k^{\mathsf T}\bm r_k,
+\label{eq:nls-lm-step}\\
+\bm\theta_{k+1}
+&=
+\bm\theta_k+\Delta\bm\theta_k.
+\label{eq:nls-update}
+\end{align}
+\end{subequations}
+
+由式~\eqref{eq:nls-lm-step} 可以计算阻尼增量。
+
+\section{终止条件}
+
+\begin{equation}
+\left\|\Delta\bm\theta_k\right\|_2
+\leq
+\varepsilon_{\theta}
+\left(\left\|\bm\theta_k\right\|_2+1\right),
+\qquad
+\left\|\nabla F(\bm\theta_k)\right\|_{\infty}
+\leq
+\varepsilon_g.
+\label{eq:nls-stopping}
+\end{equation}
+
+\end{document}

@@ -1,4 +1,8 @@
 import { normalizeImageSource } from "./markdownExport.js";
+import {
+  normalizeLatexDocumentForExport,
+  parseLatexExportStructure,
+} from "./latexDocument.js";
 import { scanMarkdownMath } from "../shared/math.js";
 
 export type PdfExportOptions = {
@@ -50,7 +54,7 @@ export async function markdownToPdfBytes(markdown: string, options: PdfExportOpt
 }
 
 function markdownToPdfBlocks(markdown: string, options: PdfExportOptions, imagesBySource: Map<string, PdfImage>) {
-  const normalizedMarkdown = markdown.replace(/\r\n?/g, "\n");
+  const normalizedMarkdown = normalizeLatexDocumentForExport(markdown);
   const sourceLines = normalizedMarkdown.split("\n");
   const lineOffsets: number[] = [];
   let lineOffset = 0;
@@ -93,6 +97,14 @@ function markdownToPdfBlocks(markdown: string, options: PdfExportOptions, images
 
     if (inFence) {
       pushWrapped(blocks, rawLine || " ", 10, 16, 0);
+      continue;
+    }
+
+    const latexStructure = parseLatexExportStructure(rawLine);
+    if (latexStructure) {
+      const size = latexStructure.kind === "title" ? 21 : latexStructure.kind === "author" ? 12 : 10.5;
+      const gapBefore = latexStructure.kind === "title" ? 12 : 2;
+      pushWrapped(blocks, cleanInlineText(latexStructure.content), size, 0, gapBefore);
       continue;
     }
 

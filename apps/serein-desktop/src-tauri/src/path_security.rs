@@ -18,12 +18,13 @@ pub fn ensure_supported_text_path(path: &str) -> Result<(), String> {
 pub fn ensure_supported_export_path(path: &str, format: &str) -> Result<(), String> {
     let file_path = Path::new(path);
     let Some(extension) = normalized_extension(file_path) else {
-        return Err("Export target must end with .html or .pdf.".to_string());
+        return Err("Export target must end with .html, .pdf or .docx.".to_string());
     };
 
     match (format, extension.as_str()) {
         ("html", "html" | "htm") => Ok(()),
         ("pdf", "pdf") => Ok(()),
+        ("docx", "docx") => Ok(()),
         _ => Err("Export target extension does not match the selected export format.".to_string()),
     }
 }

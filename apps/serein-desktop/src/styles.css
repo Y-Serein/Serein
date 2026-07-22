@@ -2478,12 +2478,52 @@ button:disabled {
   vertical-align: middle;
 }
 
+.serein-buffer-math-inline > mjx-container {
+  display: inline-block;
+  margin: 0;
+  padding: 0;
+  font-size: 1.04em;
+}
+
 .serein-buffer-math-block {
   display: block;
   max-width: 100%;
   overflow-x: auto;
   padding: 10px 12px;
   text-align: center;
+}
+
+.serein-buffer-math-block > mjx-container {
+  margin: 0;
+  font-size: 1.04em;
+}
+
+mjx-container[jax="SVG"] {
+  direction: ltr;
+  white-space: nowrap;
+}
+
+mjx-container[jax="SVG"] > svg {
+  min-width: 1px;
+  min-height: 1px;
+  overflow: visible;
+}
+
+mjx-container[jax="SVG"] > svg a {
+  fill: var(--accent-cool);
+  stroke: var(--accent-cool);
+}
+
+mjx-container[display] {
+  display: block;
+  justify-content: center;
+  margin: .7em 0;
+  padding: .3em 2px;
+  text-align: center;
+}
+
+mjx-container[display][width="full"] {
+  display: flex;
 }
 
 .serein-buffer-math-source {

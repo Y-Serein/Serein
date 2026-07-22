@@ -41,6 +41,7 @@ import { AppContextMenu } from "./features/context-menu/AppContextMenu";
 import type { AppContextMenuItem, ContextMenuIcon } from "./features/context-menu/AppContextMenu";
 import { AppDialogHost } from "./features/dialogs/AppDialogHost";
 import { EditorWorkspace } from "./features/editor-workspace/EditorWorkspace";
+import { markdownToDocxBytes } from "./export/docxExport";
 import { collectLocalImageSources, htmlDocument, utf8Bytes } from "./export/markdownExport";
 import { markdownToPdfBytes } from "./export/pdfExport";
 import { KnowledgeRail } from "./features/knowledge-rail/KnowledgeRail";
@@ -667,10 +668,13 @@ function deleteVaultIndexOverrides(
   }
 }
 
-function ensureExportExtension(path: string, format: "html" | "pdf") {
+type ExportFormat = "html" | "pdf" | "docx";
+
+function ensureExportExtension(path: string, format: ExportFormat) {
   const extension = pathExtension(path);
   if (format === "html" && (extension === "html" || extension === "htm")) return path;
   if (format === "pdf" && extension === "pdf") return path;
+  if (format === "docx" && extension === "docx") return path;
   return `${path}.${format}`;
 }
 
@@ -2208,10 +2212,17 @@ export default function App() {
       const selectedFormat = await showChoiceDialog(t.prompts.exportFormat, [
         { value: "html", label: t.prompts.exportHtml, description: t.prompts.exportHtmlHint },
         { value: "pdf", label: t.prompts.exportPdf, description: t.prompts.exportPdfHint },
+        { value: "docx", label: t.prompts.exportDocx, description: t.prompts.exportDocxHint },
       ], t.prompts.exportFormatHint);
       if (!selectedFormat) return;
 
-      const format = selectedFormat === "pdf" ? "pdf" : selectedFormat === "html" ? "html" : null;
+      const format: ExportFormat | null = selectedFormat === "pdf"
+        ? "pdf"
+        : selectedFormat === "html"
+          ? "html"
+          : selectedFormat === "docx"
+            ? "docx"
+            : null;
       if (!format) {
         setToastMessage(t.errors.exportFormatUnsupported);
         return;
@@ -2222,7 +2233,9 @@ export default function App() {
         defaultPath: `${fallbackBase}.${format}`,
         filters: format === "html"
           ? [{ name: "HTML", extensions: ["html"] }]
-          : [{ name: "PDF", extensions: ["pdf"] }],
+          : format === "pdf"
+            ? [{ name: "PDF", extensions: ["pdf"] }]
+            : [{ name: "Word", extensions: ["docx"] }],
       });
       if (!selected) return;
 
@@ -2230,7 +2243,9 @@ export default function App() {
       const title = extractFirstLineTitle(activeNote.markdown) ?? (stripExtension(activeNote.fileName ?? "") || activeNote.title);
       const bytes = format === "html"
         ? utf8Bytes(htmlDocument(activeNote.markdown, { title, imageMap }))
-        : await markdownToPdfBytes(activeNote.markdown, { title, imageMap });
+        : format === "pdf"
+          ? await markdownToPdfBytes(activeNote.markdown, { title, imageMap })
+          : await markdownToDocxBytes(activeNote.markdown, { title, imageMap });
       await writeExportFile(ensureExportExtension(selected, format), format, bytes);
       setSaveError(null);
       setToastMessage(t.status.exported(format.toUpperCase()));

@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   collectLocalImageSources,
+  extractLatexDocumentBody,
   htmlDocument,
+  normalizeLatexDocumentForExport,
   renderMarkdownBody,
 } from "../.test-dist/export/markdownExport.js";
 import {
@@ -14,6 +17,10 @@ import {
   parentVaultDir,
 } from "../.test-dist/shared/markdown.js";
 
+function readLatexFixture(name) {
+  return fs.readFileSync(new URL(`./fixtures/latex/${name}`, import.meta.url), "utf8");
+}
+
 test("renders tables, tasks, footnotes, images, and math without dropping source meaning", () => {
   const markdown = [
     "# Title",
@@ -23,7 +30,7 @@ test("renders tables, tasks, footnotes, images, and math without dropping source
     "",
     "| A | B |",
     "| :--- | ---: |",
-    "| $x$ | ![Plot](assets/plot.png) |",
+    "| \\(x\\) | ![Plot](assets/plot.png) |",
     "",
     "Footnote[^1]",
     "",
@@ -41,26 +48,27 @@ test("renders tables, tasks, footnotes, images, and math without dropping source
 test("uses the shared math boundaries when exporting inline content", () => {
   const body = renderMarkdownBody([
     "Price $5 and $10 stays currency.",
-    "Inline code `$not math$` stays code.",
-    "Valid $x + 1$ renders.",
-    "Invalid $\\frac{$ stays visible.",
+    "Inline code `\\(not math\\)` stays code.",
+    "Valid \\(x + 1\\) renders.",
+    "Invalid \\(\\frac{\\) stays visible.",
   ].join("\n\n"));
 
   assert.match(body, /Price \$5 and \$10 stays currency\./);
-  assert.match(body, /<code>\$not math\$<\/code>/);
+  assert.match(body, /<code>\\\(not math\\\)<\/code>/);
   assert.equal((body.match(/class="math-inline"/g) ?? []).length, 2);
   assert.match(body, /class="serein-math-error"/);
 });
 
 test("does not render unmatched or empty block math delimiters", () => {
-  const unmatched = renderMarkdownBody("Before\n\n$$\nnot closed");
+  const unmatched = renderMarkdownBody("Before\n\n\\[\nnot closed");
   assert.doesNotMatch(unmatched, /class="math-block"/);
-  assert.match(unmatched, /\$\$/);
+  assert.match(unmatched, /\\\[/);
   assert.match(unmatched, /not closed/);
 
-  const empty = renderMarkdownBody("$$\n\n$$");
+  const empty = renderMarkdownBody("\\[\n\n\\]");
   assert.doesNotMatch(empty, /class="math-block"/);
-  assert.equal((empty.match(/\$\$/g) ?? []).length, 2);
+  assert.match(empty, /\\\[/);
+  assert.match(empty, /\\\]/);
 });
 
 test("collects only local markdown image sources", () => {
@@ -80,6 +88,95 @@ test("wraps rendered markdown in a complete html export document", () => {
   assert.match(html, /class="code-block"/);
 });
 
+test("exports only the body of a complete LaTeX document wrapper", () => {
+  const markdown = [
+    "\\documentclass{article}",
+    "\\usepackage{amsmath}",
+    "\\begin{document}",
+    "# 一级标题",
+    "",
+    "正文与 \\(x+1\\)。",
+    "\\end{document}",
+  ].join("\n");
+
+  assert.equal(extractLatexDocumentBody(markdown), "# 一级标题\n\n正文与 \\(x+1\\)。");
+  const body = renderMarkdownBody(markdown);
+  assert.match(body, /<h1>一级标题<\/h1>/);
+  assert.match(body, /class="math-inline"/);
+  assert.doesNotMatch(body, /documentclass|usepackage|begin\{document}|end\{document}/);
+
+  const incomplete = "\\documentclass{article}\n\\begin{document}\n正文";
+  assert.equal(extractLatexDocumentBody(incomplete), incomplete);
+});
+
+test("maps LaTeX title and article section commands to export-native structure", () => {
+  const source = readLatexFixture("bezier-curves.tex");
+  const normalized = normalizeLatexDocumentForExport(source);
+  const body = renderMarkdownBody(source);
+
+  assert.match(normalized, /SEREIN_LATEX_TITLE/);
+  assert.match(normalized, /^# 线性插值$/m);
+  assert.match(normalized, /^## 端点与导数$/m);
+  assert.match(normalized, /^# \$n\$ 次贝塞尔曲线$/m);
+  assert.match(body, /class="document-title">贝塞尔曲线公式推演<\/h1>/);
+  assert.match(body, /<h1>线性插值<\/h1>/);
+  assert.match(body, /<h2>端点与导数<\/h2>/);
+  assert.doesNotMatch(body, /\\maketitle|\\section|\\subsection|documentclass|usepackage/);
+  assert.doesNotMatch(body, /serein-math-error/);
+});
+
+test("keeps preamble math macros available after removing the LaTeX document shell", () => {
+  const source = [
+    "\\documentclass{article}",
+    "\\newcommand{\\Verify}[2]{\\operatorname{Verify}_{#1}(#2)}",
+    "\\begin{document}",
+    "Verification: $\\Verify{pk}{m}$.",
+    "\\end{document}",
+  ].join("\n");
+  const body = renderMarkdownBody(source);
+
+  assert.match(body, /class="MathJax"/);
+  assert.doesNotMatch(body, /serein-math-error|newcommand|documentclass|begin\{document}/);
+});
+
+test("uses report chapter hierarchy and removes LaTeX comments and noindent", () => {
+  const source = readLatexFixture("scientific-structures.tex");
+  const normalized = normalizeLatexDocumentForExport(source);
+  const body = renderMarkdownBody(source);
+
+  assert.match(normalized, /^# 基础结构$/m);
+  assert.match(normalized, /^## 分段函数与矩阵$/m);
+  assert.match(normalized, /^### 长公式与集中公式$/m);
+  assert.match(normalized, /^#### 无编号公式$/m);
+  assert.doesNotMatch(normalized, /该注释不能出现在导出正文|\\noindent/);
+  assert.match(body, /<h1>基础结构<\/h1>/);
+  assert.match(body, /<h2>分段函数与矩阵<\/h2>/);
+  assert.match(body, /<h3>长公式与集中公式<\/h3>/);
+});
+
+test("supports starred, optional, nested, and multiline LaTeX section titles", () => {
+  const source = [
+    "\\documentclass{article}",
+    "\\title{多行\\\\标题}",
+    "\\begin{document}",
+    "\\maketitle",
+    "\\section*{无编号章节}",
+    "\\subsection[短标题]{包含 {嵌套内容} 的",
+    "多行标题}",
+    "正文。",
+    "\\end{document}",
+  ].join("\n");
+  const normalized = normalizeLatexDocumentForExport(source);
+  const body = renderMarkdownBody(source);
+
+  assert.match(normalized, /SEREIN_LATEX_TITLE.*多行 标题/);
+  assert.match(normalized, /^# 无编号章节$/m);
+  assert.match(normalized, /^## 包含 \{嵌套内容} 的 多行标题$/m);
+  assert.match(body, /class="document-title">多行 标题<\/h1>/);
+  assert.match(body, /<h1>无编号章节<\/h1>/);
+  assert.match(body, /<h2>包含 \{嵌套内容} 的 多行标题<\/h2>/);
+});
+
 test("exports markdown to PDF bytes without browser canvas rendering", async () => {
   const bytes = await markdownToPdfBytes("# 标题\n\n- [x] done\n\n![Plot](assets/plot.png)", {
     title: "Doc",
@@ -91,10 +188,18 @@ test("exports markdown to PDF bytes without browser canvas rendering", async () 
 });
 
 test("keeps currency while removing valid formula delimiters in PDF text", async () => {
-  const bytes = await markdownToPdfBytes("Price $5 and $10.\n\nMath $x+1$.", { title: "Math" });
+  const bytes = await markdownToPdfBytes("Price $5 and $10.\n\nMath \\(x+1\\).", { title: "Math" });
   const pdfText = String.fromCharCode(...bytes);
   assert.match(pdfText, /Price \$5 and \$10\./);
   assert.match(pdfText, /Math x\+1\./);
+});
+
+test("does not leak full LaTeX document commands into PDF export", async () => {
+  const bytes = await markdownToPdfBytes(readLatexFixture("bezier-curves.tex"), { title: "Bezier" });
+  const pdfText = String.fromCharCode(...bytes);
+  assert.equal(pdfText.slice(0, 8), "%PDF-1.4");
+  assert.doesNotMatch(pdfText, /\\documentclass|\\usepackage|\\begin\{document}|\\end\{document}/);
+  assert.doesNotMatch(pdfText, /\\maketitle|\\section|\\subsection/);
 });
 
 test("keeps vault path helpers stable", () => {

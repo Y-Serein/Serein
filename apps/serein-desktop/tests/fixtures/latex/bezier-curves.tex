@@ -1,0 +1,91 @@
+\documentclass[UTF8]{ctexart}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{geometry}
+\geometry{a4paper,margin=2.5cm}
+\title{贝塞尔曲线公式推演}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{线性插值}
+
+给定两个控制点 $\bm P_0$ 和 $\bm P_1$，参数 $t\in[0,1]$，线性插值为
+
+\begin{equation}
+\bm L(t)=(1-t)\bm P_0+t\bm P_1.
+\label{eq:bezier-linear}
+\end{equation}
+
+\section{二次贝塞尔曲线}
+
+\begin{align}
+\bm Q_0(t)&=(1-t)\bm P_0+t\bm P_1,\\
+\bm Q_1(t)&=(1-t)\bm P_1+t\bm P_2.
+\end{align}
+
+\begin{equation}
+\boxed{
+\bm B_2(t)
+=
+(1-t)^2\bm P_0
++2t(1-t)\bm P_1
++t^2\bm P_2
+},
+\qquad t\in[0,1].
+\label{eq:bezier-quadratic}
+\end{equation}
+
+\section{三次贝塞尔曲线}
+
+\begin{equation}
+\boxed{
+\bm B_3(t)
+=
+(1-t)^3\bm P_0
++3t(1-t)^2\bm P_1
++3t^2(1-t)\bm P_2
++t^3\bm P_3
+}.
+\label{eq:bezier-cubic}
+\end{equation}
+
+\section{$n$ 次贝塞尔曲线}
+
+De Casteljau 递推写为
+
+\begin{align}
+\bm P_i^{(0)}(t)&=\bm P_i,\\
+\bm P_i^{(r)}(t)
+&=
+(1-t)\bm P_i^{(r-1)}(t)
++t\bm P_{i+1}^{(r-1)}(t).
+\end{align}
+
+一般形式为
+
+\begin{equation}
+\boxed{
+\bm B_n(t)
+=
+\sum_{i=0}^{n}
+\binom{n}{i}
+(1-t)^{n-i}t^i\bm P_i
+},
+\qquad t\in[0,1].
+\label{eq:bezier-general}
+\end{equation}
+
+\subsection{端点与导数}
+
+\begin{align}
+\bm B_n(0)&=\bm P_0,\\
+\bm B_n(1)&=\bm P_n,\\
+\bm B_n'(0)&=n(\bm P_1-\bm P_0),\\
+\bm B_n'(1)&=n(\bm P_n-\bm P_{n-1}).
+\end{align}
+
+由式~\eqref{eq:bezier-general} 可知，曲线是控制点的 Bernstein 加权组合。
+
+\end{document}

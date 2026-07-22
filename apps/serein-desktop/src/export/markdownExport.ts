@@ -1,6 +1,16 @@
-import { katexExportCss } from "./katexCss.js";
-import { renderMathToHtml, scanMarkdownMath } from "../shared/math.js";
+import {
+  extractLatexMathMacroDefinitions,
+  renderMarkdownMath,
+  type RenderedMarkdownMathSpan,
+} from "../shared/math.js";
 import { isMarkdownTableDelimiterCell } from "../shared/markdown.js";
+import {
+  extractLatexDocumentBody,
+  normalizeLatexDocumentForExport,
+  parseLatexExportStructure,
+} from "./latexDocument.js";
+
+export { extractLatexDocumentBody, normalizeLatexDocumentForExport } from "./latexDocument.js";
 
 export type ExportImageMap = Record<string, string>;
 
@@ -16,7 +26,10 @@ const blockStarters = [
   /^\s{0,3}([-+*])\s+(\[[ xX]\]\s+)?/,
   /^\s{0,3}\d+[.)]\s+/,
   /^\s{0,3}\[\^[^\]]+\]:/,
-  /^\s{0,3}\$\$\s*$/,
+  /^\s{0,3}\$\$/,
+  /^\s{0,3}\\\[/,
+  /^\u0000SEREIN_LATEX_(?:TITLE|AUTHOR|DATE)\u0000/,
+  /^\u0000SEREIN_MATH_BLOCK_\d+\u0000$/,
 ];
 
 export function htmlDocument(markdown: string, options: HtmlExportOptions) {
@@ -28,7 +41,7 @@ export function htmlDocument(markdown: string, options: HtmlExportOptions) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title}</title>
-  <style>${katexExportCss}\n${exportCss()}</style>
+  <style>${exportCss()}</style>
 </head>
 <body>
   <main class="document">${body}</main>
@@ -37,19 +50,18 @@ export function htmlDocument(markdown: string, options: HtmlExportOptions) {
 }
 
 export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = {}) {
-  const normalizedMarkdown = markdown.replace(/\r\n?/g, "\n");
+  const macroDefinitions = extractLatexMathMacroDefinitions(markdown);
+  const normalizedMarkdown = normalizeLatexDocumentForExport(markdown);
+  const protectedMath = protectMarkdownMath(normalizedMarkdown, macroDefinitions);
+  return renderProtectedMarkdownBody(protectedMath.markdown, imageMap, protectedMath.spans);
+}
+
+function renderProtectedMarkdownBody(
+  normalizedMarkdown: string,
+  imageMap: ExportImageMap,
+  mathSpans: RenderedMarkdownMathSpan[],
+) {
   const lines = normalizedMarkdown.split("\n");
-  const lineOffsets: number[] = [];
-  let lineOffset = 0;
-  lines.forEach((line, lineIndex) => {
-    lineOffsets.push(lineOffset);
-    lineOffset += line.length + (lineIndex < lines.length - 1 ? 1 : 0);
-  });
-  const blockMathByFrom = new Map(
-    scanMarkdownMath(normalizedMarkdown)
-      .filter((span) => span.kind === "block")
-      .map((span) => [span.from, span]),
-  );
   const html: string[] = [];
   let index = 0;
 
@@ -75,20 +87,30 @@ export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = 
       continue;
     }
 
-    const blockMath = blockMathByFrom.get(lineOffsets[index] ?? -1);
-    if (blockMath) {
-      html.push(`<div class="math-block">${renderMathToHtml(blockMath.content, true)}</div>`);
+    const blockMathIndex = parseMathToken(line, "block");
+    if (blockMathIndex !== null) {
+      const blockMath = mathSpans[blockMathIndex];
+      html.push(`<div class="math-block">${blockMath?.html ?? ""}</div>`);
       index += 1;
-      while (index < lines.length && (lineOffsets[index] ?? normalizedMarkdown.length) < blockMath.to) {
-        index += 1;
+      continue;
+    }
+
+    const latexStructure = parseLatexExportStructure(line);
+    if (latexStructure) {
+      const content = renderInline(latexStructure.content, imageMap, mathSpans);
+      if (latexStructure.kind === "title") {
+        html.push(`<h1 class="document-title">${content}</h1>`);
+      } else {
+        html.push(`<p class="document-${latexStructure.kind}">${content}</p>`);
       }
+      index += 1;
       continue;
     }
 
     const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
     if (heading) {
       const level = heading[1].length;
-      html.push(`<h${level}>${renderInline(heading[2], imageMap)}</h${level}>`);
+      html.push(`<h${level}>${renderInline(heading[2], imageMap, mathSpans)}</h${level}>`);
       index += 1;
       continue;
     }
@@ -101,13 +123,13 @@ export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = 
         rows.push(splitTableRow(lines[index] ?? ""));
         index += 1;
       }
-      html.push(renderTable(rows, aligns, imageMap));
+      html.push(renderTable(rows, aligns, imageMap, mathSpans));
       continue;
     }
 
     const footnote = line.match(/^\s{0,3}\[\^([^\]]+)]:\s*(.*)$/);
     if (footnote) {
-      html.push(`<aside class="footnote" id="fn-${escapeAttr(footnote[1])}"><sup>${escapeHtml(footnote[1])}</sup> ${renderInline(footnote[2], imageMap)}</aside>`);
+      html.push(`<aside class="footnote" id="fn-${escapeAttr(footnote[1])}"><sup>${escapeHtml(footnote[1])}</sup> ${renderInline(footnote[2], imageMap, mathSpans)}</aside>`);
       index += 1;
       continue;
     }
@@ -118,7 +140,7 @@ export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = 
         quote.push((lines[index] ?? "").replace(/^\s{0,3}>\s?/, ""));
         index += 1;
       }
-      html.push(`<blockquote>${renderMarkdownBody(quote.join("\n"), imageMap)}</blockquote>`);
+      html.push(`<blockquote>${renderProtectedMarkdownBody(quote.join("\n"), imageMap, mathSpans)}</blockquote>`);
       continue;
     }
 
@@ -129,9 +151,9 @@ export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = 
         const task = item.match(/^\[([ xX])]\s+(.*)$/);
         if (task) {
           const checked = task[1].toLowerCase() === "x";
-          items.push(`<li class="task-list-item"><input type="checkbox" disabled="disabled"${checked ? " checked=\"checked\"" : ""} /> ${renderInline(task[2], imageMap)}</li>`);
+          items.push(`<li class="task-list-item"><input type="checkbox" disabled="disabled"${checked ? " checked=\"checked\"" : ""} /> ${renderInline(task[2], imageMap, mathSpans)}</li>`);
         } else {
-          items.push(`<li>${renderInline(item, imageMap)}</li>`);
+          items.push(`<li>${renderInline(item, imageMap, mathSpans)}</li>`);
         }
         index += 1;
       }
@@ -142,7 +164,7 @@ export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = 
     if (/^\s{0,3}\d+[.)]\s+/.test(line)) {
       const items: string[] = [];
       while (index < lines.length && /^\s{0,3}\d+[.)]\s+/.test(lines[index] ?? "")) {
-        items.push(`<li>${renderInline((lines[index] ?? "").replace(/^\s{0,3}\d+[.)]\s+/, ""), imageMap)}</li>`);
+        items.push(`<li>${renderInline((lines[index] ?? "").replace(/^\s{0,3}\d+[.)]\s+/, ""), imageMap, mathSpans)}</li>`);
         index += 1;
       }
       html.push(`<ol>${items.join("")}</ol>`);
@@ -156,7 +178,7 @@ export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = 
       paragraph.push(lines[index] ?? "");
       index += 1;
     }
-    html.push(`<p>${renderInline(paragraph.join(" "), imageMap)}</p>`);
+    html.push(`<p>${renderInline(paragraph.join(" "), imageMap, mathSpans)}</p>`);
   }
 
   return html.join("\n");
@@ -166,7 +188,8 @@ export function collectLocalImageSources(markdown: string) {
   const sources = new Set<string>();
   const imagePattern = /!\[[^\]\n]*]\(([^)\n]+)\)/g;
   let match: RegExpExecArray | null;
-  while ((match = imagePattern.exec(markdown)) !== null) {
+  const normalizedMarkdown = normalizeLatexDocumentForExport(markdown);
+  while ((match = imagePattern.exec(normalizedMarkdown)) !== null) {
     const source = normalizeImageSource(match[1]);
     if (!isRemoteOrDataSource(source)) sources.add(source);
   }
@@ -187,7 +210,11 @@ export function utf8Bytes(text: string) {
   return Array.from(new TextEncoder().encode(text));
 }
 
-function renderInline(text: string, imageMap: ExportImageMap) {
+function renderInline(
+  text: string,
+  imageMap: ExportImageMap,
+  mathSpans: RenderedMarkdownMathSpan[],
+) {
   const rendered: string[] = [];
   const inlineTokens: Array<{ from: number; to: number; priority: number; html: string }> = [];
   const pattern = /!\[([^\]\n]*)]\(([^)\n]+)\)|\[([^\]\n]+)]\(([^)\n]+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|~~([^~\n]+)~~|\[\^([^\]\n]+)]/g;
@@ -221,16 +248,16 @@ function renderInline(text: string, imageMap: ExportImageMap) {
     });
   }
 
-  scanMarkdownMath(text)
-    .filter((span) => span.kind === "inline")
-    .forEach((span) => {
-      inlineTokens.push({
-        from: span.from,
-        to: span.to,
-        priority: 1,
-        html: `<span class="math-inline">${renderMathToHtml(span.content, false)}</span>`,
-      });
+  const mathPattern = /\u0000SEREIN_MATH_INLINE_(\d+)\u0000/g;
+  while ((match = mathPattern.exec(text)) !== null) {
+    const span = mathSpans[Number(match[1])];
+    inlineTokens.push({
+      from: match.index,
+      to: mathPattern.lastIndex,
+      priority: 1,
+      html: `<span class="math-inline">${span?.html ?? ""}</span>`,
     });
+  }
 
   inlineTokens.sort((left, right) => (
     left.from - right.from
@@ -284,16 +311,41 @@ function parseTableAlign(cell: string) {
   return "left";
 }
 
-function renderTable(rows: string[][], aligns: string[], imageMap: ExportImageMap) {
+function renderTable(
+  rows: string[][],
+  aligns: string[],
+  imageMap: ExportImageMap,
+  mathSpans: RenderedMarkdownMathSpan[],
+) {
   const header = rows[0] ?? [];
   const body = rows.slice(1);
   const head = header
-    .map((cell, index) => `<th style="text-align:${aligns[index] ?? "left"}">${renderInline(cell, imageMap)}</th>`)
+    .map((cell, index) => `<th style="text-align:${aligns[index] ?? "left"}">${renderInline(cell, imageMap, mathSpans)}</th>`)
     .join("");
   const bodyRows = body
-    .map((row) => `<tr>${row.map((cell, index) => `<td style="text-align:${aligns[index] ?? "left"}">${renderInline(cell, imageMap)}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${row.map((cell, index) => `<td style="text-align:${aligns[index] ?? "left"}">${renderInline(cell, imageMap, mathSpans)}</td>`).join("")}</tr>`)
     .join("");
   return `<table><thead><tr>${head}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+}
+
+function mathToken(index: number, kind: "inline" | "block") {
+  return `\u0000SEREIN_MATH_${kind.toUpperCase()}_${index}\u0000`;
+}
+
+function parseMathToken(value: string, kind: "inline" | "block") {
+  const match = value.trim().match(new RegExp(`^\\u0000SEREIN_MATH_${kind.toUpperCase()}_(\\d+)\\u0000$`));
+  return match ? Number(match[1]) : null;
+}
+
+function protectMarkdownMath(markdown: string, macroDefinitions = "") {
+  const spans = renderMarkdownMath(markdown, { macroDefinitions });
+  let protectedMarkdown = markdown;
+  for (let index = spans.length - 1; index >= 0; index -= 1) {
+    const span = spans[index];
+    if (!span) continue;
+    protectedMarkdown = `${protectedMarkdown.slice(0, span.from)}${mathToken(index, span.kind)}${protectedMarkdown.slice(span.to)}`;
+  }
+  return { markdown: protectedMarkdown, spans };
 }
 
 function escapeHtml(value: string) {
@@ -325,6 +377,9 @@ body {
 h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.5em 0 .65em; }
 h1 { font-size: 38px; }
 h2 { border-bottom: 1px solid #ded8ca; padding-bottom: 8px; font-size: 28px; }
+.document-title { margin: .4em 0 .5em; text-align: center; font-size: 42px; }
+.document-author, .document-date { margin: .25em 0; text-align: center; color: #5f5a50; }
+.document-date { margin-bottom: 2em; }
 p { margin: .8em 0; }
 a { color: #2f6f8f; }
 code { border-radius: 4px; background: #f0ece2; padding: .12em .35em; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
@@ -336,8 +391,15 @@ th { background: #f0ece2; font-weight: 700; }
 img { max-width: 100%; height: auto; border-radius: 4px; }
 .task-list-item { list-style: none; margin-left: -1.25em; }
 .task-list-item input { margin-right: .5em; }
-.math-inline, .math-block { font-family: Cambria Math, STIX Two Math, ui-serif, serif; }
+.math-inline { display: inline-block; max-width: 100%; vertical-align: middle; }
 .math-block { overflow: auto; border-radius: 6px; background: #f7f4ed; padding: 12px 16px; text-align: center; white-space: pre-wrap; }
+mjx-container[jax="SVG"] { direction: ltr; white-space: nowrap; }
+mjx-container[jax="SVG"] > svg { min-width: 1px; min-height: 1px; overflow: visible; }
+mjx-container[jax="SVG"] > svg a { fill: #2f6f8f; stroke: #2f6f8f; }
+mjx-container[display] { display: block; justify-content: center; margin: .7em 0; padding: .3em 2px; text-align: center; }
+mjx-container[display][width="full"] { display: flex; }
+.math-inline > mjx-container { display: inline-block; margin: 0; padding: 0; }
+.math-block > mjx-container { margin: 0; }
 .footnote { margin-top: .7em; border-top: 1px solid #ded8ca; color: #5f5a50; font-size: 13px; }
 @media print {
   body { background: white; }

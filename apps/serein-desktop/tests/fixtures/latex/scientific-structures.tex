@@ -1,0 +1,85 @@
+\documentclass[UTF8]{ctexrep}
+\usepackage{amsmath,amssymb,bm}
+\title{科学公式结构回归}
+\author{Serein}
+\date{}
+
+\begin{document}
+\maketitle
+
+% 该注释不能出现在导出正文。
+\chapter{基础结构}
+
+\section{分段函数与矩阵}
+
+\noindent 分段函数和矩阵应保持为原生数学结构：
+
+\[
+f(x)
+=
+\begin{cases}
+x^2, & x\geq 0,\\
+-x, & x<0,
+\end{cases}
+\qquad
+\bm A
+=
+\begin{bmatrix}
+a_{11} & a_{12}\\
+a_{21} & a_{22}
+\end{bmatrix}.
+\]
+
+\subsection{长公式与集中公式}
+
+\begin{multline}
+J(\bm\theta)
+=
+\sum_{i=1}^{n}
+\left[y_i-f(\bm x_i;\bm\theta)\right]^2\\
++\lambda\sum_{j=1}^{p}\theta_j^2.
+\label{eq:structures-multline}
+\end{multline}
+
+\begin{gather*}
+a^2+b^2=c^2,\\
+e^{i\pi}+1=0,\\
+\sin^2x+\cos^2x=1.
+\end{gather*}
+
+\chapter{编号与引用}
+
+\section{子公式}
+
+\begin{subequations}
+\label{eq:structures-system}
+\begin{align}
+\bm g_k&=\bm J_k^{\mathsf T}\bm r_k,
+\label{eq:structures-gradient}\\
+\bm H_k&\approx\bm J_k^{\mathsf T}\bm J_k.
+\label{eq:structures-hessian}
+\end{align}
+\end{subequations}
+
+引用式~\eqref{eq:structures-gradient} 和式~\eqref{eq:structures-hessian}。
+
+\subsection{手动编号}
+
+\begin{equation}
+E=mc^2
+\tag{A.1}
+\end{equation}
+
+\subsubsection{无编号公式}
+
+\begin{equation*}
+\operatorname{diag}(\bm A)
+=
+\begin{bmatrix}a_{11}&a_{22}\end{bmatrix}.
+\end{equation*}
+
+\paragraph{结论}
+
+上述样本覆盖标题层级、矩阵、分段函数、多行公式、子公式和引用。
+
+\end{document}
