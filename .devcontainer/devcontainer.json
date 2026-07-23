@@ -1,0 +1,18 @@
+{
+  "name": "Serein Linux Development",
+  "dockerComposeFile": "../compose.dev.yaml",
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": false,
+  "overrideCommand": true,
+  "postCreateCommand": "bash .devcontainer/post-create.sh /workspace",
+  "forwardPorts": [1420],
+  "portsAttributes": {
+    "1420": {
+      "label": "Serein Vite",
+      "onAutoForward": "notify"
+    }
+  },
+  "shutdownAction": "stopCompose"
+}

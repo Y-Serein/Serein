@@ -111,7 +111,120 @@ stale field results, select the document and press `F9` to refresh them.
 
 Release downloads will be published here after Windows packaging is verified.
 
-## Build
+## Containerized development environment
+
+The repository includes a reproducible Linux/WSL development container. It is
+a command-line build and static-check environment, not a production service,
+and it does not require VS Code, Node.js, npm, or Rust on the host. Docker
+Compose is used internally, while `scripts/dev_container.sh` keeps the normal
+workflow to one command.
+
+The container pins Node `22.22.2` and Rust `1.95.0`, installs the Linux system
+libraries required by Tauri 2, and keeps Linux dependencies and generated
+output separate from the Windows release environment.
+
+### Prerequisites
+
+- Git.
+- Docker Engine on Linux, or Docker Desktop with WSL integration enabled on
+  Windows.
+- Docker Compose v2 (`docker compose`).
+
+On Windows, run these commands from WSL and clone the repository into the WSL
+Linux filesystem, such as `~/projects/Serein`, rather than `/mnt/c`, to avoid
+cross-filesystem performance and permission issues.
+
+Confirm that the Docker client can reach the Docker engine before continuing:
+
+```bash
+docker version
+docker compose version
+```
+
+### Clone and create the environment
+
+```bash
+git clone https://github.com/Y-Serein/Serein.git
+cd Serein
+./scripts/dev_container.sh
+```
+
+The first build downloads the Ubuntu base image, Tauri system libraries, Node,
+Rust, and project dependencies. It can take several minutes depending on the
+network. Later runs reuse the Docker image and dependency caches.
+
+The command opens a non-root shell in the repository. On exit, the temporary
+container is removed automatically; source files remain in Git and dependency
+caches remain in Docker volumes. `npm ci` runs automatically only when the
+dependency cache is new or `package-lock.json` changed.
+
+Inside the shell, verify the pinned toolchains or run project checks:
+
+```bash
+node --version
+rustc --version
+cargo --version
+
+cd apps/serein-desktop
+npm run test
+npm run typecheck
+npm run build
+
+cd src-tauri
+cargo check
+```
+
+The same checks can be launched from the host in one command:
+
+```bash
+./scripts/dev_container.sh bash -lc '
+  set -e
+  cd /workspace/apps/serein-desktop
+  npm run test
+  npm run typecheck
+  npm run build
+  cd src-tauri
+  cargo check
+'
+```
+
+For the less common browser-only Vite workflow, explicitly publish the service
+port:
+
+```bash
+docker compose -f compose.dev.yaml run --rm --build --service-ports dev bash -lc '
+  cd /workspace/apps/serein-desktop
+  npm run dev -- --host 0.0.0.0
+'
+```
+
+Then open `http://127.0.0.1:1420`. This does not launch or validate the Tauri
+desktop shell.
+
+Leave the shell with `exit`. The temporary container is removed automatically.
+
+The container stores these paths in Linux-only Docker volumes:
+
+- `apps/serein-desktop/node_modules`
+- `apps/serein-desktop/dist`
+- npm cache
+- Cargo registry and Git cache
+- Linux Tauri target output
+
+The source repository remains bind-mounted from the host. Docker images and
+volumes are not source backups, and real user Vaults should not be mounted into
+automated container tests.
+
+VS Code, JetBrains, or another Dev Container-compatible IDE may open the same
+Compose-backed configuration as an optional interface, but ordinary users do
+not need it.
+See [`docs/runbooks/DEV_CONTAINER.md`](docs/runbooks/DEV_CONTAINER.md) for the
+detailed scope and boundaries.
+
+## Native build
+
+When not using the container, install the project dependencies on the current
+host operating system before running the checks:
 
 ```bash
 cd apps/serein-desktop
@@ -121,14 +234,18 @@ npm run typecheck
 npm run build
 ```
 
-For Tauri static checking:
+For Linux Tauri static checking:
 
 ```bash
 cd apps/serein-desktop/src-tauri
 env CARGO_TARGET_DIR=/tmp/serein-tauri-target cargo check
 ```
 
-Windows release packaging should be run on Windows:
+## Windows release packaging
+
+The Dev Container does not replace Windows Tauri/WebView2 validation or produce
+the final Windows installer. Windows release packaging must be run from Windows
+PowerShell with Windows-side dependencies:
 
 ```powershell
 .\scripts\build_windows.ps1
