@@ -29,7 +29,7 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
-import type { EditorMode } from "../app/types";
+import type { EditorMode, ThemeStyle } from "../app/types";
 import type { AppLanguage, appText } from "../app/i18n";
 import type { EditorCommandSignal, Note } from "../domain/model";
 import {
@@ -87,13 +87,33 @@ import {
   scanMarkdownMath,
   type MarkdownMathSpan,
 } from "../shared/math";
+import {
+  mermaidPaletteFromElement,
+  normalizeMermaidSvgElementBounds,
+  renderMermaidSvg,
+} from "../shared/mermaid";
 
 type TextBundle = (typeof appText)[AppLanguage];
+
+export type MarkdownTextBufferEditorApi = {
+  getSnapshot: () => { noteId: string; markdown: string };
+  applyChanges: (request: {
+    noteId: string;
+    baseMarkdown: string;
+    changes: Array<{ from: number; to: number; insert: string }>;
+    userEvent: string;
+  }) => boolean;
+  undo: () => boolean;
+  redo: () => boolean;
+  revealRange: (from: number, to?: number) => void;
+  focus: () => void;
+};
 
 type MarkdownTextBufferEditorProps = {
   t: TextBundle;
   activeNote: Note;
   editorMode: EditorMode;
+  theme: ThemeStyle;
   command: EditorCommandSignal | null;
   onCommandResult?: (result: { command: EditorCommandSignal; handled: boolean }) => void;
   onChange: (markdown: string) => void;
@@ -105,6 +125,7 @@ type MarkdownTextBufferEditorProps = {
   showImageSourceOnFocus: boolean;
   normalizeWindowsImagePaths: boolean;
   showFrontmatterTagRow: boolean;
+  onApiChange?: (api: MarkdownTextBufferEditorApi | null) => void;
 };
 
 const externalMarkdownUpdate = Annotation.define<boolean>();
@@ -113,16 +134,25 @@ const confirmTypedFence = Annotation.define<number>();
 
 type TextBufferDecorationOptions = {
   mode: EditorMode;
+  theme: ThemeStyle;
   imagePreviewMap: Record<string, string>;
   showImageSourceOnFocus: boolean;
   showFrontmatterTagRow: boolean;
+  mermaidLabels: TextBundle["editor"]["mermaid"];
 };
 
 const defaultTextBufferDecorationOptions: TextBufferDecorationOptions = {
   mode: "rich",
+  theme: "mint",
   imagePreviewMap: {},
   showImageSourceOnFocus: false,
   showFrontmatterTagRow: false,
+  mermaidLabels: {
+    label: "Mermaid diagram",
+    rendering: "Rendering diagram…",
+    editSource: "Click to edit Mermaid source",
+    renderFailed: "Mermaid diagram could not be rendered",
+  },
 };
 
 const textBufferDecorationOptions = Facet.define<
@@ -190,6 +220,7 @@ const preferredCodeLanguages = [
   "python",
   "json",
   "markdown",
+  "mermaid",
   "rust",
   "css",
   "html",
@@ -1190,6 +1221,157 @@ class MathWidget extends WidgetType {
   }
 }
 
+function mermaidBlockSource(markdown: string, block: TextBufferCodeBlock) {
+  return normalizeTextBufferCodeBlockSelectionText(
+    markdown.slice(block.contentFrom, block.contentTo),
+    block,
+  ).replace(/\n$/, "");
+}
+
+function isMermaidCodeBlock(block: TextBufferCodeBlock) {
+  return block.language.trim().toLocaleLowerCase() === "mermaid";
+}
+
+const mermaidWidgetResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
+
+class MermaidWidget extends WidgetType {
+  constructor(
+    private readonly block: TextBufferCodeBlock,
+    private readonly source: string,
+    private readonly theme: ThemeStyle,
+    private readonly labels: TextBufferDecorationOptions["mermaidLabels"],
+  ) {
+    super();
+  }
+
+  eq(other: MermaidWidget) {
+    return other.block.from === this.block.from
+      && other.block.to === this.block.to
+      && other.source === this.source
+      && other.theme === this.theme
+      && other.labels.label === this.labels.label
+      && other.labels.rendering === this.labels.rendering
+      && other.labels.editSource === this.labels.editSource
+      && other.labels.renderFailed === this.labels.renderFailed;
+  }
+
+  toDOM(view: EditorView) {
+    const figure = document.createElement("figure");
+    figure.className = "serein-buffer-mermaid";
+    figure.dataset.mermaidTheme = this.theme;
+    figure.setAttribute("aria-label", this.labels.label);
+    figure.title = this.labels.editSource;
+    applyCodeBlockContainerStyle(figure, this.block);
+
+    const header = document.createElement("figcaption");
+    header.className = "serein-buffer-mermaid-header";
+    const label = document.createElement("span");
+    label.textContent = this.labels.label;
+    const editHint = document.createElement("span");
+    editHint.className = "serein-buffer-mermaid-edit-hint";
+    editHint.textContent = this.labels.editSource;
+    header.append(label, editHint);
+
+    const diagram = document.createElement("div");
+    diagram.className = "serein-buffer-mermaid-diagram is-loading";
+    diagram.setAttribute("aria-live", "polite");
+    diagram.textContent = this.labels.rendering;
+    figure.append(header, diagram);
+
+    const editSource = () => {
+      const anchor = Math.min(this.block.contentFrom, view.state.doc.length);
+      view.dispatch({ selection: { anchor }, scrollIntoView: true });
+      view.focus();
+    };
+    figure.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    figure.addEventListener("click", (event) => {
+      event.stopPropagation();
+      editSource();
+    });
+
+    const editorContainer = view.dom.closest<HTMLElement>(".serein-text-buffer-editor");
+    const availableEditorWidth = () => {
+      if (!editorContainer) return view.scrollDOM.clientWidth;
+      const styles = window.getComputedStyle(editorContainer);
+      const horizontalPadding = Number.parseFloat(styles.paddingLeft)
+        + Number.parseFloat(styles.paddingRight);
+      return editorContainer.clientWidth - horizontalPadding;
+    };
+    let naturalWidth = 0;
+    const syncRenderedSize = () => {
+      if (!figure.isConnected || naturalWidth <= 0) return;
+      const availableWidth = availableEditorWidth();
+      if (availableWidth <= 0) return;
+      const renderedWidth = Math.min(naturalWidth, availableWidth);
+      const width = `${renderedWidth}px`;
+      if (figure.style.width !== width) figure.style.width = width;
+      view.requestMeasure();
+    };
+
+    if (typeof ResizeObserver === "function") {
+      const resizeObserver = new ResizeObserver((entries) => {
+        if (!figure.isConnected) return;
+        if (entries.some((entry) => entry.target === (editorContainer ?? view.scrollDOM))) {
+          syncRenderedSize();
+        }
+        view.requestMeasure();
+      });
+      resizeObserver.observe(editorContainer ?? view.scrollDOM);
+      resizeObserver.observe(figure);
+      mermaidWidgetResizeObservers.set(figure, resizeObserver);
+    }
+
+    window.setTimeout(() => {
+      if (!figure.isConnected) return;
+      const palette = mermaidPaletteFromElement(figure);
+      void renderMermaidSvg(this.source, palette)
+        .then((svg) => {
+          if (!figure.isConnected) return;
+          diagram.className = "serein-buffer-mermaid-diagram";
+          diagram.innerHTML = svg;
+          const svgElement = diagram.querySelector("svg");
+          svgElement?.setAttribute("role", "img");
+          svgElement?.setAttribute("aria-label", this.labels.label);
+          if (svgElement instanceof SVGSVGElement) {
+            normalizeMermaidSvgElementBounds(svgElement);
+          }
+          const svgNaturalWidth = svgElement?.viewBox.baseVal.width ?? 0;
+          naturalWidth = Number.isFinite(svgNaturalWidth) ? svgNaturalWidth : 0;
+          syncRenderedSize();
+        })
+        .catch((error) => {
+          if (!figure.isConnected) return;
+          figure.classList.add("is-error");
+          diagram.className = "serein-buffer-mermaid-diagram is-error";
+          diagram.replaceChildren();
+          const title = document.createElement("strong");
+          title.textContent = this.labels.renderFailed;
+          const message = document.createElement("pre");
+          message.textContent = error instanceof Error ? error.message : String(error);
+          diagram.append(title, message);
+          naturalWidth = 0;
+          figure.style.width = "100%";
+          view.requestMeasure();
+        });
+    }, 0);
+
+    return figure;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+
+  destroy(dom: HTMLElement) {
+    const resizeObserver = mermaidWidgetResizeObservers.get(dom);
+    resizeObserver?.disconnect();
+    mermaidWidgetResizeObservers.delete(dom);
+  }
+}
+
 type PendingTableFocus = {
   tableFrom: number;
   row: number;
@@ -2052,6 +2234,16 @@ function buildTyporaActiveDecorations(state: EditorState): TyporaActiveDecoratio
   }
 
   if (options.mode === "rich") {
+    analysis.codeBlocks.forEach((block) => {
+      if (!isMermaidCodeBlock(block) || isTextBufferCodeBlockBlank(document.markdown, block)) return;
+      if (selectionTouchesRange(state, block.from, block.to)) return;
+      const source = mermaidBlockSource(document.markdown, block);
+      builder.addAtomic(block.from, block.to, Decoration.replace({
+        widget: new MermaidWidget(block, source, options.theme, options.mermaidLabels),
+        block: true,
+      }));
+    });
+
     const activeHead = state.selection.main.head;
     const activeLine = analysis.lines[state.doc.lineAt(activeHead).number - 1];
     const activeBlock = analysis.codeBlocks.find((block) => (
@@ -2673,6 +2865,7 @@ export function MarkdownTextBufferEditor({
   t,
   activeNote,
   editorMode,
+  theme,
   command,
   onCommandResult,
   onChange,
@@ -2683,6 +2876,7 @@ export function MarkdownTextBufferEditor({
   imagePreviewMap,
   showImageSourceOnFocus,
   showFrontmatterTagRow,
+  onApiChange,
 }: MarkdownTextBufferEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -2695,12 +2889,14 @@ export function MarkdownTextBufferEditor({
   const onOpenLinkRef = useRef(onOpenLink);
   const onImportImagesRef = useRef(onImportImages);
   const onCreateWikiLinkRef = useRef(onCreateWikiLink);
+  const onApiChangeRef = useRef(onApiChange);
   const [currentMarkdown, setCurrentMarkdown] = useState(activeNote.markdown);
 
   onChangeRef.current = onChange;
   onOpenLinkRef.current = onOpenLink;
   onImportImagesRef.current = onImportImages;
   onCreateWikiLinkRef.current = onCreateWikiLink;
+  onApiChangeRef.current = onApiChange;
   const frontmatter = useMemo(() => splitYamlFrontmatter(currentMarkdown), [currentMarkdown]);
   const frontmatterTags = frontmatter ? splitYamlPropertyValue(frontmatter.properties.find((property) => property.key.toLowerCase() === "tags")?.value ?? "").join(", ") : "";
   const frontmatterAliases = frontmatter ? splitYamlPropertyValue(frontmatter.properties.find((property) => property.key.toLowerCase() === "aliases")?.value ?? "").join(", ") : "";
@@ -2708,10 +2904,12 @@ export function MarkdownTextBufferEditor({
   const showFrontmatterPanel = Boolean(frontmatter && showFrontmatterTagRow && editorMode === "rich");
   const decorationOptions = useMemo<TextBufferDecorationOptions>(() => ({
     mode: editorMode,
+    theme,
     imagePreviewMap,
     showImageSourceOnFocus,
     showFrontmatterTagRow,
-  }), [editorMode, imagePreviewMap, showFrontmatterTagRow, showImageSourceOnFocus]);
+    mermaidLabels: t.editor.mermaid,
+  }), [editorMode, imagePreviewMap, showFrontmatterTagRow, showImageSourceOnFocus, t.editor.mermaid, theme]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -2842,7 +3040,35 @@ export function MarkdownTextBufferEditor({
     });
 
     viewRef.current = view;
+    const api: MarkdownTextBufferEditorApi = {
+      getSnapshot: () => ({
+        noteId: activeNoteIdRef.current,
+        markdown: view.state.doc.toString(),
+      }),
+      applyChanges: (request) => {
+        if (request.noteId !== activeNoteIdRef.current) return false;
+        if (request.baseMarkdown !== view.state.doc.toString()) return false;
+        if (!request.changes.length) return true;
+        view.dispatch({
+          changes: request.changes,
+          annotations: Transaction.userEvent.of(request.userEvent),
+        });
+        return true;
+      },
+      undo: () => undoTextBuffer(view),
+      redo: () => redoTextBuffer(view),
+      revealRange: (from, to = from) => {
+        const documentLength = view.state.doc.length;
+        const anchor = Math.max(0, Math.min(from, documentLength));
+        const head = Math.max(anchor, Math.min(to, documentLength));
+        view.dispatch({ selection: EditorSelection.range(anchor, head), scrollIntoView: true });
+        view.focus();
+      },
+      focus: () => view.focus(),
+    };
+    onApiChangeRef.current?.(api);
     return () => {
+      onApiChangeRef.current?.(null);
       view.destroy();
       if (viewRef.current === view) viewRef.current = null;
       createStateRef.current = null;

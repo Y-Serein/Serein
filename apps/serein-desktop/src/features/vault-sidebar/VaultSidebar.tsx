@@ -624,6 +624,7 @@ export function VaultSidebar({
                 key={`${item.text}-${index}`}
                 type="button"
                 className={`outline-item level-${item.level}`}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => onOutlineClick(index)}
               >
                 {item.text}

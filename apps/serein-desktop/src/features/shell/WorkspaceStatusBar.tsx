@@ -1,8 +1,8 @@
 import { PencilLine } from "lucide-react";
-import type { EditorMode } from "../../app/types";
+import type { DocumentViewMode } from "../../app/types";
 
 type WorkspaceEditorStatusBarProps = {
-  editorMode: EditorMode;
+  editorMode: DocumentViewMode;
   modeLabel: string;
 };
 

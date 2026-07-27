@@ -1,6 +1,6 @@
 import type { MouseEvent as ReactMouseEvent, RefObject } from "react";
-import { Maximize2, Minus, PanelLeft, PanelRight, X } from "lucide-react";
-import type { CommandDefinition, EditorMode, SaveStatus } from "../../app/types";
+import { GitBranch, Maximize2, Minus, PanelLeft, PanelRight, X } from "lucide-react";
+import type { CommandDefinition, DocumentViewMode, SaveStatus } from "../../app/types";
 import { APP_NAME } from "../../app/metadata";
 import { getShortcutForCommand, menuGroups } from "../../command/shortcuts";
 import type { ShortcutEntry } from "../../command/shortcuts";
@@ -20,14 +20,14 @@ type WindowChromeProps = {
   saveError: string | null;
   savedAt: Date | null;
   hasActiveDocument: boolean;
-  editorMode: EditorMode;
-  modeCommandId: string;
+  documentViewMode: DocumentViewMode;
   windowActionPending: "minimize" | "maximize" | "close" | null;
   onChromeMouseDown: (event: ReactMouseEvent<HTMLElement>) => void;
   onChromeDoubleClick: (event: ReactMouseEvent<HTMLElement>) => void;
   onWindowAction: (action: "minimize" | "maximize" | "close") => void;
   onOpenMenu: (value: string | null | ((current: string | null) => string | null)) => void;
   onDispatchCommand: (commandId: string) => void;
+  onDocumentViewModeChange: (mode: DocumentViewMode) => void;
 };
 
 export function WindowChrome({
@@ -40,15 +40,25 @@ export function WindowChrome({
   saveError,
   savedAt,
   hasActiveDocument,
-  editorMode,
-  modeCommandId,
+  documentViewMode,
   windowActionPending,
   onChromeMouseDown,
   onChromeDoubleClick,
   onWindowAction,
   onOpenMenu,
   onDispatchCommand,
+  onDocumentViewModeChange,
 }: WindowChromeProps) {
+  const nextDocumentViewMode: DocumentViewMode = documentViewMode === "rich"
+    ? "plain"
+    : documentViewMode === "plain"
+      ? "mindmap"
+      : "rich";
+  const documentViewIcon = documentViewMode === "rich"
+    ? <PanelRight size={15} />
+    : documentViewMode === "plain"
+      ? <PanelLeft size={15} />
+      : <GitBranch size={15} />;
   const statusText = hasActiveDocument
     ? (saveError ?? (saveStatus === "saved" ? t.status.saved : savedAt ? `${t.status.saved} ${formatTime(savedAt)}` : ""))
     : t.status.noDocument;
@@ -165,12 +175,13 @@ export function WindowChrome({
         <div className="menu-status">
           {statusText ? <span>{statusText}</span> : null}
           <Button
+            className="menu-document-view-button"
             variant="ghost"
-            icon={editorMode === "plain" ? <PanelLeft size={15} /> : <PanelRight size={15} />}
-            title={editorMode === "plain" ? t.modeNames.rich : t.modeNames.plain}
-            onClick={() => onDispatchCommand(modeCommandId)}
+            icon={documentViewIcon}
+            title={t.modeNames[nextDocumentViewMode]}
+            onClick={() => onDocumentViewModeChange(nextDocumentViewMode)}
           >
-            {t.modeNames[editorMode]}
+            {t.modeNames[documentViewMode]}
           </Button>
         </div>
       </header>

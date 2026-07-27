@@ -44,3 +44,12 @@ tmp/
 Thumbs.db
 *.swp
 *.swo
+docs/
+!docs/
+docs/*
+!docs/runbooks/
+docs/runbooks/*
+!docs/runbooks/skills/
+docs/runbooks/skills/*
+!docs/runbooks/skills/serein-mermaid-rendering-convergence/
+!docs/runbooks/skills/serein-mermaid-rendering-convergence/**

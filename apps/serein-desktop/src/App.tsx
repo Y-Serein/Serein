@@ -14,6 +14,7 @@ import { useAppStore } from "./app/store/appStore";
 import type { AppDialogResult } from "./app/store/appStore";
 import type {
   CommandDefinition,
+  DocumentViewMode,
   EditorMode,
   AppSettings,
   SaveFileExt,
@@ -107,6 +108,10 @@ import {
   stripExtension,
   vaultFileNameCandidate,
 } from "./shared/markdown";
+import {
+  mermaidPaletteFromElement,
+  renderMarkdownMermaidBlocks,
+} from "./shared/mermaid";
 import {
   buildVaultIndex,
   createDraftIndexedFile,
@@ -848,6 +853,7 @@ export default function App() {
   const [vaultQuickstartOpen, setVaultQuickstartOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [windowActionPending, setWindowActionPending] = useState<"minimize" | "maximize" | "close" | null>(null);
+  const [documentViewMode, setDocumentViewModeState] = useState<DocumentViewMode>(editorMode);
   const [centerView, setCenterView] = useState<"markdown" | "graph">("markdown");
   const [centerGraphOpen, setCenterGraphOpen] = useState(false);
   const [centerGraphTag, setCenterGraphTag] = useState("");
@@ -992,7 +998,16 @@ export default function App() {
   const setGlobalEditorMode = useCallback((mode: EditorMode) => {
     setEditorMode(mode);
     setDefaultEditorModeSetting(mode);
+    setDocumentViewModeState(mode);
   }, [setDefaultEditorModeSetting, setEditorMode]);
+
+  const setDocumentViewMode = useCallback((mode: DocumentViewMode) => {
+    if (mode === "mindmap") {
+      setDocumentViewModeState(mode);
+      return;
+    }
+    setGlobalEditorMode(mode);
+  }, [setGlobalEditorMode]);
 
   const showInputDialog = useCallback((title: string, defaultValue = "", message?: string) => (
     new Promise<string | null>((resolve) => {
@@ -2240,11 +2255,17 @@ export default function App() {
       if (!selected) return;
 
       const imageMap = await buildExportImageMap();
+      const mermaidBlocks = format === "docx"
+        ? []
+        : await renderMarkdownMermaidBlocks(
+          activeNote.markdown,
+          mermaidPaletteFromElement(appShellRef.current),
+        );
       const title = extractFirstLineTitle(activeNote.markdown) ?? (stripExtension(activeNote.fileName ?? "") || activeNote.title);
       const bytes = format === "html"
-        ? utf8Bytes(htmlDocument(activeNote.markdown, { title, imageMap }))
+        ? utf8Bytes(htmlDocument(activeNote.markdown, { title, imageMap, mermaidBlocks }))
         : format === "pdf"
-          ? await markdownToPdfBytes(activeNote.markdown, { title, imageMap })
+          ? await markdownToPdfBytes(activeNote.markdown, { title, imageMap, mermaidBlocks })
           : await markdownToDocxBytes(activeNote.markdown, { title, imageMap });
       await writeExportFile(ensureExportExtension(selected, format), format, bytes);
       setSaveError(null);
@@ -2745,8 +2766,8 @@ export default function App() {
     "format.strike": { id: "format.strike", label: t.commandLabels["format.strike"], enabled: hasActiveDocument, run: () => runEditorCommand("strike") },
     "format.link": { id: "format.link", label: t.commandLabels["format.link"], enabled: hasActiveDocument, run: runLinkCommand },
     "format.image": { id: "format.image", label: t.commandLabels["format.image"], enabled: hasActiveDocument, run: runImageCommand },
-    "view.setPlainEdit": { id: "view.setPlainEdit", label: t.commandLabels["view.setPlainEdit"], enabled: editorMode !== "plain", run: () => setGlobalEditorMode("plain") },
-    "view.setRichEdit": { id: "view.setRichEdit", label: t.commandLabels["view.setRichEdit"], enabled: editorMode !== "rich", run: () => setGlobalEditorMode("rich") },
+    "view.setPlainEdit": { id: "view.setPlainEdit", label: t.commandLabels["view.setPlainEdit"], enabled: documentViewMode !== "plain", run: () => setDocumentViewMode("plain") },
+    "view.setRichEdit": { id: "view.setRichEdit", label: t.commandLabels["view.setRichEdit"], enabled: documentViewMode !== "rich", run: () => setDocumentViewMode("rich") },
     "view.toggleSidebar": { id: "view.toggleSidebar", label: t.commandLabels["view.toggleSidebar"], enabled: true, run: () => setSidebarVisible((visible) => !visible) },
     "view.toggleRightPanel": { id: "view.toggleRightPanel", label: t.commandLabels["view.toggleRightPanel"], enabled: true, run: () => setRightPanelVisible((visible) => !visible) },
     "theme.mint": { id: "theme.mint", label: t.commandLabels["theme.mint"], enabled: theme !== "mint", run: () => setTheme("mint") },
@@ -2756,6 +2777,7 @@ export default function App() {
     "theme.daily": { id: "theme.daily", label: t.commandLabels["theme.daily"], enabled: theme !== "daily", run: () => setTheme("daily") },
   }), [
     activeNote,
+    documentViewMode,
     editorMode,
     hasActiveDocument,
     handleCreateVaultFolder,
@@ -2772,7 +2794,7 @@ export default function App() {
     handleSelectAll,
     runImageCommand,
     runLinkCommand,
-    setGlobalEditorMode,
+    setDocumentViewMode,
     scheduleBackgroundSave,
     showMessageDialog,
     t,
@@ -4065,8 +4087,6 @@ export default function App() {
     setSaveStatus("idle");
   }, [confirmDiscardUnsavedChanges, persistVaultPatch, setActiveNoteId, setLastOpenedFile, setNotes, setSaveError, setSaveStatus]);
 
-  const modeCommandId = editorMode === "plain" ? "view.setRichEdit" : "view.setPlainEdit";
-
   return (
     <div
       ref={appShellRef}
@@ -4097,14 +4117,14 @@ export default function App() {
         saveError={saveError}
         savedAt={savedAt}
         hasActiveDocument={hasActiveDocument}
-        editorMode={editorMode}
-        modeCommandId={modeCommandId}
+        documentViewMode={documentViewMode}
         windowActionPending={windowActionPending}
         onChromeMouseDown={handleChromeDragMouseDown}
         onChromeDoubleClick={handleChromeDoubleClick}
         onWindowAction={handleWindowAction}
         onOpenMenu={setOpenMenuId}
         onDispatchCommand={dispatchCommand}
+        onDocumentViewModeChange={setDocumentViewMode}
       />
 
       <WorkspaceRibbon
@@ -4203,8 +4223,8 @@ export default function App() {
         editorStatus={(
           showEditorStatusOverlay ? (
             <WorkspaceEditorStatusBar
-              editorMode={editorMode}
-              modeLabel={t.modeNames[editorMode]}
+              editorMode={documentViewMode}
+              modeLabel={t.modeNames[documentViewMode]}
             />
           ) : null
         )}
@@ -4242,8 +4262,11 @@ export default function App() {
           activeNote={activeNote}
           hasActiveDocument={hasActiveDocument}
           editorMode={editorMode}
+          theme={theme}
           command={editorCommand}
           editorSurfaceRef={editorSurfaceRef}
+          viewMode={documentViewMode}
+          onViewModeChange={setDocumentViewMode}
           onMarkdownChange={handleMarkdownChange}
           onOpenLink={handleEditorLinkOpen}
           wikiLinkSuggestions={wikiLinkSuggestions}

@@ -21,7 +21,10 @@
     "src/editor/textBufferMarkdown.ts",
     "src/editor/textBufferTransactions.ts",
     "src/explorer/tree.ts",
+    "src/features/mindmap/layout.ts",
+    "src/features/mindmap/model.ts",
     "src/shared/markdown.ts",
+    "src/shared/mermaid.ts",
     "src/vault/index.ts",
     "src/vault/workspace.ts"
   ]

@@ -1,10 +1,11 @@
 # Serein Project Memory
 
-最后更新：2026-07-21 09:18
+最后更新：2026-07-22 11:38
 
 ## 用户偏好
 
 - 默认中文沟通，表达直接、具体、以结果为导向。
+- 用户说“提交 / commit”且未另行指定范围时，默认提交当前任务相关的源码、测试和 README；不默认纳入 HANDOFF、PROJECT_MEMORY、截图、构建产物或其他过程文档。
 - 用户接受反驳，但反驳必须给出原因、替代方案、利弊和下一步动作。
 - 用户喜欢“工程控制论”闭环：目标 → 状态 → 误差 → 控制动作 → 反馈 → 修正 → 验证 → 沉淀。
 - 用户反复强调：主矛盾优先，不要被零散小 bug 拖偏；但高频路径的小 bug 如果影响真实体验，也要一起修。
@@ -1200,3 +1201,230 @@ UI 必须用干净 production preview/Playwright 验证：
 
 - 不创建重复 skill。继续增强 `docs/runbooks/skills/serein-text-buffer-stability/SKILL.md`，因为它已经覆盖单编辑器、结构块、表格 widget、selection/history、Vite 回归和 Windows 终验。
 - 新增内容应保持可执行：先确认/再改、表格实际运行路径、按列对齐、Frontmatter 重复诊断、最小表格输入、视觉与源码双重验证、交接沉淀。
+
+## 2026-07-21 表格稳定检查点与数学公式方案 A
+
+### 已形成的稳定边界
+
+- 表格/单编辑器稳定检查点为 `4cc4414 feat(editor): stabilize single-editor table workflow`；当前仅本地 commit，未 tag、未 push。
+- 该检查点之后的公式工作保持为独立 WIP，避免把“表格已稳定”和“公式已完成”混成同一个发布结论。
+- `/home/slam/Sipeed/T_tools/agent_preflight.py` 的 typora 项目根目录和 git 目录已修正为 `/home/slam/Project/Serein`。此前关于它仍指向旧目录的记录只代表历史状态，不再是当前事实。
+
+### 方案 A 的实现原则
+
+- Markdown source 是公式唯一真相；Rich 模式只通过 CodeMirror decoration/widget 渲染，不为公式创建第二套内容、selection 或 history 状态。
+- 编辑器、HTML 导出和 PDF 导出统一复用 `scanMarkdownMath()`，不要各自维护美元正则。否则货币、代码、未闭合块公式会在三个出口产生不同结果。
+- `$5 and $10`、空白定界符、转义美元、单/多反引号代码中的美元内容保持普通文本；合法 `$...$` 和闭合非空 `$$...$$` 才进入公式路径。
+- 非法 LaTeX 必须安全可见，使用 `.serein-math-error` 回退；不能因为 KaTeX 解析失败而静默丢失用户源码。
+- 渲染公式必须可回到源码编辑：widget 携带 source range，普通点击把 selection 放回公式范围并展开，selection 离开后重新折叠。
+- PDF 目前是文本型公式导出：只移除合法公式定界符，保留公式内容和货币美元符号；它不是 KaTeX 矢量排版。
+
+### 验证结论和剩余风险
+
+- 公式改动后 `npm run typecheck`、`npm run test`（7/7）、`npm run build`、`git diff --check` 均通过。
+- 公式 Chromium smoke 通过：合法/非法行内公式、块公式、货币、代码、点击展开、Rich/Source roundtrip、离开 selection 后重渲染；page errors 0。
+- 表格相邻回归通过：单一 CodeMirror、工具栏顺序、当前列对齐写回、DOM/input 对齐、Rich/Source roundtrip；page errors 0。
+- 两次 5197 smoke 在编辑器出现前冷启动超时，换干净 5201 端口后完整通过。UI 回归应继续使用干净端口，并把 harness 启动失败与产品断言失败分开报告。
+- Windows release、WebView2、IME、真实 Vault 保存、HTML 导出中 KaTeX 相对字体路径仍未验证；Linux/Chromium 只能作为前置证据。
+
+## 2026-07-21 SCI/LaTeX 数学语法纠正
+
+- 用户明确区分“Markdown 数学扩展”和“SCI 论文的标准数学写法”。产品面向科学写作时，不能把 `$...$` / `$$...$$` 描述为标准 SCI 格式。
+- Serein 的首选数学语法确定为：`\(...\)` 行内公式、`\[...\]` 块公式。README、示例、后续插入命令和验收样例都应以此为准。
+- `$...$` / `$$...$$` 只作为已有 Markdown 文档的兼容读取层保留；不能静默转换、重写或破坏用户原始分隔符。
+- `scanMarkdownMath()` 已增加标准 LaTeX 分隔符，支持独占行块和分隔符贴近内容的跨行块；widget 记录准确 content source 位置，点击后光标进入分隔符内部。
+- 标准 LaTeX UI smoke、Source/Rich roundtrip、HTML/PDF 导出、非法输入 fallback、货币/代码保护、美元兼容和表格相邻回归均已通过；Windows release 仍需实测。
+
+## 2026-07-21 SCI/LaTeX 公式兼容与 Word 原生导出完整复盘
+
+### 用户偏好（经过本轮反复调整后的稳定结论）
+
+- 用户要的是 SCI/LaTeX 的标准数学输入，不接受把 Markdown 常见的 `$...$` / `$$...$$` 当成首选标准。新文档首选 `\(...\)`、`\[...\]`，并完整覆盖 `equation`、`align`、`aligned`、`split`、`multline`、`gather`、`cases`、矩阵、编号和引用。
+- 用户强调“要做就做完整”：不能只支持一个 `equation` 示例或某个生成器输出；应主动生成非线性最小二乘、贝塞尔曲线、信任链、矩阵、分段函数、多行对齐、编号/引用、自定义宏等不同结构的回归样本。
+- 用户希望 Serein 这边长什么样，导出到 Word/HTML 就尽量保持相同结构：Markdown `#` 映射一级标题，LaTeX `\section` 等映射对应标题层级，公式保持编号、对齐和引用。
+- Word 公式必须是原生可编辑 OMML，不接受截图、SVG 图片、LaTeX 源码占位或“看起来像公式但无法编辑”的方案。
+- 完整 LaTeX 外壳不需要在 Rich Edit 中执行：`\documentclass`、`\usepackage`、`\geometry`、`\begin{document}` 等属于文档系统；导出时剥离外壳并转换结构即可。安全的数学宏定义可以提取，但不能引入完整 TeX 执行器。
+- 用户会从真实测试文档里指出一个局部现象，例如“这里突然变大”；AI 应把它作为证据继续追根因，不能固守上一轮对 `equation + \bm` 的猜测。
+- 用户接受保留 `$...$` / `$$...$$` 兼容，但不要求为了兼容维持第二套渲染器。首选单一 MathJax 语义链，旧语法只是输入边界兼容。
+- 用户默认要求真实可见验证：公式是否清晰、字号是否异常、点击后是否能编辑、Word 是否可编辑，不能只靠类型检查或单个 parser 测试。
+- 用户说“提交 / commit”且未另行指定范围时，默认提交当前任务相关源码、测试、配置和 README；HANDOFF、PROJECT_MEMORY、截图和构建产物不默认进入源码提交。若用户明确要求沉淀 skill/memory，再单独确认是否做文档提交。
+
+### 从错误里学到的最佳实践
+
+1. 先把问题分成三类，再决定改哪一层：
+   - 用户源 LaTeX 本身非法，例如 `\qquadqquad` 应为 `\qquad\qquad`。
+   - MathJax/兼容层缺能力，例如 `\bm` 未注册、`\mathcal` 动态字体未加载、preamble 宏没有进入数学上下文。
+   - Markdown/Rich 装饰泄漏，例如块公式内部的单独 `=` 把上一行误判为 Setext H1。
+   这三类现象都可能表现为“公式报错或突然变大”，但控制变量完全不同。
+2. MathJax 4 NewCM SVG 的部分字形是动态模块。出现 SVG `width="NaNex"`、`viewBox` 含 `NaN` 或巨型字形时，先检查对应动态字体模块，不要先用 CSS 限高掩盖。`\mathcal` 的正确修复是加载 `@mathjax/mathjax-newcm-font/mjs/svg/dynamic/calligraphic.js`。
+3. 自定义宏必须作为文档级数学上下文处理，不能逐公式做字符串替换。用平衡括号解析 preamble 中的 `\newcommand` / `\renewcommand` / `\providecommand`，作为第一个隐藏 setup 注入 MathJax；setup 必须进入渲染缓存签名，并同步传给 DOCX 语义编译。
+4. Rich、HTML、DOCX 应共用同一 `scanMarkdownMath()`、MathJax TeX 配置和语义树。否则会出现编辑器能显示、HTML 报错、Word 又输出源码的三套事实。
+5. 对完整 LaTeX 文档采用“安全归一化”而不是“执行”：保留源文件，导出时提取 body、标题层级和数学宏；不执行布局包、任意命令或完整 TeX 引擎。
+6. 块公式在源码态仍处于 Markdown 文本缓冲区中。建立 block math ranges，对完全落在范围内的行跳过 heading/list/quote/hidden 等装饰；不能因为存在行内公式而跳过整条普通正文。
+7. 不要用一个简单示例判断公式完成。至少验证：标准/兼容分隔符、AMS 外层环境、内部环境、矩阵/分段、`\bm`、`\mathcal`、文档宏、编号/引用、非法源码可见回退、完整 article/report、HTML 和 DOCX。
+8. 视觉问题必须用真实组件和真实 CSS 验证。记录公式宿主盒、SVG 属性、字形墨迹尺寸、源码态 class/font-size/line-height、console/page errors；同一脚本在修复前后反证。
+9. CodeMirror 会虚拟化离屏内容。自动化找不到第 199 行的公式时，先确认真实滚动所有者和探针 DOM 是否包含 `.editor-surface`，不要把“DOM 暂时不存在”当成产品不支持。
+10. harness 失败与产品失败要分开：Python Playwright 缺包、Vite 端口 `EPERM`、`ERR_NETWORK_CHANGED`、旧 HMR 缓存、探针缺滚动容器，都应先修测试环境，不要据此改产品逻辑。
+11. DOCX 测试应断言 OMML 结构，不要假设文本连续。`pk_i` 可能被正确拆成多个 `<m:t>` 和上下标节点；测试应验证语义节点、字段、书签和无源码泄漏。
+12. 非法公式不能静默丢失。Rich/HTML 用 `.serein-math-error` 显示转义源码，DOCX 使用可见源码回退；这样用户能区分文档错误和渲染器缺陷。
+
+### 项目关键约束和坑
+
+- Markdown buffer 是唯一真相。公式 widget 只负责视觉和点击回源码，不创建第二套内容、selection、history 或渲染器。
+- 当前长期渲染器是 MathJax 4；KaTeX 路径已删除，不应为某个命令重新恢复两套渲染器。
+- `$...$` / `$$...$$` 只兼容读取；不能自动重写用户源文件，也不能破坏货币、转义美元、代码 span/fence 和未闭合定界符。
+- `\documentclass`、`\usepackage`、`\geometry`、`\maketitle`、`\begin{document}` 不是公式语法。Rich 不执行它们；HTML/DOCX 导出负责剥离外壳和映射结构。
+- `\newcommand` 等只在完整文档 preamble 中安全提取为数学上下文；不把任意 TeX 变成可执行脚本。
+- HTML 使用 MathJax SVG；DOCX 使用 MML→OMML；PDF 当前仍是可读 LaTeX 文本，不是排版公式。三个出口的完成度必须分别说明。
+- MathJax 动态字体缺失可能产生 `NaNex` 而不是普通 parse error；CSS 缩放不是根因修复。
+- Markdown Setext 标题规则会与公式内部独占 `=` 冲突；块公式源码范围必须隔离行装饰。
+- `v1.txt` 是重要真实回归样本，但位于 `/home/slam/Project/test/v1.txt`，不能修改或直接纳入仓库。仓库夹具应复制为脱敏、合法、可维护版本；非法 `\qquadqquad` 另做错误回退测试。
+- 当前工作区有 24 项 WIP，包含源码、测试、README、DOCX 和文档。禁止 `git add .`、reset、restore、checkout；提交前逐文件/逐 hunk 检查，新文件使用 `git add --chmod=-x`。
+- Linux/Chromium 验证不能替代 Windows release、WebView2 和 Microsoft Word。Word 的视觉、字段刷新、公式编辑性和大文档性能仍是最终产品验收。
+
+### 下次一次性达到这次效果的推荐提示词
+
+完整可复制版本见：
+
+`docs/runbooks/skills/serein-sci-latex-math-convergence/references/one-shot-prompt.md`
+
+核心提示词：
+
+```text
+请接手 /home/slam/Project/Serein 的 SCI/LaTeX 数学兼容和 Word 原生公式导出。先完整阅读 AGENTS.md、CLAUDE.md（若存在）、HANDOFF.md、docs/runbooks/PROJECT_MEMORY.md、docs/runbooks/KNOWN_FAILURES.md，以及 docs/runbooks/skills/serein-sci-latex-math-convergence/SKILL.md；运行 python3 /home/slam/Sipeed/T_tools/agent_preflight.py --project typora。
+
+按“目标→状态→误差→控制动作→反馈→修正→验证→沉淀”闭环推进。先汇报当前 HEAD、dirty worktree、现有数学语义链、用户复现文件和最小控制变量；诊断阶段不要先改代码。根因明确后自主做最小修复，不做无关重构，不恢复 KaTeX 或第二套内容/selection/history。
+
+产品标准：新文档首选 \(...\) 行内、\[...\] 块和 AMS 环境；$...$ / $$...$$ 只兼容读取。完整 LaTeX 外壳不在 Rich 中执行，导出时剥离并映射标题；preamble 中安全的 newcommand/renewcommand/providecommand 要贯通 Rich、HTML 和 DOCX。Word 必须输出原生可编辑 OMML，不使用图片或源码占位。
+
+遇到“公式报错/突然变大”时必须分别排查：源 LaTeX 是否非法、MathJax 包/动态字体/宏上下文是否缺失、Markdown heading/list/quote 装饰是否泄漏到块公式。不要用 CSS 限高掩盖 NaN SVG，不要把用户源码错误包装成兼容问题。
+
+请主动生成非线性最小二乘、贝塞尔曲线、信任链、自定义宏、矩阵、cases、align/subequations/label/ref 等回归样本。验证 Rich 点击编辑、Source 保真、HTML、DOCX OMML/字段/书签、非法源码可见回退；视觉问题用真实 MarkdownTextBufferEditor、真实 CSS、干净 Vite 和 Playwright，记录 SVG 尺寸、font-size、selection、page errors。完成前运行 npm run test、npm run typecheck、npm run build、git diff --check，并明确 Windows release/Word 未验证项。
+
+不要修改我的原始复现文档，不要 git add .，不自动 commit/tag/push。若我说 commit，默认只提交当前任务相关源码、测试、配置和 README；HANDOFF、memory、截图和构建产物另行确认。
+```
+
+### 本轮沉淀出的项目 skill
+
+- 新增：`docs/runbooks/skills/serein-sci-latex-math-convergence/SKILL.md`。
+- skill 覆盖：标准数学语法边界、MathJax 动态字体、`\bm`、preamble 宏上下文、块公式 Markdown 装饰隔离、完整 LaTeX 外壳归一化、Rich/HTML/DOCX 单语义链、非法源码回退、Playwright 视觉证据、Word 终验和 dirty worktree 保护。
+- 附带一次性提示词和 4 个 eval 提示。当前是可用草案，尚未运行 with-skill/baseline benchmark；后续如需优化触发率，再按 skill-creator 流程做量化迭代。
+
+## 2026-07-22 SCI 公式与 Word/WPS 排版最终收敛
+
+### 本轮稳定结果
+
+- 公式、MathJax、完整 LaTeX 结构映射和 DOCX 原生公式已经形成稳定提交：`a3ed1fc feat(export): stabilize scientific math and DOCX export`。
+- 用户对最终视觉反馈为“现在好很多了”，当前版本应作为稳定基线；没有新的最小复现时，不继续凭主观感受反复调整公式字号、字体或 OMML 结构。
+- DOCX 中文论文排版基线：正文中文 SimSun/宋体 12 pt，英文与数字 Times New Roman 12 pt；文档标题 SimHei/黑体 22 pt；一级标题 16 pt；二级标题 14 pt；三级标题 12 pt。
+- 公式显式请求 Cambria Math，并保持 Word 原生可编辑 OMML；不使用图片、SVG 截图或可见 LaTeX 源码替代。
+- Word/WPS 公式编号使用段落中心/右对齐制表位，不使用无边框表格。该方案优先消除编辑时出现的网格感；复杂 `align` 跨行精确对齐是可接受的次要取舍。
+- `\sum`、`\prod`、`\int` 等大运算符必须拥有非空 OMML `m:nary/m:e` 主体；空 `<m:e/>` 会被 WPS 显示为虚线占位框。
+- 编辑器公式只做轻微相对字号调整：`1.04em`。140% 场景下实测约 16.64 px，无 MathJax、console 或 page error；不使用描边、滤镜、强制锐化或 CSS 限高。
+
+### 用户偏好（本轮反复调整后的稳定结论）
+
+- Word 和 WPS 要尽量获得同等效果，但用户接受二者不是同一排版引擎，目标是结构、字体意图、字号、公式编辑性和编号布局一致，不承诺像素级相同。
+- 中文论文默认排版不是浏览器通用字体：正文宋体小四；英文/数字 Times New Roman；标题黑体并按中文论文常用层级设置。
+- 用户在视觉验收时使用 140% 缩放。公式清晰度、正文行高、块公式高度和点击编辑必须在该场景验证，而不是只测 100%。
+- 用户对公式中的虚线框、表格格子、异常放大和字体发糊非常敏感；这些不是“能导出就算完成”，必须追到 XML 结构、字体选择或渲染缩放根因。
+- 用户会先接受“至少能用”的稳定点，但明确要求不要在已明显改善后乱改；后续变更必须基于截图、软件版本和最小复现。
+- 用户说“提交 / commit”时，默认只提交当前任务相关源码、测试、配置和 README。本轮稳定提交严格排除了 HANDOFF、PROJECT_MEMORY、截图、参考 DOCX、skill 和构建产物。
+- Git 仓库无用户身份时，允许按项目规则对单次 commit 使用 `Y-Serein <2034755070@qq.com>`；不要修改全局 Git 配置。
+
+### 从错误里学到的最佳实践
+
+1. DOCX 视觉异常要先看 OOXML/OMML 结构，不要只看截图猜 CSS。WPS 的虚线框最终不是字体问题，而是大运算符 `<m:e/>` 为空。
+2. `m:nary` 的主体不是可选装饰。把求和/积分号单独映射成 OMML 运算符但遗漏后续被积/求和表达式，会生成可编辑却不完整的公式结构。
+3. 收集大运算符主体时要基于 MathJax 语义兄弟节点，并设置合理边界：顶层加减、关系符号、逗号/分号可以结束主体；括号内部的同类符号不能提前截断。
+4. 公式编号不要用表格模拟版式。即使表格边框设为 none，Word/WPS 编辑态仍可能暴露单元格网格；正文宽度中点的 center tab 加右边界 right tab 更符合用户预期。
+5. DOCX 字体要区分字体槽位：正文 `ascii/hAnsi/cs` 使用 Times New Roman，`eastAsia` 使用 SimSun；标题 `eastAsia` 使用 SimHei；只设置一个 `font` 字符串不足以保证中英文分别选字体。
+6. Office Math 字体要在 `settings.xml` 的 `m:mathPr` 中显式写入 `<m:mathFont m:val="Cambria Math"/>`，不能依赖正文样式或 Office/WPS 自行猜测。
+7. 使用 `docx` 库覆盖内置标题时，优先使用 `styles.default.title/heading1/...`。同时再定义同名 paragraph style 可能生成重复 styleId，导致不同 Office 实现取值不一致。
+8. DOCX 回归测试要验证结构而不是“肉眼打开一次”：默认字体槽位和半点字号、标题 styleId 唯一、Cambria Math、center/right tab、无公式布局表格、大运算符 `m:e` 非空、SEQ/REF/bookmark 都应自动断言。
+9. 140% 清晰度不能用 `deviceScaleFactor` 结果冒充 Windows WebView2 最终结论；它是前置证据。最终仍要记录 Windows 显示缩放、应用版本、截图和字体是否安装。
+10. 公式看起来发糊时不要上 `text-shadow`、stroke、filter、`crispEdges` 或任意 transform scale。这些会让部分字形更糟，并掩盖字体缺失、分数像素或 SVG viewBox 问题。
+11. 稳定提交前必须逐路径暂存。工作区存在 HANDOFF、memory、截图、skill、参考 DOCX 时，`git add .` 会污染源码提交；本轮用显式文件列表成功隔离 22 个源码/测试/README 路径。
+12. Git commit 失败不等于暂存丢失。身份缺失时先确认 staged 状态，再用单次 `-c user.name/-c user.email` 提交，不能顺手修改全局配置。
+
+### 项目关键约束和坑
+
+- 当前稳定基线是本地 `main` 上的 `a3ed1fc`，尚未 push；GitHub 不可见。
+- `apps/serein-desktop/src/export/docxExport.ts` 是 Word/WPS 字体、OMML、公式编号、字段和书签的核心实现，不要另建平行 exporter。
+- A4 页面宽 11906 DXA、左右各 1440 DXA 时正文宽度为 9026 DXA；公式 center tab 为 4513，编号 right tab 为 9026。若以后改页面或边距，这两个值必须由正文宽度计算，不能写死与页面脱节。
+- `align` 当前按行生成独立段落，消除了网格，但牺牲部分跨行精确对齐。除非有明确失败样本，不要为了对齐重新使用 Word 表格。
+- Word/WPS 字体一致依赖目标机器安装 SimSun、SimHei、Times New Roman、Cambria Math。缺字体时必须报告回退，不要把回退结果误判为导出代码完全失效。
+- Word/WPS 可能不自动刷新 `SEQ/REF` 字段；文档设置了 update fields，仍应提供“全选后按 F9”的验收步骤。
+- DOCX skill 的 schema validator 当前因缺少 `defusedxml` 未运行，LibreOffice 渲染因无 `soffice` 未运行；已完成 ZIP/XML 和自动化结构断言，但这两项不能伪装成已验证。
+- 用户原始 `tests/fixtures/rich-edit/Latex/*.docx`、`docs/images/`、`out/` 生成文档默认不进入源码 commit。
+- PDF 仍输出可读 LaTeX 文本，不是 MathJax/OMML 等价排版；不要把 DOCX 完成状态外推到 PDF。
+
+### 下次一次性达到这个效果
+
+- 完整提示词维护在：`docs/runbooks/skills/serein-sci-latex-math-convergence/references/one-shot-prompt.md`。
+- 公式收敛流程维护在：`docs/runbooks/skills/serein-sci-latex-math-convergence/SKILL.md`。
+- 评估样例维护在：`docs/runbooks/skills/serein-sci-latex-math-convergence/evals/evals.json`。
+- 下次只需替换复现文件、截图、参考 DOCX、Word/WPS 版本和 Windows 缩放比例，不要重新描述整套历史。
+- 当前 skill 是可直接使用的项目本地流程，已补充 Word/WPS typography、OMML n-ary、无表格编号和 140% 验收；尚未跑 with-skill/baseline benchmark，因此称为“可用稳定草案”，不称为量化最优版本。
+
+## 2026-07-24 Mermaid / 思维导图自适应渲染收敛
+
+### 本轮稳定结果
+
+- Serein Rich Edit 已能渲染 Mermaid 流程图、时序图和 mindmap；用户覆盖安装最终 Windows 包后反馈“可以了”，当前结果是稳定基线。
+- 最终显示语义不是固定尺寸，也不是短图/长图分类，而是：内容需要多少空间就占多少；文字保持正常；编辑区宽度不足时才等比缩小；容器高度和后续正文位置由真实内容自然决定。
+- Mermaid 11 在 Windows WebView2 中曾为普通流程图生成约 `2063 × 2064` 的异常 viewBox，而 SVG 实际内容约 `836 × 120`。共享渲染层根据 `getBBox()` 只修复明显过大的坐标系，最终约为 `852 × 136`。
+- mindmap 的第二个独立根因不是 viewBox，而是默认 `cose-bilkent` 力导布局将 10 个节点扩散到约 `2335 × 2387`。显式使用 Mermaid 已注册的 `dagre` 后收敛到约 `697 × 204`。
+- Mermaid SVG 字符串归一化使用同步布局测量，不等待 `requestAnimationFrame`，避免应用隐藏或最小化时 HTML/PDF 导出一直挂起。
+- Windows 安装包 `Serein_1.0.4_x64-setup.exe` 于 2026-07-24 10:17 生成；SHA-256 为 `4ee157173e488e72042950fdb1958605f94c93a5decc7f59e53fb0bc49372206`。用户已安装并确认效果。
+
+### 用户偏好（本轮反复调整后的稳定结论）
+
+- 用户说“你要多少内容就给多少内容，并且显示正常”时，核心不是简单 `width: 100%`，而是图的可见墨迹、坐标系、容器尺寸和后续正文位置共同贴合内容。
+- 用户明确反对按“短图/长图”写分支，也反对固定 `600px`、固定最小高度、巨大边框或预留画布。自适应必须来自真实内容尺寸，不是更多 magic number。
+- 用户对“小小字体＋长长页面”“图显示不全”“空间占用没变”非常敏感。只要视觉结果仍相同，就不能用“代码已经改了”作为完成结论。
+- 用户希望先看 Typora、Obsidian、GitHub/Markdown 和开源实现的真实行为，再决定产品模型；不接受脱离行业实现的凭空设计。
+- 用户允许 AI 直接反驳，但要求证据、可复现指标和方案利弊。反驳用户截图或体感之前，必须先证明运行版本、坐标和安装包一致。
+- 用户不满意为了让测试通过而刻意写“合规样本”。测试文件应包含中文、长标签、大小写语言名、错误语法、未闭合 fence 等真实脏输入。
+- 用户要求修 Mermaid 时不能破坏保存、Rich/Plain Edit、链接、代码块、表格、图片和 Vault。UI 功能必须以相邻写作路径不回归为前提。
+- 用户把 Windows 安装版反馈视为最终真相。Linux 类型检查、Chromium、Vite HMR、debug WebView2 都只能作为前置证据。
+- 用户宁愿听到“还没解决”也不接受过早宣布完成。最终结论必须等最新安装包、同一测试文件和真实截图/反馈闭环。
+- 长任务结束时，用户希望 HANDOFF、PROJECT_MEMORY 和 skill 一起沉淀，下次不重新解释几十轮失败历史。
+
+### 从错误里学到的最佳实践
+
+1. 先把 Mermaid 视觉问题拆成五层：Markdown fence/语言识别、Mermaid 语法与渲染、SVG 内容边界与 viewBox、布局算法、CSS 容器与 release 交付链。不要把所有现象都当成 CSS。
+2. 诊断 SVG 时同时记录：`viewBox`、`getBBox()`、`getBoundingClientRect()`、figure/diagram 尺寸、实际节点文字尺寸和图后正文间距。只看 `width/height` 属性容易误判。
+3. 如果 viewBox 远大于 `getBBox()`，CSS 缩放只会把错误画布和内容一起缩小。应先修内部坐标系，再讨论响应式宽度。
+4. viewBox 自动裁正必须有异常阈值，只处理宽高/面积比例明显过大的输出；正常 Mermaid viewBox 必须保持，避免裁掉箭头、marker、阴影和标签。
+5. `getBBox()` 正常并不代表图就正常。mindmap 本轮 viewBox 与 bbox 一致，但节点坐标已经被布局算法扩散；第二步必须检查 node transform 和布局算法。
+6. Mermaid 图类型可以有不同的正确布局算法，但不能按最终像素高度猜“长图/短图”。本轮 mindmap 使用 `dagre` 是语义布局选择，不是尺寸补丁。
+7. 隐藏 DOM 测量可以同步触发布局。不要无条件等待 `requestAnimationFrame`，因为桌面应用最小化/隐藏时 rAF 可能暂停，导出 Promise 会挂住。
+8. UI HMR 成功和安装版成功是两个不同闭环。本轮真实修复源码时间为 09:54，而用户先安装的是 09:10 的包；必须比较源码、dist、release、installer 和 installed exe 的时间与哈希。
+9. 不要让旧正式进程、debug 进程、Vite server 和新 release 混在一起。识别每个 PID/可执行路径，只关闭自己启动的临时调试实例，保护用户正式进程和未保存文档。
+10. 回归样本必须同时覆盖：普通流程图、长中文/英文节点、时序图、mindmap、大小写 `MERMAID`、非法图类型、未闭合 fence、普通链接和表格。
+11. 错误语法的验收目标是“用户看得懂并能回源码修”，不是强制内部一定生成某一种错误 DOM。测试用户可见结果，不要硬编码错误容器数量。
+12. 只有最新 Windows 安装包在同一测试文件上得到用户确认，才能把视觉问题标记为完成。静态检查、自动化指标和 debug 截图不能替代这一条。
+
+### 项目关键约束和坑
+
+- Mermaid 主共享实现位于 `apps/serein-desktop/src/shared/mermaid.ts`。Rich Edit、HTML、PDF 应复用同一 SVG 语义，不能各自创建渲染器和尺寸规则。
+- Rich Edit Mermaid widget 位于 `apps/serein-desktop/src/components/MarkdownTextBufferEditor.tsx`。它只是原子视觉替换；Markdown fence 源码仍是保存、history、selection、Source/Rich roundtrip 的唯一真相。
+- 当前 Mermaid 容器不得恢复固定 height/min-height（loading/error 状态除外）、固定 600px、按短图/长图分类或大边框卡片。
+- 宽图当前按 `min(naturalWidth, availableEditorWidth)` 显示，空间不足时等比缩小；SVG 高度由 viewBox 宽高比自然产生。
+- mindmap 当前显式 `layout: "dagre"` 是安装版验收过的稳定取舍。若以后要自由放射布局，必须单独设计并用 Windows WebView2 证明，不要直接恢复本次失败的默认 `cose-bilkent`。
+- `securityLevel: "strict"`、渲染串行队列和可见错误回退属于安全/稳定边界；不要为了示例图交互随意放宽。
+- HTML/PDF 已接入 Mermaid SVG，但本轮用户最终验收针对 Windows 编辑器。导出视觉仍需分别记录；DOCX Mermaid 不在本轮完成范围。
+- `tests/fixtures/rich-edit/mermaid_messy_test.md` 是本轮真实脏输入回归样本。不要把它清洗成只包含合法、短标签、理想格式的教程文件。
+- Windows installer 是最终交付层。`scripts/build_windows.ps1 -SkipInstall` 会重建前端、release exe 和 NSIS；构建时间必须晚于源码修复。
+- 根目录 `Serein_1.0.4_x64-setup.exe` 是未跟踪交付物，不默认进入源码 commit。
+- 当前工作区包含 Mermaid 和其他历史 WIP；禁止 `git add .`、reset、restore、checkout。若提交必须逐文件检查。
+- 最新 Mermaid 工作仍未 commit/tag/push；GitHub 当前不可见，不能把“安装包已生成”说成“版本已发布”。
+
+### 下次一次性达到这次效果
+
+- 主流程：`docs/runbooks/skills/serein-mermaid-rendering-convergence/SKILL.md`。
+- 完整可复制提示词：`docs/runbooks/skills/serein-mermaid-rendering-convergence/references/one-shot-prompt.md`。
+- 回归提示草案：`docs/runbooks/skills/serein-mermaid-rendering-convergence/evals/evals.json`。
+- 下次只需提供新的截图、复现 Markdown、当前安装包时间和期望对标软件；不要重新尝试固定尺寸、CSS 盲调或只验证 HMR。
+- 当前 skill 是“用户安装版验收过的可用稳定草案”；尚未运行 with-skill/baseline benchmark，不称为量化最优版本。

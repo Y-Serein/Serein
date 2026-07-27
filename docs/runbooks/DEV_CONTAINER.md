@@ -47,6 +47,32 @@ when this configuration was introduced. Rust is downloaded from the official
 Rust distribution service with bounded retries and timeouts; LLDB is not
 installed in this baseline.
 
+## Takeover checklist
+
+A new developer or agent should be able to resume with this sequence:
+
+1. Read `AGENTS.md`, `HANDOFF.md`, and `docs/runbooks/KNOWN_FAILURES.md`.
+2. On the configured Serein workstation, run the project preflight. External
+   clones that do not contain this shared tool can continue with step 3:
+
+   ```bash
+   python3 /home/slam/Sipeed/T_tools/agent_preflight.py --project typora
+   ```
+
+3. Confirm Docker is reachable with `docker version` and
+   `docker compose version`.
+4. Open the isolated development shell with `./scripts/dev_container.sh`.
+5. Run the checks in the **Verify** section before changing code.
+6. Keep Windows release work separate: use Windows PowerShell and
+   `scripts/build_windows.ps1` for the final `.exe`.
+
+Expected normal state after leaving the shell:
+
+- No Serein development container remains running.
+- No host port is published unless the explicit Vite command was used.
+- Docker volumes retain only Linux npm/Cargo dependencies and generated output.
+- The Git working tree remains the source of truth.
+
 ## Clone and start
 
 ```bash
@@ -152,6 +178,46 @@ docker compose -f compose.dev.yaml down --volumes
 
 The `--volumes` form is destructive for container-only dependency/build caches;
 it does not delete the bind-mounted source repository.
+
+## Common problems
+
+### Docker socket permission denied
+
+If the script reports `permission denied while trying to connect to the Docker
+API`, verify Docker Desktop is running and WSL integration is enabled for the
+current distribution. On native Linux, verify the current account is allowed
+to use the Docker Engine. Do not work around this by running the whole project
+as root.
+
+### First run is slow
+
+The first run downloads Ubuntu/Tauri libraries, Node, Rust, npm packages, and
+Rust crates. Later runs reuse the image and named volumes. A slow first run is
+not evidence that a background Serein service has been installed.
+
+### The shell script is not executable
+
+The repository records `scripts/dev_container.sh` as executable. If a checkout
+loses the executable bit, use this equivalent fallback:
+
+```bash
+bash scripts/dev_container.sh
+```
+
+### Dependencies do not match the lockfile
+
+The entry point compares a stored hash with `package-lock.json` and runs
+`npm ci` when needed. Delete Docker volumes only if this automatic refresh
+fails repeatedly; doing so discards caches and forces a complete reinstall.
+
+### Confirm nothing is still running
+
+After leaving the one-off shell, this command should show no Serein service
+container:
+
+```bash
+docker compose -f compose.dev.yaml ps --all
+```
 
 ## Optional Dev Container client
 

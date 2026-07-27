@@ -1,0 +1,27 @@
+{
+  "skill_name": "serein-mermaid-rendering-convergence",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Serein\\docs\\images\\v6.png 里 Mermaid 还是小小一个，页面占用很长。不要按短图长图分类，也不要再写固定 600px。先读项目规则和现有实现，找真正根因，修完必须给 Windows 安装包验证方案，别破坏其他编辑功能。",
+      "expected_output": "先区分 SVG viewBox/bbox、布局算法、CSS 容器和安装包版本；拒绝固定高度方案；用真实 WebView2 指标与截图验证，并保护相邻写作路径。",
+      "files": [
+        "tests/fixtures/rich-edit/mermaid_messy_test.md"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "流程图已经正常，但一个只有十个节点的 Mermaid mindmap 仍然占六百多高，字非常小。它的 viewBox 和 getBBox 看起来差不多，所以别继续盲调 CSS。请定位并给出可回滚方案与利弊。",
+      "expected_output": "识别为布局坐标而非单纯 viewBox 问题；检查 node transform 和 Mermaid layout；比较 cose-bilkent 与 dagre，验证自然尺寸和可读性，并说明树状布局取舍。",
+      "files": [
+        "tests/fixtures/rich-edit/mermaid_messy_test.md"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "你说 WebView2 调试窗口修好了，我覆盖安装后却完全没区别。请不要再凭代码推断成功，核对我运行的 exe、release、NSIS 和源码到底是不是同一版，然后完成真正的安装版闭环。",
+      "expected_output": "比较源码、dist、release、installer 和 installed exe 的时间/哈希，识别旧安装包或旧进程；只关闭临时调试实例；重建 Windows 包并等待用户用同一文件验收后再宣布完成。",
+      "files": []
+    }
+  ]
+}

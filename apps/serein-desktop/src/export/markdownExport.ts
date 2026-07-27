@@ -4,6 +4,7 @@ import {
   type RenderedMarkdownMathSpan,
 } from "../shared/math.js";
 import { isMarkdownTableDelimiterCell } from "../shared/markdown.js";
+import type { RenderedMermaidBlock } from "../shared/mermaid.js";
 import {
   extractLatexDocumentBody,
   normalizeLatexDocumentForExport,
@@ -17,6 +18,12 @@ export type ExportImageMap = Record<string, string>;
 export type HtmlExportOptions = {
   title: string;
   imageMap?: ExportImageMap;
+  mermaidBlocks?: RenderedMermaidBlock[];
+};
+
+type MarkdownRenderContext = {
+  mermaidBlocks: RenderedMermaidBlock[];
+  mermaidIndex: number;
 };
 
 const blockStarters = [
@@ -33,7 +40,7 @@ const blockStarters = [
 ];
 
 export function htmlDocument(markdown: string, options: HtmlExportOptions) {
-  const body = renderMarkdownBody(markdown, options.imageMap ?? {});
+  const body = renderMarkdownBody(markdown, options.imageMap ?? {}, options.mermaidBlocks ?? []);
   const title = escapeHtml(options.title || "Serein Export");
   return `<!doctype html>
 <html lang="zh-CN">
@@ -49,17 +56,25 @@ export function htmlDocument(markdown: string, options: HtmlExportOptions) {
 </html>`;
 }
 
-export function renderMarkdownBody(markdown: string, imageMap: ExportImageMap = {}) {
+export function renderMarkdownBody(
+  markdown: string,
+  imageMap: ExportImageMap = {},
+  mermaidBlocks: RenderedMermaidBlock[] = [],
+) {
   const macroDefinitions = extractLatexMathMacroDefinitions(markdown);
   const normalizedMarkdown = normalizeLatexDocumentForExport(markdown);
   const protectedMath = protectMarkdownMath(normalizedMarkdown, macroDefinitions);
-  return renderProtectedMarkdownBody(protectedMath.markdown, imageMap, protectedMath.spans);
+  return renderProtectedMarkdownBody(protectedMath.markdown, imageMap, protectedMath.spans, {
+    mermaidBlocks,
+    mermaidIndex: 0,
+  });
 }
 
 function renderProtectedMarkdownBody(
   normalizedMarkdown: string,
   imageMap: ExportImageMap,
   mathSpans: RenderedMarkdownMathSpan[],
+  context: MarkdownRenderContext,
 ) {
   const lines = normalizedMarkdown.split("\n");
   const html: string[] = [];
@@ -83,6 +98,19 @@ function renderProtectedMarkdownBody(
         index += 1;
       }
       if (index < lines.length) index += 1;
+      if (language.trim().toLocaleLowerCase() === "mermaid") {
+        const rendered = context.mermaidBlocks[context.mermaidIndex];
+        context.mermaidIndex += 1;
+        if (rendered?.svg) {
+          html.push(`<figure class="mermaid-diagram" aria-label="Mermaid diagram">${rendered.svg}</figure>`);
+        } else {
+          const error = rendered?.error
+            ? `<strong>Mermaid diagram could not be rendered</strong><pre>${escapeHtml(rendered.error)}</pre>`
+            : "";
+          html.push(`<figure class="mermaid-diagram mermaid-error">${error}<pre class="code-block"><code data-language="mermaid">${escapeHtml(code.join("\n"))}</code></pre></figure>`);
+        }
+        continue;
+      }
       html.push(`<pre class="code-block"><code data-language="${escapeAttr(language)}">${escapeHtml(code.join("\n"))}</code></pre>`);
       continue;
     }
@@ -140,7 +168,7 @@ function renderProtectedMarkdownBody(
         quote.push((lines[index] ?? "").replace(/^\s{0,3}>\s?/, ""));
         index += 1;
       }
-      html.push(`<blockquote>${renderProtectedMarkdownBody(quote.join("\n"), imageMap, mathSpans)}</blockquote>`);
+      html.push(`<blockquote>${renderProtectedMarkdownBody(quote.join("\n"), imageMap, mathSpans, context)}</blockquote>`);
       continue;
     }
 
@@ -389,6 +417,10 @@ table { width: 100%; border-collapse: collapse; margin: 1.2em 0; }
 th, td { border: 1px solid #d8d0c0; padding: 7px 9px; vertical-align: top; }
 th { background: #f0ece2; font-weight: 700; }
 img { max-width: 100%; height: auto; border-radius: 4px; }
+.mermaid-diagram { display: grid; place-items: center; max-width: 100%; overflow: auto; margin: 1.2em 0; border: 1px solid #d8d0c0; border-radius: 6px; background: #fbfaf7; padding: 16px; }
+.mermaid-diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.mermaid-error { display: block; border-color: #c98b83; color: #9a3f35; }
+.mermaid-error > pre { margin: .7em 0 0; white-space: pre-wrap; }
 .task-list-item { list-style: none; margin-left: -1.25em; }
 .task-list-item input { margin-right: .5em; }
 .math-inline { display: inline-block; max-width: 100%; vertical-align: middle; }

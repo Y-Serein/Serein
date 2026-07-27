@@ -1,8 +1,9 @@
 import { lazy, Suspense } from "react";
 import type { EditorCommandSignal, Note } from "../../domain/model";
-import type { EditorMode } from "../../app/types";
+import type { EditorMode, ThemeStyle } from "../../app/types";
 import type { AppLanguage, appText } from "../../app/i18n";
 import type { WikiLinkSuggestion } from "../../components/editorTypes";
+import type { MarkdownTextBufferEditorApi } from "../../components/MarkdownTextBufferEditor";
 
 const MarkdownTextBufferEditor = lazy(() => import("../../components/MarkdownTextBufferEditor").then((module) => ({
   default: module.MarkdownTextBufferEditor,
@@ -14,6 +15,7 @@ export type EditorHostProps = {
   t: TextBundle;
   activeNote: Note;
   editorMode: EditorMode;
+  theme: ThemeStyle;
   command: EditorCommandSignal | null;
   onMarkdownChange: (markdown: string) => void;
   onOpenLink: (href: string) => boolean;
@@ -24,6 +26,7 @@ export type EditorHostProps = {
   showImageSourceOnFocus: boolean;
   normalizeWindowsImagePaths: boolean;
   showFrontmatterTagRow: boolean;
+  onApiChange?: (api: MarkdownTextBufferEditorApi | null) => void;
 };
 
 export function EditorHost(props: EditorHostProps) {
@@ -33,6 +36,7 @@ export function EditorHost(props: EditorHostProps) {
         t={props.t}
         activeNote={props.activeNote}
         editorMode={props.editorMode}
+        theme={props.theme}
         command={props.command}
         onChange={props.onMarkdownChange}
         onOpenLink={props.onOpenLink}
@@ -43,6 +47,7 @@ export function EditorHost(props: EditorHostProps) {
         showImageSourceOnFocus={props.showImageSourceOnFocus}
         normalizeWindowsImagePaths={props.normalizeWindowsImagePaths}
         showFrontmatterTagRow={props.showFrontmatterTagRow}
+        onApiChange={props.onApiChange}
       />
     </Suspense>
   );

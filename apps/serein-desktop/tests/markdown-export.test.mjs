@@ -12,6 +12,9 @@ import {
   markdownToPdfBytes,
 } from "../.test-dist/export/pdfExport.js";
 import {
+  scanMarkdownMermaidBlocks,
+} from "../.test-dist/shared/mermaid.js";
+import {
   ensureSaveExtension,
   joinVaultPath,
   parentVaultDir,
@@ -86,6 +89,55 @@ test("wraps rendered markdown in a complete html export document", () => {
   assert.match(html, /<!doctype html>/);
   assert.match(html, /<title>Doc<\/title>/);
   assert.match(html, /class="code-block"/);
+});
+
+test("finds Mermaid fences without treating ordinary code blocks as diagrams", () => {
+  const markdown = [
+    "```mermaid",
+    "flowchart LR",
+    "  A --> B",
+    "```",
+    "",
+    "````ts",
+    "```mermaid",
+    "not a diagram block",
+    "```",
+    "````",
+    "",
+    "~~~MERMAID",
+    "mindmap",
+    "  root((Serein))",
+    "~~~",
+  ].join("\n");
+
+  const blocks = scanMarkdownMermaidBlocks(markdown);
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[0].source, /flowchart LR/);
+  assert.match(blocks[1].source, /mindmap/);
+});
+
+test("embeds rendered Mermaid SVG in HTML and preserves source on render errors", () => {
+  const markdown = "```mermaid\nflowchart LR\n  A --> B\n```";
+  const [block] = scanMarkdownMermaidBlocks(markdown);
+  const rendered = renderMarkdownBody(markdown, {}, [{
+    ...block,
+    svg: "<svg data-test=\"mermaid\"></svg>",
+    imageDataUrl: "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+    error: null,
+  }]);
+  assert.match(rendered, /class="mermaid-diagram"/);
+  assert.match(rendered, /data-test="mermaid"/);
+  assert.doesNotMatch(rendered, /flowchart LR/);
+
+  const failed = renderMarkdownBody(markdown, {}, [{
+    ...block,
+    svg: null,
+    imageDataUrl: null,
+    error: "Parse error on line 2",
+  }]);
+  assert.match(failed, /Mermaid diagram could not be rendered/);
+  assert.match(failed, /Parse error on line 2/);
+  assert.match(failed, /flowchart LR/);
 });
 
 test("exports only the body of a complete LaTeX document wrapper", () => {

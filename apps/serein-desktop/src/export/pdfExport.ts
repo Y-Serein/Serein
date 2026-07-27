@@ -4,10 +4,15 @@ import {
   parseLatexExportStructure,
 } from "./latexDocument.js";
 import { scanMarkdownMath } from "../shared/math.js";
+import {
+  scanMarkdownMermaidBlocks,
+  type RenderedMermaidBlock,
+} from "../shared/mermaid.js";
 
 export type PdfExportOptions = {
   title: string;
   imageMap?: Record<string, string>;
+  mermaidBlocks?: RenderedMermaidBlock[];
 };
 
 type PdfTextBlock = {
@@ -47,10 +52,31 @@ const cjkFontObjectId = 4;
 const imageObjectBaseId = 7;
 
 export async function markdownToPdfBytes(markdown: string, options: PdfExportOptions) {
-  const images = await preparePdfImages(options.imageMap ?? {});
-  const blocks = markdownToPdfBlocks(markdown, options, images.bySource);
+  const mermaid = mermaidMarkdownForPdf(markdown, options.mermaidBlocks ?? []);
+  const images = await preparePdfImages({
+    ...(options.imageMap ?? {}),
+    ...mermaid.imageMap,
+  });
+  const blocks = markdownToPdfBlocks(mermaid.markdown, options, images.bySource);
   const pages = paginateBlocks(blocks);
   return buildPdf(pages, images.items);
+}
+
+function mermaidMarkdownForPdf(markdown: string, rendered: RenderedMermaidBlock[]) {
+  const blocks = scanMarkdownMermaidBlocks(markdown);
+  const imageMap: Record<string, string> = {};
+  let nextMarkdown = markdown;
+
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    const result = rendered[block.index];
+    if (!result?.imageDataUrl) continue;
+    const source = `__serein_mermaid_diagram_${block.index}.svg`;
+    imageMap[source] = result.imageDataUrl;
+    nextMarkdown = `${nextMarkdown.slice(0, block.from)}![Mermaid diagram ${block.index + 1}](${source})${nextMarkdown.slice(block.to)}`;
+  }
+
+  return { markdown: nextMarkdown, imageMap };
 }
 
 function markdownToPdfBlocks(markdown: string, options: PdfExportOptions, imagesBySource: Map<string, PdfImage>) {
