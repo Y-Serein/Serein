@@ -5,7 +5,12 @@ import type { VaultIndexStatus } from "../../app/store/appStore";
 import type { CommandDefinition } from "../../app/types";
 import type { VaultIndex, VaultIndexedFile, VaultSearchResult } from "../../vault";
 import { searchVaultIndexAsync } from "../../vault";
-import { Button, cx } from "../../shared/ui";
+import {
+  Button,
+  cx,
+  keepDialogFocusInside,
+  restoreDialogTrigger,
+} from "../../shared/ui";
 
 type PaletteMode = "quickOpen" | "command";
 
@@ -63,6 +68,9 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const restoreFocusOnCloseRef = useRef(false);
   const requestedFileSearchIndexKeyRef = useRef("");
   const tagSearchRequestIdRef = useRef(0);
   const [fileResults, setFileResults] = useState<VaultSearchResult[]>([]);
@@ -72,9 +80,25 @@ export function CommandPalette({
 
   useEffect(() => {
     if (!open) return;
+    if (!dialogRef.current?.contains(document.activeElement)) {
+      previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    restoreFocusOnCloseRef.current = false;
     setQuery("");
-    window.requestAnimationFrame(() => inputRef.current?.focus());
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
   }, [open, mode]);
+
+  useEffect(() => {
+    if (open || !restoreFocusOnCloseRef.current) return;
+    restoreFocusOnCloseRef.current = false;
+    restoreDialogTrigger(previousFocusRef.current);
+  }, [open]);
+
+  const requestClose = () => {
+    restoreFocusOnCloseRef.current = true;
+    onClose();
+  };
 
   const defaultFileResults = useMemo(() => {
     if (mode !== "quickOpen") return [];
@@ -228,18 +252,29 @@ export function CommandPalette({
   if (!open) return null;
 
   return (
-    <div className="palette-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="palette-backdrop" role="presentation" onMouseDown={requestClose}>
       <section
+        ref={dialogRef}
         className="command-palette"
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            requestClose();
+            return;
+          }
+          keepDialogFocusInside(dialogRef.current, event);
+        }}
       >
         <header>
           {mode === "quickOpen" ? <FileText size={17} /> : <Command size={17} />}
           <strong>{title}</strong>
-          <Button variant="ghost" onClick={onClose}>Esc</Button>
+          <Button variant="ghost" onClick={requestClose}>Esc</Button>
         </header>
         <div className="palette-search">
           <Search size={15} />
@@ -250,10 +285,6 @@ export function CommandPalette({
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
               if (protectTextInputShortcut(event)) return;
-              if (event.key === "Escape") {
-                event.preventDefault();
-                onClose();
-              }
               if (event.key === "Enter") {
                 event.preventDefault();
                 if (mode === "quickOpen" && effectiveFileResults[0]) {

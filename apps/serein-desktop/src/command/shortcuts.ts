@@ -136,6 +136,7 @@ export const menuGroups: MenuGroup[] = [
     label: "主题",
     items: [
       { label: "青霜", commandId: "theme.mint" },
+      { label: "苔庭标本室", commandId: "theme.moss" },
       { label: "护眼", commandId: "theme.eye" },
       { label: "纸页", commandId: "theme.v5" },
       { label: "雾蓝", commandId: "theme.ink" },

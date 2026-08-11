@@ -33,6 +33,8 @@ type VaultSidebarProps = {
   outline: OutlineItem[];
   searchFocusSignal: number;
   searchFocusQuery: string;
+  searchNavigationSignal: number;
+  searchNavigationDirection: 1 | -1;
   onTabChange: (tab: LeftPanelTab) => void;
   onDispatchCommand: (commandId: string) => void;
   onOpenMarkdownFile: (path: string, options?: { targetLine?: number | null; targetText?: string | null }) => void;
@@ -301,6 +303,8 @@ export function VaultSidebar({
   outline,
   searchFocusSignal,
   searchFocusQuery,
+  searchNavigationSignal,
+  searchNavigationDirection,
   onTabChange,
   onDispatchCommand,
   onOpenMarkdownFile,
@@ -323,6 +327,7 @@ export function VaultSidebar({
   const [selectedSearchResultIndex, setSelectedSearchResultIndex] = useState(-1);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const selectedSearchResultRef = useRef<HTMLButtonElement | null>(null);
+  const handledSearchNavigationSignalRef = useRef(0);
   const requestedSearchIndexKeyRef = useRef("");
   const tagSearchRequestIdRef = useRef(0);
   const [searchResults, setSearchResults] = useState<VaultSearchResult[]>([]);
@@ -563,6 +568,30 @@ export function VaultSidebar({
     if (!result) return;
     openSearchResult(result);
   }, [effectiveSearchResults, openSearchResult]);
+
+  useEffect(() => {
+    if (searchNavigationSignal <= handledSearchNavigationSignalRef.current) return;
+    handledSearchNavigationSignalRef.current = searchNavigationSignal;
+    if (tab !== "search") return;
+    if (!effectiveSearchResults.length) {
+      searchInputRef.current?.focus();
+      return;
+    }
+
+    const base = selectedSearchResultIndex < 0
+      ? (searchNavigationDirection > 0 ? -1 : 0)
+      : selectedSearchResultIndex;
+    const nextIndex = (base + searchNavigationDirection + effectiveSearchResults.length) % effectiveSearchResults.length;
+    setSelectedSearchResultIndex(nextIndex);
+    openSelectedSearchResult(nextIndex);
+  }, [
+    effectiveSearchResults.length,
+    openSelectedSearchResult,
+    searchNavigationDirection,
+    searchNavigationSignal,
+    selectedSearchResultIndex,
+    tab,
+  ]);
 
   return (
     <aside className="left-rail">

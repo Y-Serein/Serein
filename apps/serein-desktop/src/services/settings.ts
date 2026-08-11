@@ -9,3 +9,5 @@ export {
   readSettings,
   writeSettings,
 } from "../settings/storage";
+
+export { clampEditorTabSize } from "../app/defaults";

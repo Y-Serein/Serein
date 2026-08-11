@@ -95,6 +95,20 @@ textarea {
   --accent-cool: #2f9698;
 }
 
+.quick-note-window-shell[data-theme="moss"] {
+  color-scheme: dark;
+  --bg: #1c241d;
+  --panel: #283229;
+  --paper: #303b31;
+  --paper-soft: #202920;
+  --ink: #e3eadc;
+  --muted: #8f9f88;
+  --line: rgba(200, 216, 187, 0.18);
+  --accent: #d0a469;
+  --accent-cool: #a4be7b;
+  --font-ui: Optima, "Avenir Next", "Segoe UI", "PingFang SC", sans-serif;
+}
+
 .quick-note-window-shell[data-theme="ink"] {
   color-scheme: light;
   --bg: #e8eef2;

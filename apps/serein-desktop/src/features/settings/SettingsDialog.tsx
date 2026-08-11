@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   MAX_EDITOR_LEFT_GAP,
+  MAX_EDITOR_TAB_SIZE,
   MAX_RIGHT_PANEL_WIDTH,
   MAX_SIDEBAR_WIDTH,
   MAX_UI_SCALE,
   MIN_EDITOR_LEFT_GAP,
+  MIN_EDITOR_TAB_SIZE,
   MIN_RIGHT_PANEL_WIDTH,
   MIN_SIDEBAR_WIDTH,
   MIN_UI_SCALE,
@@ -21,7 +23,12 @@ import type { AppLanguage, appText } from "../../app/i18n";
 import type { CloseButtonBehavior, EditorMode, ImagePathStyle, SaveFileExt, SettingsSection, ThemeStyle, UIDensity } from "../../app/types";
 import { shortcutFromEvent, type ShortcutEntry } from "../../command/shortcuts";
 import { normalizeDefaultNewNoteName } from "../../services/settings";
-import { Button } from "../../shared/ui";
+import {
+  Button,
+  focusFirstDialogControl,
+  keepDialogFocusInside,
+  restoreDialogTrigger,
+} from "../../shared/ui";
 
 type TextBundle = (typeof appText)[AppLanguage];
 
@@ -41,6 +48,7 @@ type SettingsDialogProps = {
   editorCjkFont: string;
   editorFontSize: number;
   editorLineHeight: number;
+  editorTabSize: number;
   uiScale: number;
   zoomWithWheel: boolean;
   showEditorStatusOverlay: boolean;
@@ -77,6 +85,7 @@ type SettingsDialogProps = {
   onEditorCjkFontChange: (value: string) => void;
   onEditorFontSizeChange: (value: number) => void;
   onEditorLineHeightChange: (value: number) => void;
+  onEditorTabSizeChange: (value: number) => void;
   onUiScaleChange: (value: number) => void;
   onZoomWithWheelChange: (value: boolean) => void;
   onShowEditorStatusOverlayChange: (value: boolean) => void;
@@ -120,6 +129,7 @@ export function SettingsDialog({
   editorCjkFont,
   editorFontSize,
   editorLineHeight,
+  editorTabSize,
   uiScale,
   zoomWithWheel,
   showEditorStatusOverlay,
@@ -156,6 +166,7 @@ export function SettingsDialog({
   onEditorCjkFontChange,
   onEditorFontSizeChange,
   onEditorLineHeightChange,
+  onEditorTabSizeChange,
   onUiScaleChange,
   onZoomWithWheelChange,
   onShowEditorStatusOverlayChange,
@@ -187,6 +198,9 @@ export function SettingsDialog({
   const [visible, setVisible] = useState(open);
   const [closing, setClosing] = useState(false);
   const [recordingShortcutId, setRecordingShortcutId] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const restoreFocusOnCloseRef = useRef(false);
 
   useEffect(() => {
     if (open) {
@@ -205,6 +219,24 @@ export function SettingsDialog({
     if (!open) setRecordingShortcutId(null);
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    restoreFocusOnCloseRef.current = true;
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !visible) return undefined;
+    const frame = window.requestAnimationFrame(() => focusFirstDialogControl(dialogRef.current));
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, visible]);
+
+  useEffect(() => {
+    if (visible || !restoreFocusOnCloseRef.current) return;
+    restoreFocusOnCloseRef.current = false;
+    restoreDialogTrigger(previousFocusRef.current);
+  }, [visible]);
+
   const requestClose = () => {
     if (closing) return;
     setClosing(true);
@@ -218,7 +250,24 @@ export function SettingsDialog({
 
   return (
     <div className="settings-backdrop" data-state={closing ? "closing" : "open"} role="presentation" onMouseDown={requestClose}>
-      <section className="settings-panel" role="dialog" aria-modal="true" aria-label={t.aria.settingsDialog} onMouseDown={(event) => event.stopPropagation()}>
+      <section
+        ref={dialogRef}
+        className="settings-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t.aria.settingsDialog}
+        tabIndex={-1}
+        onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            requestClose();
+            return;
+          }
+          keepDialogFocusInside(dialogRef.current, event);
+        }}
+      >
         <div className="settings-header">
           <h2>{t.settings.title}</h2>
           <Button variant="ghost" className="settings-close-button" onClick={requestClose} aria-label={t.settings.close}>×</Button>
@@ -306,6 +355,14 @@ export function SettingsDialog({
                 <label className="settings-field">
                   <span>{t.settings.lineHeight}</span>
                   <input type="number" min={1.4} max={2.2} step={0.05} value={editorLineHeight} onChange={(event) => onEditorLineHeightChange(Number(event.target.value))} />
+                </label>
+                <label className="settings-field">
+                  <span>{t.settings.tabSize}</span>
+                  <select value={editorTabSize} onChange={(event) => onEditorTabSizeChange(Number(event.target.value))}>
+                    {Array.from({ length: MAX_EDITOR_TAB_SIZE - MIN_EDITOR_TAB_SIZE + 1 }, (_, index) => MIN_EDITOR_TAB_SIZE + index).map((size) => (
+                      <option key={size} value={size}>{size}</option>
+                    ))}
+                  </select>
                 </label>
                 <label className="settings-field">
                   <span>{t.settings.uiFontScale}</span>
@@ -477,6 +534,7 @@ export function SettingsDialog({
                 <div className="theme-options">
                   {([
                     ["mint", t.commandLabels["theme.mint"], "theme.mint"],
+                    ["moss", t.commandLabels["theme.moss"], "theme.moss"],
                     ["eye", t.commandLabels["theme.eye"], "theme.eye"],
                     ["v5", t.commandLabels["theme.v5"], "theme.v5"],
                     ["ink", t.commandLabels["theme.ink"], "theme.ink"],
@@ -558,6 +616,7 @@ export function resetEditorLayoutDefaults() {
     editorCjkFont: defaultSettings.editorCjkFont,
     editorFontSize: defaultSettings.editorFontSize,
     editorLineHeight: defaultSettings.editorLineHeight,
+    editorTabSize: defaultSettings.editorTabSize,
     editorLeftGap: defaultSettings.editorLeftGap,
     uiScale: defaultSettings.uiScale,
     sidebarWidth: defaultSettings.sidebarWidth,

@@ -37,7 +37,7 @@ const MAX_UI_SCALE = 130;
 
 type QuickNoteStatus = "draft" | "saving" | "saved" | "error";
 type QuickNoteLanguage = "zh-CN" | "en-US";
-type QuickNoteTheme = "daily" | "eye" | "ink" | "mint" | "v5" | "v6";
+type QuickNoteTheme = "daily" | "eye" | "ink" | "mint" | "moss" | "v5" | "v6";
 type SaveFileExt = "md" | "txt";
 type QuickNoteTimestamp = ReturnType<typeof quickNoteTimestamp>;
 type QuickNoteTextCommand = "cut" | "copy" | "paste" | "selectAll";
@@ -181,6 +181,7 @@ function isQuickNoteTheme(value: unknown): value is QuickNoteTheme {
     || value === "eye"
     || value === "ink"
     || value === "mint"
+    || value === "moss"
     || value === "v5"
     || value === "v6";
 }

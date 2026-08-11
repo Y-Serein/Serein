@@ -4,7 +4,7 @@ import type { AppLanguage } from "./i18n";
 export type SaveStatus = "idle" | "saved" | "error";
 export type EditorMode = "plain" | "rich";
 export type DocumentViewMode = EditorMode | "mindmap";
-export type ThemeStyle = "daily" | "eye" | "ink" | "mint" | "v5" | "v6";
+export type ThemeStyle = "daily" | "eye" | "ink" | "mint" | "moss" | "v5" | "v6";
 export type UIDensity = "comfortable" | "compact";
 export type SaveFileExt = "md" | "txt";
 export type ImagePathStyle = "relative" | "absolute";
@@ -39,6 +39,7 @@ export type AppSettings = {
   editorCjkFont: string;
   editorFontSize: number;
   editorLineHeight: number;
+  editorTabSize: number;
   editorLeftGap: number;
   uiScale: number;
   zoomWithWheel: boolean;

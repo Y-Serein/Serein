@@ -1,24 +1,24 @@
 :root {
-  --surface-bg: #cfe7dd;
-  --surface-panel: #e3f2ec;
-  --surface-panel-muted: #d7ece4;
-  --surface-panel-raised: rgba(227, 242, 236, 0.95);
-  --line-subtle: rgba(83, 132, 119, 0.24);
-  --line-strong: rgba(68, 117, 105, 0.36);
-  --text-primary: #12312d;
-  --text-secondary: #486b64;
-  --text-muted: #6e8d85;
-  --accent: #2f9698;
-  --accent-soft: rgba(47, 150, 152, 0.14);
-  --accent-strong: #1d676b;
-  --danger: #ff6b64;
-  --danger-soft: rgba(255, 107, 100, 0.14);
-  --shadow-soft: 0 1px 0 rgba(255, 255, 255, 0.55), 0 18px 42px rgba(35, 94, 82, 0.12);
-  --shadow-panel: 0 22px 56px rgba(35, 94, 82, 0.15);
+  --surface-bg: #b9d9cf;
+  --surface-panel: #cfe7dd;
+  --surface-panel-muted: #dceee7;
+  --surface-panel-raised: #eef8f3;
+  --line-subtle: rgba(28, 54, 46, 0.12);
+  --line-strong: rgba(28, 54, 46, 0.2);
+  --text-primary: #18231f;
+  --text-secondary: #53615b;
+  --text-muted: #5d6b64;
+  --accent: #2f786c;
+  --accent-soft: rgba(47, 120, 108, 0.11);
+  --accent-strong: #205f55;
+  --danger: #a64e43;
+  --danger-soft: rgba(166, 78, 67, 0.11);
+  --shadow-soft: 0 1px 0 rgba(255, 255, 255, 0.7), 0 12px 28px rgba(28, 54, 46, 0.08);
+  --shadow-panel: 0 0 0 1px rgba(28, 54, 46, 0.08), 0 16px 34px rgba(28, 54, 46, 0.12);
   --radius-panel: 6px;
-  --radius-control: 6px;
-  --topbar-height: 46px;
-  --titlebar-height: 30px;
+  --radius-control: 4px;
+  --topbar-height: 32px;
+  --titlebar-height: 28px;
   --rail-gap: 0px;
 }
 
@@ -37,4 +37,25 @@
   --accent-strong: #2f5f82;
   --shadow-soft: 0 1px 0 rgba(255, 255, 255, 0.72), 0 18px 42px rgba(40, 67, 84, 0.1);
   --shadow-panel: 0 22px 56px rgba(40, 67, 84, 0.12);
+}
+
+[data-theme="moss"] {
+  --surface-bg: #1c241d;
+  --surface-panel: #283229;
+  --surface-panel-muted: #303b31;
+  --surface-panel-raised: rgba(48, 59, 49, 0.98);
+  --line-subtle: rgba(200, 216, 187, 0.14);
+  --line-strong: rgba(200, 216, 187, 0.28);
+  --text-primary: #e3eadc;
+  --text-secondary: #b6c2ae;
+  --text-muted: #7f907a;
+  --accent: #a4be7b;
+  --accent-soft: rgba(164, 190, 123, 0.14);
+  --accent-strong: #d1e3b2;
+  --danger: #d88663;
+  --danger-soft: rgba(216, 134, 99, 0.14);
+  --shadow-soft: 0 1px 0 rgba(227, 234, 220, 0.035), 0 18px 42px rgba(6, 11, 7, 0.24);
+  --shadow-panel: 0 24px 58px rgba(6, 11, 7, 0.34);
+  --radius-panel: 7px;
+  --radius-control: 5px;
 }

@@ -1,4 +1,4 @@
-import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { FileText, GitBranch, X } from "lucide-react";
 import { pathFileName } from "../../shared/markdown";
 import { IconButton, cx } from "../../shared/ui";
@@ -21,6 +21,12 @@ type WorkspaceCenterProps = {
   onFileContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void;
 };
 
+function activateTabOnKeyboard(event: ReactKeyboardEvent<HTMLElement>, action: () => void) {
+  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+  event.preventDefault();
+  action();
+}
+
 export function WorkspaceCenter({
   title,
   filePath,
@@ -41,16 +47,64 @@ export function WorkspaceCenter({
   if (graphOpen) {
     return (
       <section
-        className="workspace-center split"
+        className={cx("workspace-center", "split", activeView === "graph" ? "active-graph" : "active-markdown")}
         aria-label="Workspace editor"
         style={{ "--center-graph-width": `${graphWidth}px` } as CSSProperties}
       >
+        <header className="workspace-compact-switcher" role="tablist" aria-label="Workspace views">
+          <div
+            role="tab"
+            aria-selected={activeView === "markdown"}
+            tabIndex={0}
+            className={cx("workspace-tab", activeView === "markdown" && "active")}
+            title={filePath ?? title}
+            onClick={() => onViewChange("markdown")}
+            onKeyDown={(event) => activateTabOnKeyboard(event, () => onViewChange("markdown"))}
+            onContextMenu={onFileContextMenu}
+          >
+            <FileText size={14} aria-hidden="true" />
+            <span>{filePath ? pathFileName(filePath) : title}</span>
+            {dirty ? <i aria-label="Unsaved changes" /> : null}
+            <IconButton
+              icon={<X size={13} />}
+              label="Close tab"
+              onClick={(event) => {
+                event.stopPropagation();
+                onClose();
+              }}
+            />
+          </div>
+          <div
+            role="tab"
+            aria-selected={activeView === "graph"}
+            tabIndex={0}
+            className={cx("workspace-tab", activeView === "graph" && "active")}
+            title={graphTitle}
+            onClick={() => onViewChange("graph")}
+            onKeyDown={(event) => activateTabOnKeyboard(event, () => onViewChange("graph"))}
+          >
+            <GitBranch size={14} aria-hidden="true" />
+            <span>{graphTitle}</span>
+            <IconButton
+              icon={<X size={13} />}
+              label="Close graph"
+              onClick={(event) => {
+                event.stopPropagation();
+                onCloseGraph();
+              }}
+            />
+          </div>
+        </header>
         <div className="workspace-pane markdown-pane">
-          <header className="workspace-tabbar">
+          <header className="workspace-tabbar" role="tablist" aria-label="Document view">
             <div
+              role="tab"
+              aria-selected={activeView === "markdown"}
+              tabIndex={0}
               className={cx("workspace-tab", activeView === "markdown" && "active")}
               title={filePath ?? title}
               onClick={() => onViewChange("markdown")}
+              onKeyDown={(event) => activateTabOnKeyboard(event, () => onViewChange("markdown"))}
               onContextMenu={onFileContextMenu}
             >
               <FileText size={14} aria-hidden="true" />
@@ -79,11 +133,15 @@ export function WorkspaceCenter({
           onPointerDown={onGraphResizePointerDown}
         />
         <div className="workspace-pane graph-pane">
-          <header className="workspace-tabbar">
+          <header className="workspace-tabbar" role="tablist" aria-label="Graph view">
             <div
+              role="tab"
+              aria-selected={activeView === "graph"}
+              tabIndex={0}
               className={cx("workspace-tab", activeView === "graph" && "active")}
               title={graphTitle}
               onClick={() => onViewChange("graph")}
+              onKeyDown={(event) => activateTabOnKeyboard(event, () => onViewChange("graph"))}
             >
               <GitBranch size={14} aria-hidden="true" />
               <span>{graphTitle}</span>
@@ -105,11 +163,15 @@ export function WorkspaceCenter({
 
   return (
     <section className="workspace-center" aria-label="Workspace editor">
-      <header className="workspace-tabbar">
+      <header className="workspace-tabbar" role="tablist" aria-label="Document view">
         <div
+          role="tab"
+          aria-selected={activeView === "markdown"}
+          tabIndex={0}
           className={cx("workspace-tab", activeView === "markdown" && "active")}
           title={filePath ?? title}
           onClick={() => onViewChange("markdown")}
+          onKeyDown={(event) => activateTabOnKeyboard(event, () => onViewChange("markdown"))}
           onContextMenu={onFileContextMenu}
         >
           <FileText size={14} aria-hidden="true" />

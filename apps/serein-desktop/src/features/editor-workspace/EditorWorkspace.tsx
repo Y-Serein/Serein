@@ -34,6 +34,7 @@ export function EditorWorkspace({
   onCreateWikiLink,
   onImportImages,
   imagePreviewMap,
+  editorTabSize,
   showImageSourceOnFocus,
   normalizeWindowsImagePaths,
   showFrontmatterTagRow,
@@ -58,6 +59,7 @@ export function EditorWorkspace({
             onCreateWikiLink={onCreateWikiLink}
             onImportImages={onImportImages}
             imagePreviewMap={imagePreviewMap}
+            editorTabSize={editorTabSize}
             showImageSourceOnFocus={showImageSourceOnFocus}
             normalizeWindowsImagePaths={normalizeWindowsImagePaths}
             showFrontmatterTagRow={showFrontmatterTagRow}

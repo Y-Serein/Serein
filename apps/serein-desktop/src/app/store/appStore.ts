@@ -87,6 +87,7 @@ type AppStoreState = {
   editorCjkFont: string;
   editorFontSize: number;
   editorLineHeight: number;
+  editorTabSize: number;
   editorLeftGap: number;
   uiScale: number;
   zoomWithWheel: boolean;
@@ -150,6 +151,7 @@ type AppStoreActions = {
   setEditorCjkFont: (value: string) => void;
   setEditorFontSize: (value: number) => void;
   setEditorLineHeight: (value: number) => void;
+  setEditorTabSize: (value: number) => void;
   setEditorLeftGap: (value: number) => void;
   setUiScale: (value: Updater<number>) => void;
   setZoomWithWheel: (value: boolean) => void;
@@ -229,6 +231,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   editorCjkFont: initialSettings.editorCjkFont,
   editorFontSize: initialSettings.editorFontSize,
   editorLineHeight: initialSettings.editorLineHeight,
+  editorTabSize: initialSettings.editorTabSize,
   editorLeftGap: initialSettings.editorLeftGap,
   uiScale: initialSettings.uiScale,
   zoomWithWheel: initialSettings.zoomWithWheel,
@@ -289,6 +292,7 @@ export const useAppStore = create<AppStoreState & AppStoreActions>((set) => ({
   setEditorCjkFont: (value) => set({ editorCjkFont: value }),
   setEditorFontSize: (value) => set({ editorFontSize: value }),
   setEditorLineHeight: (value) => set({ editorLineHeight: value }),
+  setEditorTabSize: (value) => set({ editorTabSize: value }),
   setEditorLeftGap: (value) => set({ editorLeftGap: value }),
   setUiScale: (value) => set((state) => ({ uiScale: resolveUpdater(state.uiScale, value) })),
   setZoomWithWheel: (value) => set({ zoomWithWheel: value }),

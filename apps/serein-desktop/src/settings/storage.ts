@@ -9,6 +9,7 @@ import {
   MIN_SIDEBAR_WIDTH,
   MIN_UI_SCALE,
   SETTINGS_STORAGE_KEY,
+  clampEditorTabSize,
   defaultSettings,
 } from "../app/defaults";
 import { isAppLanguage } from "../app/i18n";
@@ -29,6 +30,7 @@ function isThemeStyle(value: unknown): value is ThemeStyle {
     || value === "eye"
     || value === "ink"
     || value === "mint"
+    || value === "moss"
     || value === "v5"
     || value === "v6";
 }
@@ -196,6 +198,9 @@ export function readSettings(): AppSettings {
       editorLineHeight: usesLegacyTypographyDefaults || usesTrialTypographyDefaults
         ? defaultSettings.editorLineHeight
         : editorLineHeight,
+      editorTabSize: typeof parsed.editorTabSize === "number"
+        ? clampEditorTabSize(parsed.editorTabSize)
+        : defaultSettings.editorTabSize,
       editorLeftGap: typeof parsed.editorLeftGap === "number" ? clampEditorLeftGap(parsed.editorLeftGap) : defaultSettings.editorLeftGap,
       uiScale: typeof parsed.uiScale === "number" ? clampUiScale(parsed.uiScale) : defaultSettings.uiScale,
       zoomWithWheel: typeof parsed.zoomWithWheel === "boolean" ? parsed.zoomWithWheel : defaultSettings.zoomWithWheel,

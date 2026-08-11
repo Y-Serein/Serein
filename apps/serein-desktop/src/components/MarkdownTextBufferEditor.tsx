@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from "@codemirror/commands";
 import { markdown as markdownSupport, markdownLanguage } from "@codemirror/lang-markdown";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { languages as codeBlockLanguageData } from "@codemirror/language-data";
 import { tags } from "@lezer/highlight";
 import {
@@ -11,6 +11,7 @@ import {
   EditorState,
   Facet,
   Prec,
+  StateEffect,
   StateField,
   Transaction,
   type Extension,
@@ -122,6 +123,7 @@ type MarkdownTextBufferEditorProps = {
   onCreateWikiLink: (target: string) => Promise<string | null>;
   onImportImages: (files: File[]) => Promise<Array<{ src: string; alt: string }>>;
   imagePreviewMap: Record<string, string>;
+  editorTabSize: number;
   showImageSourceOnFocus: boolean;
   normalizeWindowsImagePaths: boolean;
   showFrontmatterTagRow: boolean;
@@ -162,6 +164,24 @@ const textBufferDecorationOptions = Facet.define<
   combine: (values) => values.length
     ? values[values.length - 1]
     : defaultTextBufferDecorationOptions,
+});
+
+type TextBufferWrapEstimateMetrics = {
+  lineWidth: number;
+  lineHeight: number;
+  font: string;
+};
+
+const setTextBufferWrapEstimateMetrics = StateEffect.define<TextBufferWrapEstimateMetrics>();
+
+const textBufferWrapEstimateMetricsField = StateField.define<TextBufferWrapEstimateMetrics | null>({
+  create: () => null,
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setTextBufferWrapEstimateMetrics)) return effect.value;
+    }
+    return value;
+  },
 });
 
 const typedPendingFenceLines = StateField.define<readonly number[]>({
@@ -277,6 +297,7 @@ type TyporaDocumentAnalysis = ReturnType<typeof analyzeTyporaDocument>;
 type TyporaDocumentDecorationFieldState = TyporaDecorationState & {
   document: TyporaDocumentAnalysis;
   options: TextBufferDecorationOptions;
+  wrapEstimateMetrics: TextBufferWrapEstimateMetrics | null;
 };
 
 type TyporaActiveDecorationFieldState = TyporaDecorationState & {
@@ -303,6 +324,59 @@ class SortedDecorationBuilder {
       atomicRanges: Decoration.set(this.atomic, true),
     };
   }
+}
+
+class TextBufferWrapEstimateWidget extends WidgetType {
+  constructor(private readonly height: number) {
+    super();
+  }
+
+  eq(other: TextBufferWrapEstimateWidget) {
+    return Math.abs(other.height - this.height) < 0.1;
+  }
+
+  get estimatedHeight() {
+    return this.height;
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.hidden = true;
+    span.setAttribute("aria-hidden", "true");
+    return span;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+let textBufferWrapMeasureCanvas: HTMLCanvasElement | null = null;
+
+function addTextBufferWrapEstimate(
+  builder: SortedDecorationBuilder,
+  line: TyporaDocumentAnalysis["analysis"]["lines"][number],
+  metrics: TextBufferWrapEstimateMetrics | null,
+) {
+  if (
+    !metrics
+    || line.kind !== "paragraph"
+    || line.text.length < 2
+    || line.text.length * metrics.lineHeight < metrics.lineWidth
+  ) return;
+
+  textBufferWrapMeasureCanvas ??= document.createElement("canvas");
+  const context = textBufferWrapMeasureCanvas.getContext("2d");
+  if (!context) return;
+  context.font = metrics.font;
+  const measuredWidth = context.measureText(line.text).width;
+  const wrappedLines = Math.max(1, Math.ceil((measuredWidth - 0.5) / metrics.lineWidth));
+  if (wrappedLines < 2) return;
+
+  builder.add(line.from, line.from, Decoration.widget({
+    widget: new TextBufferWrapEstimateWidget(wrappedLines * metrics.lineHeight),
+    side: -10_000,
+  }));
 }
 
 function markdownImageText(src: string, alt: string) {
@@ -446,43 +520,14 @@ function codeBlockLineAttributes(block: TextBufferCodeBlock) {
   };
 }
 
-function textBufferScrollerForElement(element: HTMLElement) {
-  let node: HTMLElement | null = element.parentElement;
-  while (node && node !== document.body) {
-    const style = window.getComputedStyle(node);
-    if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) return node;
-    node = node.parentElement;
-  }
-  return document.scrollingElement instanceof HTMLElement ? document.scrollingElement : null;
-}
-
-function textBufferSelectionVisible(view: EditorView, scroller: HTMLElement | null) {
-  if (!scroller) return true;
+function textBufferSelectionVisible(view: EditorView, scroller: HTMLElement) {
   try {
     const coords = view.coordsAtPos(view.state.selection.main.head);
-    if (!coords) return true;
-    const viewport = scroller === document.scrollingElement
-      ? { top: 0, bottom: window.innerHeight }
-      : scroller.getBoundingClientRect();
+    if (!coords) return false;
+    const viewport = scroller.getBoundingClientRect();
     return coords.bottom >= viewport.top + 2 && coords.top <= viewport.bottom - 2;
   } catch {
     return true;
-  }
-}
-
-function centerTextBufferSelection(view: EditorView, scroller: HTMLElement | null) {
-  if (!scroller) return;
-  try {
-    const coords = view.coordsAtPos(view.state.selection.main.head);
-    if (!coords) return;
-    const viewport = scroller === document.scrollingElement
-      ? { top: 0, height: window.innerHeight }
-      : scroller.getBoundingClientRect();
-    const cursorCenter = (coords.top + coords.bottom) / 2;
-    const viewportCenter = viewport.top + viewport.height / 2;
-    scroller.scrollTop += cursorCenter - viewportCenter;
-  } catch {
-    // History can briefly point at a remapped position while decorations settle.
   }
 }
 
@@ -504,21 +549,25 @@ function clearTextBufferHistoryScrollJob(view: EditorView) {
 }
 
 function runTextBufferHistoryWithEditorScroll(view: EditorView, runHistory: () => boolean) {
-  const scroller = textBufferScrollerForElement(view.dom);
-  const scrollTopBefore = scroller?.scrollTop ?? 0;
-
-  const stabilizeSelectionScroll = () => {
-    if (!scroller) return;
-    scroller.scrollTop = scrollTopBefore;
-    if (textBufferSelectionVisible(view, scroller)) return;
-    centerTextBufferSelection(view, scroller);
-  };
+  const scroller = view.scrollDOM;
+  const scrollTopBefore = scroller.scrollTop;
+  const selectionWasVisible = textBufferSelectionVisible(view, scroller);
 
   clearTextBufferHistoryScrollJob(view);
   const handled = runHistory();
   if (!handled) return false;
 
-  stabilizeSelectionScroll();
+  if (!selectionWasVisible) {
+    view.dispatch({
+      effects: EditorView.scrollIntoView(view.state.selection.main, { y: "center" }),
+    });
+    return true;
+  }
+
+  const restoreScroll = () => {
+    scroller.scrollTop = scrollTopBefore;
+  };
+  restoreScroll();
 
   const frames: number[] = [];
   const timers: number[] = [];
@@ -527,13 +576,13 @@ function runTextBufferHistoryWithEditorScroll(view: EditorView, runHistory: () =
     frames.push(frame);
   };
   const scheduleTimer = (delay: number) => {
-    const timer = window.setTimeout(stabilizeSelectionScroll, delay);
+    const timer = window.setTimeout(restoreScroll, delay);
     timers.push(timer);
   };
 
   scheduleFrame(() => {
-    stabilizeSelectionScroll();
-    scheduleFrame(stabilizeSelectionScroll);
+    restoreScroll();
+    scheduleFrame(restoreScroll);
   });
   scheduleTimer(50);
   scheduleTimer(120);
@@ -1294,11 +1343,11 @@ class MermaidWidget extends WidgetType {
 
     const editorContainer = view.dom.closest<HTMLElement>(".serein-text-buffer-editor");
     const availableEditorWidth = () => {
-      if (!editorContainer) return view.scrollDOM.clientWidth;
-      const styles = window.getComputedStyle(editorContainer);
+      const content = view.contentDOM;
+      const styles = window.getComputedStyle(content);
       const horizontalPadding = Number.parseFloat(styles.paddingLeft)
         + Number.parseFloat(styles.paddingRight);
-      return editorContainer.clientWidth - horizontalPadding;
+      return content.clientWidth - horizontalPadding;
     };
     let naturalWidth = 0;
     const syncRenderedSize = () => {
@@ -2062,6 +2111,7 @@ function buildTyporaDocumentDecorations(
   const codeBlocksById = new Map(analysis.codeBlocks.map((block) => [block.id, block]));
   const codeBlocksByOpener = new Map(analysis.codeBlocks.map((block) => [block.openerFrom, block]));
   const blockMathRanges = mathSpans.filter((span) => span.kind === "block");
+  const wrapEstimateMetrics = state.field(textBufferWrapEstimateMetricsField);
   let blockMathRangeIndex = 0;
 
   if (options.mode === "rich") {
@@ -2090,6 +2140,8 @@ function buildTyporaDocumentDecorations(
       && line.from >= blockMathRange.from
       && line.to <= blockMathRange.to;
     if (lineInsideBlockMath) return;
+
+    addTextBufferWrapEstimate(builder, line, wrapEstimateMetrics);
 
     if (options.mode === "rich" && line.hiddenInRich) {
       builder.add(line.from, line.from, Decoration.line({
@@ -2171,7 +2223,7 @@ function buildTyporaDocumentDecorations(
     }
   });
 
-  return { ...builder.finish(), document, options };
+  return { ...builder.finish(), document, options, wrapEstimateMetrics };
 }
 
 const typoraDocumentDecorations = StateField.define<TyporaDocumentDecorationFieldState>({
@@ -2182,13 +2234,86 @@ const typoraDocumentDecorations = StateField.define<TyporaDocumentDecorationFiel
   update(value, transaction) {
     const options = transaction.state.facet(textBufferDecorationOptions);
     const optionsChanged = options !== value.options;
-    if (!transaction.docChanged && !optionsChanged) return value;
+    const wrapEstimateMetrics = transaction.state.field(textBufferWrapEstimateMetricsField);
+    const wrapEstimateMetricsChanged = wrapEstimateMetrics !== value.wrapEstimateMetrics;
+    if (!transaction.docChanged && !optionsChanged && !wrapEstimateMetricsChanged) return value;
     return buildTyporaDocumentDecorations(transaction.state, options);
   },
   provide: (field) => [
     EditorView.decorations.from(field, (value) => value.decorations),
     EditorView.atomicRanges.of((view) => view.state.field(field).atomicRanges),
   ],
+});
+
+function readTextBufferWrapEstimateMetrics(view: EditorView): TextBufferWrapEstimateMetrics | null {
+  const contentStyle = window.getComputedStyle(view.contentDOM);
+  const contentWidth = view.contentDOM.getBoundingClientRect().width
+    - (Number.parseFloat(contentStyle.paddingLeft) || 0)
+    - (Number.parseFloat(contentStyle.paddingRight) || 0);
+  const sampleLine = Array.from(view.contentDOM.querySelectorAll<HTMLElement>(".cm-line"))
+    .find((line) => line.getBoundingClientRect().width > 0);
+  const sampleLineWidth = sampleLine?.getBoundingClientRect().width ?? 0;
+  const lineWidth = sampleLineWidth > 0 ? Math.min(contentWidth, sampleLineWidth) : contentWidth;
+  const lineHeight = Number.parseFloat(contentStyle.lineHeight) || view.defaultLineHeight;
+  if (lineWidth < 1 || lineHeight < 1) return null;
+
+  const font = contentStyle.font || [
+    contentStyle.fontStyle,
+    contentStyle.fontWeight,
+    contentStyle.fontSize,
+    contentStyle.fontFamily,
+  ].join(" ");
+  return { lineWidth, lineHeight, font };
+}
+
+function sameTextBufferWrapEstimateMetrics(
+  left: TextBufferWrapEstimateMetrics | null,
+  right: TextBufferWrapEstimateMetrics,
+) {
+  return Boolean(
+    left
+    && Math.abs(left.lineWidth - right.lineWidth) < 0.5
+    && Math.abs(left.lineHeight - right.lineHeight) < 0.1
+    && left.font === right.font,
+  );
+}
+
+function syncTextBufferWrapEstimateMetrics(view: EditorView) {
+  const metrics = readTextBufferWrapEstimateMetrics(view);
+  if (!metrics) return;
+  const current = view.state.field(textBufferWrapEstimateMetricsField, false) ?? null;
+  if (sameTextBufferWrapEstimateMetrics(current, metrics)) return;
+  view.dispatch({ effects: setTextBufferWrapEstimateMetrics.of(metrics) });
+}
+
+const textBufferWrapEstimateMeasureFrames = new WeakMap<EditorView, number>();
+
+function cancelTextBufferWrapEstimateMeasure(view: EditorView) {
+  const frame = textBufferWrapEstimateMeasureFrames.get(view);
+  if (frame === undefined) return;
+  view.dom.ownerDocument.defaultView?.cancelAnimationFrame(frame);
+  textBufferWrapEstimateMeasureFrames.delete(view);
+}
+
+function scheduleTextBufferWrapEstimateMeasure(view: EditorView) {
+  if (textBufferWrapEstimateMeasureFrames.has(view)) return;
+  const frame = view.dom.ownerDocument.defaultView?.requestAnimationFrame(() => {
+    textBufferWrapEstimateMeasureFrames.delete(view);
+    if (view.dom.isConnected) syncTextBufferWrapEstimateMetrics(view);
+  });
+  if (frame !== undefined) textBufferWrapEstimateMeasureFrames.set(view, frame);
+}
+
+const textBufferWrapEstimateMeasurePlugin = ViewPlugin.define((view) => {
+  scheduleTextBufferWrapEstimateMeasure(view);
+  return {
+    update(update: ViewUpdate) {
+      if (update.geometryChanged) scheduleTextBufferWrapEstimateMeasure(update.view);
+    },
+    destroy() {
+      cancelTextBufferWrapEstimateMeasure(view);
+    },
+  };
 });
 
 function buildTyporaActiveDecorations(state: EditorState): TyporaActiveDecorationFieldState {
@@ -2746,25 +2871,12 @@ function markdownHeadingTargetFromPayload(payload: string | undefined): Markdown
   }
 }
 
-const textBufferRevealMeasureKey = {};
-
 function revealTextBufferRange(view: EditorView, from: number, to: number) {
-  const scrollSurface = view.dom.closest<HTMLElement>(".editor-surface");
-  view.focus();
-  view.dispatch({ selection: EditorSelection.range(from, to) });
-  if (!scrollSurface) return;
-  view.requestMeasure({
-    key: textBufferRevealMeasureKey,
-    read(measuredView) {
-      const surfaceRect = scrollSurface.getBoundingClientRect();
-      const targetBlock = measuredView.lineBlockAt(from);
-      const targetTop = measuredView.documentTop + targetBlock.top;
-      return Math.max(0, scrollSurface.scrollTop + targetTop - surfaceRect.top - 56);
-    },
-    write(scrollTop) {
-      scrollSurface.scrollTop = scrollTop;
-    },
+  view.dispatch({
+    selection: EditorSelection.range(from, to),
+    effects: EditorView.scrollIntoView(from, { y: "start", yMargin: 56 }),
   });
+  view.focus();
 }
 
 async function runTextBufferCommand(view: EditorView, command: EditorCommandSignal) {
@@ -2874,6 +2986,7 @@ export function MarkdownTextBufferEditor({
   onCreateWikiLink,
   onImportImages,
   imagePreviewMap,
+  editorTabSize,
   showImageSourceOnFocus,
   showFrontmatterTagRow,
   onApiChange,
@@ -2881,9 +2994,10 @@ export function MarkdownTextBufferEditor({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const modeCompartmentRef = useRef(new Compartment());
+  const indentCompartmentRef = useRef(new Compartment());
   const latestMarkdownRef = useRef(activeNote.markdown);
   const activeNoteIdRef = useRef(activeNote.id);
-  const createStateRef = useRef<((markdown: string, options: TextBufferDecorationOptions) => EditorState) | null>(null);
+  const createStateRef = useRef<((markdown: string, options: TextBufferDecorationOptions, tabSize: number) => EditorState) | null>(null);
   const lastCommandIdRef = useRef<number | null>(null);
   const onChangeRef = useRef(onChange);
   const onOpenLinkRef = useRef(onOpenLink);
@@ -3003,7 +3117,19 @@ export function MarkdownTextBufferEditor({
       },
     });
 
-    createStateRef.current = (markdown: string, options: TextBufferDecorationOptions) => EditorState.create({
+    const preservePointerSelectionViewport = EditorState.transactionExtender.of((transaction) => {
+      const view = viewRef.current;
+      if (
+        !view
+        || view.state !== transaction.startState
+        || !transaction.isUserEvent("select.pointer")
+        || transaction.docChanged
+        || transaction.scrollIntoView
+      ) return null;
+      return { effects: view.scrollSnapshot() };
+    });
+
+    createStateRef.current = (markdown: string, options: TextBufferDecorationOptions, tabSize: number) => EditorState.create({
       doc: markdown,
       extensions: [
         history(),
@@ -3024,22 +3150,30 @@ export function MarkdownTextBufferEditor({
           ...historyKeymap,
         ]),
         EditorView.lineWrapping,
+        indentCompartmentRef.current.of([
+          EditorState.tabSize.of(tabSize),
+          indentUnit.of(" ".repeat(tabSize)),
+        ]),
         updateListener,
         domHandlers,
+        preservePointerSelectionViewport,
         typedPendingFenceLines,
+        textBufferWrapEstimateMetricsField,
         typoraDocumentDecorations,
         typoraActiveDecorations,
         typoraInlineDecorations,
+        textBufferWrapEstimateMeasurePlugin,
         modeCompartment.of(extensionsForMode(options)),
       ],
     });
 
     const view = new EditorView({
       parent: host,
-      state: createStateRef.current(latestMarkdownRef.current, decorationOptions),
+      state: createStateRef.current(latestMarkdownRef.current, decorationOptions, editorTabSize),
     });
 
     viewRef.current = view;
+    syncTextBufferWrapEstimateMetrics(view);
     const api: MarkdownTextBufferEditorApi = {
       getSnapshot: () => ({
         noteId: activeNoteIdRef.current,
@@ -3086,6 +3220,17 @@ export function MarkdownTextBufferEditor({
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
+    view.dispatch({
+      effects: indentCompartmentRef.current.reconfigure([
+        EditorState.tabSize.of(editorTabSize),
+        indentUnit.of(" ".repeat(editorTabSize)),
+      ]),
+    });
+  }, [editorTabSize]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
 
     if (activeNote.id !== activeNoteIdRef.current) {
       const createState = createStateRef.current;
@@ -3094,7 +3239,8 @@ export function MarkdownTextBufferEditor({
       latestMarkdownRef.current = activeNote.markdown;
       setCurrentMarkdown(activeNote.markdown);
       measureTextBufferOperation("serein/editor/open-note", () => {
-        view.setState(createState(activeNote.markdown, decorationOptions));
+        view.setState(createState(activeNote.markdown, decorationOptions, editorTabSize));
+        syncTextBufferWrapEstimateMetrics(view);
       });
       return;
     }
@@ -3113,7 +3259,7 @@ export function MarkdownTextBufferEditor({
         ],
       });
     });
-  }, [activeNote.id, activeNote.markdown, decorationOptions]);
+  }, [activeNote.id, activeNote.markdown, decorationOptions, editorTabSize]);
 
   useEffect(() => {
     const view = viewRef.current;

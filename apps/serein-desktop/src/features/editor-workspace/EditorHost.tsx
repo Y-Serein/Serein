@@ -23,6 +23,7 @@ export type EditorHostProps = {
   onCreateWikiLink: (target: string) => Promise<string | null>;
   onImportImages: (files: File[]) => Promise<Array<{ src: string; alt: string }>>;
   imagePreviewMap: Record<string, string>;
+  editorTabSize: number;
   showImageSourceOnFocus: boolean;
   normalizeWindowsImagePaths: boolean;
   showFrontmatterTagRow: boolean;
@@ -44,6 +45,7 @@ export function EditorHost(props: EditorHostProps) {
         onCreateWikiLink={props.onCreateWikiLink}
         onImportImages={props.onImportImages}
         imagePreviewMap={props.imagePreviewMap}
+        editorTabSize={props.editorTabSize}
         showImageSourceOnFocus={props.showImageSourceOnFocus}
         normalizeWindowsImagePaths={props.normalizeWindowsImagePaths}
         showFrontmatterTagRow={props.showFrontmatterTagRow}

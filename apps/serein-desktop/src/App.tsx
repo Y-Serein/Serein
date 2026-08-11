@@ -34,7 +34,7 @@ import {
   shortcutFromEvent,
   writeShortcuts,
 } from "./command/shortcuts";
-import { resolveGlobalAppShortcuts } from "./command/globalShortcuts";
+import { resolveGlobalAppShortcuts, webviewShortcutAction } from "./command/globalShortcuts";
 import type { EditorCommandAction, Note } from "./domain/model";
 import { createDemoVault, readDemoMarkdownFile } from "./dev/demoVault";
 import { directoryFromResponse, preserveLoadedDirectoryChildren, updateVaultNode } from "./explorer/tree";
@@ -81,6 +81,7 @@ import {
 import type { QuickNoteInitialSurface } from "./services/files";
 import {
   clampEditorLeftGap,
+  clampEditorTabSize,
   clampRightPanelWidth,
   clampSidebarWidth,
   clampUiScale,
@@ -185,6 +186,11 @@ function elementFromNode(node: Node | null) {
 function isFormTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
     && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function isSidebarSearchInputTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement
+    && Boolean(target.closest(".sidebar-search-box input"));
 }
 
 function normalizeSearchSeedText(text: string | null | undefined) {
@@ -766,6 +772,8 @@ export default function App() {
     setEditorFontSize,
     editorLineHeight,
     setEditorLineHeight,
+    editorTabSize,
+    setEditorTabSize,
     editorLeftGap,
     setEditorLeftGap,
     uiScale,
@@ -864,6 +872,10 @@ export default function App() {
   const [initialOpenFileChecked, setInitialOpenFileChecked] = useState(false);
   const [sidebarSearchFocusSignal, setSidebarSearchFocusSignal] = useState(0);
   const [sidebarSearchSeed, setSidebarSearchSeed] = useState("");
+  const [sidebarSearchNavigation, setSidebarSearchNavigation] = useState<{ signal: number; direction: 1 | -1 }>({
+    signal: 0,
+    direction: 1,
+  });
   const appShellRef = useRef<HTMLDivElement | null>(null);
 
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0];
@@ -2664,6 +2676,15 @@ export default function App() {
     openSidebarSearch(selectedTextForSearch());
   }, [openSidebarSearch, selectedTextForSearch]);
 
+  const handleFindNavigation = useCallback((direction: 1 | -1) => {
+    if (!sidebarVisible || leftPanelTab !== "search") {
+      handleFind();
+      return;
+    }
+
+    setSidebarSearchNavigation((current) => ({ signal: current.signal + 1, direction }));
+  }, [handleFind, leftPanelTab, sidebarVisible]);
+
   const focusActiveEditor = useCallback(() => {
     const editor = editorSurfaceRef.current?.querySelector<HTMLElement>(".cm-content");
     if (editor) {
@@ -2771,6 +2792,7 @@ export default function App() {
     "view.toggleSidebar": { id: "view.toggleSidebar", label: t.commandLabels["view.toggleSidebar"], enabled: true, run: () => setSidebarVisible((visible) => !visible) },
     "view.toggleRightPanel": { id: "view.toggleRightPanel", label: t.commandLabels["view.toggleRightPanel"], enabled: true, run: () => setRightPanelVisible((visible) => !visible) },
     "theme.mint": { id: "theme.mint", label: t.commandLabels["theme.mint"], enabled: theme !== "mint", run: () => setTheme("mint") },
+    "theme.moss": { id: "theme.moss", label: t.commandLabels["theme.moss"], enabled: theme !== "moss", run: () => setTheme("moss") },
     "theme.eye": { id: "theme.eye", label: t.commandLabels["theme.eye"], enabled: theme !== "eye", run: () => setTheme("eye") },
     "theme.v5": { id: "theme.v5", label: t.commandLabels["theme.v5"], enabled: theme !== "v5", run: () => setTheme("v5") },
     "theme.ink": { id: "theme.ink", label: t.commandLabels["theme.ink"], enabled: theme !== "ink", run: () => setTheme("ink") },
@@ -3003,6 +3025,7 @@ export default function App() {
       editorCjkFont: normalizeEditorFontFamily(editorCjkFont, defaultSettings.editorCjkFont),
       editorFontSize,
       editorLineHeight,
+      editorTabSize,
       editorLeftGap,
       uiScale,
       zoomWithWheel,
@@ -3030,6 +3053,7 @@ export default function App() {
     editorLatinFont,
     editorLeftGap,
     editorLineHeight,
+    editorTabSize,
     imageAttachmentFolder,
     imagePathStyle,
     language,
@@ -3347,8 +3371,6 @@ export default function App() {
         return;
       }
 
-      if (appDialog) return;
-
       const key = shortcutFromEvent(event);
       if (!key) return;
 
@@ -3357,6 +3379,15 @@ export default function App() {
       const shortcut = shortcuts.find((item) => item.enabled && item.currentKeys.includes(key));
       const isDefaultFindKey = key === "Ctrl+F" || key === "Meta+F";
       const isFindCommand = shortcut?.commandId === "edit.find" || (isDefaultFindKey && !shortcut);
+      const webviewAction = webviewShortcutAction(key);
+
+      if (appDialog) {
+        if (isFindCommand || webviewAction) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
 
       if ((key === "Ctrl+A" || key === "Meta+A") && isEditorTarget(event.target)) return;
 
@@ -3366,6 +3397,21 @@ export default function App() {
         if (!(formTarget && !editorTextControlTarget)) {
           dispatchCommand("edit.find");
         }
+        return;
+      }
+
+      if (!shortcut && (webviewAction === "find-next" || webviewAction === "find-previous")) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!(formTarget && !editorTextControlTarget) || isSidebarSearchInputTarget(event.target)) {
+          handleFindNavigation(webviewAction === "find-next" ? 1 : -1);
+        }
+        return;
+      }
+
+      if (!shortcut && webviewAction === "block") {
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
 
@@ -3429,7 +3475,7 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [appDialog, closeAppDialog, closeContextMenu, commands, contextMenu, dispatchCommand, shortcuts]);
+  }, [appDialog, closeAppDialog, closeContextMenu, commands, contextMenu, dispatchCommand, handleFindNavigation, shortcuts]);
 
   const handleOutlineClick = useCallback((index: number) => {
     const requested = markdownHeadingTargetAt(outline, index);
@@ -4177,6 +4223,8 @@ export default function App() {
           outline={outline}
           searchFocusSignal={sidebarSearchFocusSignal}
           searchFocusQuery={sidebarSearchSeed}
+          searchNavigationSignal={sidebarSearchNavigation.signal}
+          searchNavigationDirection={sidebarSearchNavigation.direction}
           onTabChange={setLeftPanelTab}
           onDispatchCommand={dispatchCommand}
           onOpenMarkdownFile={(path, options) => {
@@ -4273,6 +4321,7 @@ export default function App() {
           onCreateWikiLink={handleCreateWikiLinkTarget}
           onImportImages={importImagesForEditor}
           imagePreviewMap={imagePreviewMap}
+          editorTabSize={editorTabSize}
           showImageSourceOnFocus={showImageSourceOnFocus}
           normalizeWindowsImagePaths={normalizeWindowsImagePaths}
           showFrontmatterTagRow={showFrontmatterTagRow}
@@ -4400,6 +4449,7 @@ export default function App() {
         editorCjkFont={editorCjkFont}
         editorFontSize={editorFontSize}
         editorLineHeight={editorLineHeight}
+        editorTabSize={editorTabSize}
         uiScale={uiScale}
         zoomWithWheel={zoomWithWheel}
         showEditorStatusOverlay={showEditorStatusOverlay}
@@ -4436,6 +4486,7 @@ export default function App() {
         onEditorCjkFontChange={setEditorCjkFont}
         onEditorFontSizeChange={setEditorFontSize}
         onEditorLineHeightChange={setEditorLineHeight}
+        onEditorTabSizeChange={(value) => setEditorTabSize(clampEditorTabSize(value))}
         onUiScaleChange={(value) => setUiScale(clampUiScale(value))}
         onZoomWithWheelChange={setZoomWithWheel}
         onShowEditorStatusOverlayChange={setShowEditorStatusOverlay}
@@ -4450,6 +4501,7 @@ export default function App() {
           setEditorCjkFont(defaults.editorCjkFont);
           setEditorFontSize(defaults.editorFontSize);
           setEditorLineHeight(defaults.editorLineHeight);
+          setEditorTabSize(defaults.editorTabSize);
           setEditorLeftGap(defaults.editorLeftGap);
           setUiScale(defaults.uiScale);
           setSidebarWidth(defaults.sidebarWidth);

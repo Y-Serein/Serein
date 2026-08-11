@@ -85,7 +85,7 @@ export function WorkspaceRibbon({
           className="ribbon-button"
           icon={<Search size={18} />}
           label={labels.search}
-          onClick={onOpenSearchPanel}
+          onClick={() => onOpenSearchPanel()}
         />
         <IconButton
           className={cx("ribbon-button", graphOpen && "active")}

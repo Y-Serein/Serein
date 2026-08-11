@@ -12,11 +12,18 @@ export const MIN_RIGHT_PANEL_WIDTH = 240;
 export const MAX_RIGHT_PANEL_WIDTH = 520;
 export const MIN_EDITOR_LEFT_GAP = 16;
 export const MAX_EDITOR_LEFT_GAP = 140;
+export const MIN_EDITOR_TAB_SIZE = 1;
+export const MAX_EDITOR_TAB_SIZE = 8;
 export const MIN_UI_SCALE = 85;
 export const MAX_UI_SCALE = 130;
 export const VAULT_DIRECTORY_LIMIT = 300;
 
 export const defaultEditorMode: EditorMode = "rich";
+
+export function clampEditorTabSize(value: number) {
+  if (!Number.isFinite(value)) return 4;
+  return Math.min(MAX_EDITOR_TAB_SIZE, Math.max(MIN_EDITOR_TAB_SIZE, Math.round(value)));
+}
 
 export const defaultSettings: AppSettings = {
   editorModePreferenceVersion: 4,
@@ -39,6 +46,7 @@ export const defaultSettings: AppSettings = {
   editorCjkFont: "Microsoft YaHei",
   editorFontSize: 16,
   editorLineHeight: 1.6,
+  editorTabSize: 4,
   editorLeftGap: 42,
   uiScale: 100,
   zoomWithWheel: true,
